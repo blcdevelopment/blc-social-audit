@@ -1,0 +1,35 @@
+{
+  "seo": {
+    "summary": {
+      "titles_present_pct": 100.0,
+      "meta_descriptions_present_pct": 100.0,
+      "h1_present_pct": 100.0,
+      "pages_with_schema": 1,
+      "image_alt_coverage_pct": 100.0,
+      "noindex_pages": 0
+    },
+    "page": {
+      "h1_count": 1,
+      "h2_count": 3,
+      "internal_links": 6,
+      "empty_or_non_http_links": 2
+    }
+  },
+  "uxui": {
+    "summary": {
+      "total_ctas": 4,
+      "pages_with_primary_cta": 1,
+      "above_fold_ctas": 4,
+      "total_forms": 1,
+      "pages_with_forms": 1,
+      "pages_with_phone": 1,
+      "pages_with_email": 1,
+      "pages_with_trust_signals": 1
+    },
+    "page": {
+      "primary_cta_text": "Request a Free Estimate",
+      "form_fields": 3,
+      "has_nav": true
+    }
+  }
+}

@@ -1,0 +1,1779 @@
+# Code Walkthrough And System Explanation
+
+**Project:** BLC Website Audit Automation
+**Phase:** Phase 1 foundation + Epic P1-E2 collection pipeline
+**Audience:** Developer/operator handoff
+**Important note:** This document explains the current implemented code. Epic P1-E2 now provides the real crawler, PageSpeed collector, and SEO/UX extractors. Scoring, OpenAI commentary, validation, and PDF rendering remain planned in later Phase 1 epics.
+
+---
+
+## 1. What This Repo Is
+
+This repo is the local-first foundation for the BLC Website Audit Automation app.
+
+The goal of Phase 1 is:
+
+1. A BLC operator submits a website URL.
+2. The backend creates an audit job.
+3. A worker processes that job asynchronously.
+4. The system tracks job status and progress.
+5. Epic P1-E2 collects website crawl, PageSpeed, SEO, and UX/UI facts.
+6. Later epics will add scoring, OpenAI commentary, validation, and PDF report generation.
+
+Right now Epic P1-E1 and P1-E2 are implemented:
+
+- Backend API foundation.
+- Worker foundation.
+- Worker-driven collection pipeline.
+- Playwright crawler.
+- PageSpeed Insights client.
+- SEO and UX/UI extractors.
+- Database models and migration.
+- Docker Compose local stack.
+- Conda/Poetry/Python tooling.
+- Next.js frontend shell.
+- Swagger UI.
+- Tests and pre-commit.
+
+---
+
+## 2. High-Level Runtime Architecture
+
+When running locally with Docker Compose, the system has four main services:
+
+```text
+Browser / Swagger UI
+        |
+        v
+FastAPI backend  <------>  PostgreSQL
+        |
+        v
+Redis queue
+        |
+        v
+Celery worker
+```
+
+What each service does:
+
+- **FastAPI backend:** receives API requests, validates payloads, creates audit jobs, returns status/report responses.
+- **PostgreSQL:** stores `audit_jobs` and `audit_results`.
+- **Redis:** acts as the Celery message broker and result backend.
+- **Celery worker:** receives queued audit tasks and updates job lifecycle progress.
+
+The frontend shell exists under `apps/frontend`, but the real operator UI screens are planned for Epic P1-E5.
+
+---
+
+## 3. Main Request Flow: What Calls What
+
+### 3.1 API Startup
+
+When Docker starts the API service, this command runs:
+
+```bash
+alembic upgrade head &&
+uvicorn apps.api.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+Call chain:
+
+```text
+docker-compose.yml
+  -> api service command
+    -> alembic upgrade head
+      -> migrations/env.py
+      -> migrations/versions/20260528_0001_create_audit_tables.py
+    -> uvicorn apps.api.main:app
+      -> apps/api/main.py
+      -> includes health router
+      -> includes audits router
+```
+
+The API is available at:
+
+- `http://localhost:8000`
+- `http://localhost:8000/docs`
+- `http://localhost:8000/openapi.json`
+
+`GET /` redirects to `/docs`.
+
+### 3.2 Submit An Audit
+
+When a user submits an audit through Swagger or any API client:
+
+```http
+POST /audits
+```
+
+Example request:
+
+```json
+{
+  "url": "https://example.com",
+  "niche": "builder",
+  "target_audience": "homeowners"
+}
+```
+
+Call chain:
+
+```text
+POST /audits
+  -> apps/api/routes/audits.py:create_audit()
+    -> apps/api/schemas/audits.py:AuditCreateRequest validates input
+    -> apps/shared/database.py:get_db_session() provides DB session
+    -> apps/shared/models.py:AuditJob object is created
+    -> SQLAlchemy inserts row into audit_jobs
+    -> if AUDIT_ENQUEUE_ENABLED=true:
+      -> apps.worker.tasks.run_audit.delay(job_id)
+        -> Celery sends task to Redis
+    -> API returns job_id and status_url
+```
+
+Response shape:
+
+```json
+{
+  "job_id": "uuid-here",
+  "status": "queued",
+  "status_url": "/audits/{job_id}/status"
+}
+```
+
+### 3.3 Worker Processes The Audit
+
+The worker starts with:
+
+```bash
+celery -A apps.worker.celery_app.celery_app worker --loglevel=info
+```
+
+Call chain:
+
+```text
+docker-compose.yml
+  -> worker service command
+    -> apps/worker/celery_app.py creates Celery app
+    -> includes apps.worker.tasks
+    -> worker waits for Redis tasks
+```
+
+When the API enqueues a task:
+
+```text
+Redis receives task
+  -> Celery worker receives task
+    -> apps/worker/tasks.py:run_audit(job_id)
+      -> run_collection_audit(job_id)
+        -> load job from PostgreSQL
+        -> crawl homepage and selected internal pages
+        -> collect or skip PageSpeed Insights facts
+        -> extract SEO and UX/UI facts
+        -> write collection artifacts to audit_results
+        -> mark job complete
+```
+
+Current collection stages:
+
+| Status | Stage label | Progress |
+|---|---|---|
+| `crawling` | Rendering website pages | 15 |
+| `collecting_performance` | Collecting PageSpeed Insights | 45 |
+| `extracting` | Extracting SEO and UX/UI facts | 70 |
+| `complete` | Collection pipeline complete | 100 |
+
+The current worker proves that:
+
+- API can enqueue jobs.
+- Worker can pick jobs up.
+- Worker can connect to DB.
+- Worker can update progress.
+- Worker can create or update an `audit_results` row with crawler, PSI, SEO, and UX/UI facts.
+- API can read job status/result state.
+
+### 3.4 Poll Audit Status
+
+```http
+GET /audits/{job_id}/status
+```
+
+Call chain:
+
+```text
+GET /audits/{job_id}/status
+  -> apps/api/routes/audits.py:get_audit_status()
+    -> db.get(AuditJob, job_id)
+    -> _status_response(job)
+    -> returns job status, stage, progress, timestamps, report_available
+```
+
+Response includes:
+
+- `job_id`
+- `url`
+- `status`
+- `current_stage`
+- `progress_pct`
+- `error_message`
+- `created_at`
+- `started_at`
+- `completed_at`
+- `report_available`
+
+### 3.5 List Audits
+
+```http
+GET /audits
+```
+
+Call chain:
+
+```text
+GET /audits
+  -> apps/api/routes/audits.py:list_audits()
+    -> SELECT audit jobs ordered by created_at desc
+    -> _list_item(job)
+    -> returns recent audits and scores if a result exists
+```
+
+Query parameters:
+
+- `limit`, default `25`, min `1`, max `100`
+- `offset`, default `0`
+
+### 3.6 Download Report
+
+```http
+GET /audits/{job_id}/report
+```
+
+Call chain:
+
+```text
+GET /audits/{job_id}/report
+  -> apps/api/routes/audits.py:get_audit_report()
+    -> load AuditJob
+    -> check job.result exists
+    -> check job.result.pdf_path exists
+    -> return FileResponse if PDF exists
+```
+
+Current behavior:
+
+- This endpoint exists.
+- It returns `404` until a later PDF generation epic writes a real PDF and stores `pdf_path`.
+
+---
+
+## 4. How The Audit Pipeline Works
+
+Current implemented collection audit:
+
+```text
+Submit URL
+  -> create DB job
+  -> enqueue Celery task
+  -> render/crawl homepage and internal pages
+  -> collect or gracefully skip PageSpeed mobile and desktop data for selected crawled pages
+  -> extract SEO facts
+  -> extract UX/UI facts
+  -> store collection result
+  -> mark complete
+```
+
+Target full Phase 1 audit after later epics:
+
+```text
+Submit URL
+  -> create DB job
+  -> enqueue Celery task
+  -> render/crawl homepage and internal pages
+  -> collect PageSpeed mobile and desktop data for selected crawled pages
+  -> extract SEO facts
+  -> extract UX/UI facts
+  -> score facts through YAML rubrics
+  -> generate OpenAI/ChatGPT commentary from facts and scores
+  -> validate commentary grounding
+  -> compose report payload
+  -> render PDF
+  -> save PDF path
+  -> mark complete
+```
+
+The DB schema and API lifecycle are already shaped for the final version.
+
+---
+
+## 5. Folder And File Inventory
+
+This section explains every source folder and important file currently in the repo.
+
+### 5.1 Root Files
+
+#### `README.md`
+
+Human-facing setup guide.
+
+It explains:
+
+- What the project is.
+- How to create/activate `social-audit`.
+- How to install dependencies.
+- How to run Docker Compose.
+- How to run tests/lint.
+- Where API endpoints live.
+
+#### `.env`
+
+Local secret configuration file.
+
+Important:
+
+- Contains real local secrets like `OPENAI_API_KEY`.
+- Is ignored by git.
+- Should not be committed.
+- Should not be pasted into docs.
+
+The code reads this file through Pydantic Settings in `apps/shared/config.py`.
+
+#### `.env.example`
+
+Safe template version of `.env`.
+
+It documents all required environment variables without real secrets.
+
+Main sections:
+
+- App mode.
+- Backend API.
+- Frontend.
+- PostgreSQL.
+- Redis/Celery.
+- Local storage.
+- OpenAI/ChatGPT.
+- PageSpeed.
+- Playwright crawler settings.
+- Scoring/report paths.
+
+#### `.gitignore`
+
+Tells git what not to commit.
+
+Important ignored items:
+
+- `.env`
+- virtual environments
+- Python cache folders
+- test/lint caches
+- local PDF/screenshot outputs
+- frontend `node_modules`
+- frontend `.next`
+- macOS `.DS_Store`
+
+#### `.dockerignore`
+
+Tells Docker what not to copy into images.
+
+This keeps images smaller and avoids copying local caches/secrets/build outputs.
+
+#### `docker-compose.yml`
+
+Defines the local runtime stack.
+
+Services:
+
+- `postgres`
+- `redis`
+- `api`
+- `worker`
+
+Key behavior:
+
+- Postgres uses a named Docker volume `postgres_data`.
+- Redis exposes port `6379`.
+- API builds from `apps/api/Dockerfile`.
+- Worker builds from `apps/worker/Dockerfile`.
+- API waits for Postgres and Redis health checks.
+- API runs migrations before starting Uvicorn.
+- Worker starts Celery and listens to Redis.
+
+#### `environment.yml`
+
+Conda environment definition.
+
+Environment name:
+
+```text
+social-audit
+```
+
+It installs:
+
+- Python 3.12
+- pip
+- Poetry
+- pre-commit
+
+Project dependencies are installed with Poetry after activating the Conda env.
+
+#### `pyproject.toml`
+
+Main Python project metadata and tooling config.
+
+It defines:
+
+- Project name/version.
+- Python version requirement.
+- Runtime dependencies.
+- Dev dependencies.
+- Poetry settings.
+- pytest config.
+- Ruff lint/format config.
+
+Important dependencies include:
+
+- FastAPI
+- SQLAlchemy
+- Alembic
+- Celery
+- Redis support
+- PostgreSQL driver
+- Pydantic Settings
+- OpenAI SDK
+- pytest
+- Ruff
+- pre-commit
+
+#### `poetry.lock`
+
+Locked Python dependency graph.
+
+Purpose:
+
+- Makes dependency installation repeatable.
+- Records exact versions Poetry resolved.
+- Should be committed.
+
+#### `poetry.toml`
+
+Local Poetry behavior.
+
+Current setting:
+
+```toml
+[virtualenvs]
+create = false
+```
+
+This means Poetry installs into the active Conda env instead of creating a second virtualenv.
+
+#### `requirements.txt`
+
+Pinned dependency list for simple pip-based installs or deployment environments that expect requirements files.
+
+Poetry lock is the stronger source of truth, but this file is useful for compatibility.
+
+#### `.pre-commit-config.yaml`
+
+Defines checks that run before commits.
+
+Current hooks:
+
+- Ruff check with auto-fix.
+- Ruff format.
+- Backend tests.
+- Frontend typecheck when frontend files are involved.
+
+#### `alembic.ini`
+
+Alembic configuration file.
+
+It points Alembic to:
+
+- Migration scripts in `migrations/`.
+- Default DB URL, overridden at runtime by `.env` through `migrations/env.py`.
+
+---
+
+## 6. `apps/` Folder
+
+`apps/` contains the application code.
+
+```text
+apps/
+  api/
+  shared/
+  worker/
+  frontend/
+```
+
+### 6.1 `apps/__init__.py`
+
+Marks `apps` as a Python package so imports like this work:
+
+```python
+from apps.shared.config import get_settings
+```
+
+---
+
+## 7. Backend API: `apps/api/`
+
+The API is a FastAPI service.
+
+### 7.1 `apps/api/main.py`
+
+Creates the FastAPI app.
+
+Responsibilities:
+
+- Loads settings.
+- Creates `FastAPI(...)`.
+- Configures Swagger UI.
+- Configures CORS.
+- Includes routers.
+- Redirects `/` to `/docs`.
+
+Important objects/functions:
+
+- `app = FastAPI(...)`: the ASGI app Uvicorn serves.
+- `app.add_middleware(CORSMiddleware, ...)`: allows frontend/API cross-origin calls.
+- `app.include_router(health.router)`: registers health endpoint.
+- `app.include_router(audits.router)`: registers audit endpoints.
+- `redirect_to_swagger()`: sends browser users from `/` to Swagger UI.
+
+### 7.2 `apps/api/deps.py`
+
+Small dependency export file.
+
+It imports and re-exports:
+
+```python
+get_db_session
+```
+
+FastAPI routes use this dependency to get DB sessions.
+
+### 7.3 `apps/api/routes/health.py`
+
+Defines:
+
+```http
+GET /health
+```
+
+Function:
+
+```python
+health_check()
+```
+
+Returns:
+
+- status
+- app name
+- environment
+
+Used for local smoke tests and container health checks later.
+
+### 7.4 `apps/api/routes/audits.py`
+
+This is the main audit API router.
+
+Router:
+
+```python
+router = APIRouter(prefix="/audits", tags=["audits"])
+```
+
+All routes here start with `/audits`.
+
+#### Helper type aliases
+
+```python
+DbSession = Annotated[Session, Depends(get_db_session)]
+AuditLimit = Annotated[int, Query(ge=1, le=100)]
+AuditOffset = Annotated[int, Query(ge=0)]
+```
+
+Purpose:
+
+- Keep FastAPI dependency declarations clean.
+- Avoid lint warnings about calling `Depends(...)` in default arguments.
+- Validate pagination query parameters.
+
+#### `_report_available(job)`
+
+Returns `True` if:
+
+- the job has an `AuditResult`
+- and that result has `pdf_path`
+
+Right now this usually returns `False` because PDF generation is not implemented yet.
+
+#### `_status_response(job)`
+
+Converts an `AuditJob` SQLAlchemy model into an `AuditStatusResponse` Pydantic object.
+
+Used by:
+
+- `GET /audits/{job_id}/status`
+
+#### `_list_item(job)`
+
+Converts an `AuditJob` plus optional `AuditResult` into an `AuditListItem`.
+
+Used by:
+
+- `GET /audits`
+
+It includes scores only if an audit result exists.
+
+#### `create_audit(payload, db)`
+
+Route:
+
+```http
+POST /audits
+```
+
+Responsibilities:
+
+1. Validate the request body with `AuditCreateRequest`.
+2. Create an `AuditJob`.
+3. Save it to PostgreSQL.
+4. If enqueueing is enabled, call Celery task:
+
+   ```python
+   run_audit.delay(str(job.id))
+   ```
+
+5. Return `job_id`, `status`, and `status_url`.
+
+Failure behavior:
+
+- If job enqueue fails, it marks the job as `failed`.
+- It stores the error message.
+- It returns HTTP `503`.
+
+#### `list_audits(db, limit, offset)`
+
+Route:
+
+```http
+GET /audits
+```
+
+Responsibilities:
+
+- Query recent audit jobs.
+- Sort newest first.
+- Apply pagination.
+- Return list response.
+
+#### `get_audit_status(job_id, db)`
+
+Route:
+
+```http
+GET /audits/{job_id}/status
+```
+
+Responsibilities:
+
+- Load the job by UUID.
+- Return `404` if missing.
+- Return current status/progress if found.
+
+#### `get_audit_report(job_id, db)`
+
+Route:
+
+```http
+GET /audits/{job_id}/report
+```
+
+Responsibilities:
+
+- Load job.
+- Check result exists.
+- Check `pdf_path` exists.
+- Return PDF file response.
+
+Current limitation:
+
+- Since PDF generation is not implemented yet, this usually returns `404`.
+
+### 7.5 `apps/api/schemas/audits.py`
+
+Pydantic schemas for API input/output.
+
+#### `AuditCreateRequest`
+
+Request body for `POST /audits`.
+
+Fields:
+
+- `url`: validated as HTTP URL.
+- `niche`: optional string.
+- `target_audience`: optional string.
+
+#### `AuditCreateResponse`
+
+Response from `POST /audits`.
+
+Fields:
+
+- `job_id`
+- `status`
+- `status_url`
+
+#### `AuditStatusResponse`
+
+Response from `GET /audits/{job_id}/status`.
+
+Fields:
+
+- job identity
+- URL
+- status
+- stage
+- progress
+- errors
+- timestamps
+- report availability
+
+#### `AuditListItem`
+
+One row in the audit history response.
+
+Includes:
+
+- job fields
+- optional scores
+- report availability
+
+#### `AuditListResponse`
+
+Wrapper response:
+
+```python
+audits: list[AuditListItem]
+```
+
+---
+
+## 8. Shared Backend Code: `apps/shared/`
+
+Shared code is used by both API and worker.
+
+### 8.1 `apps/shared/config.py`
+
+Central app settings.
+
+Uses:
+
+```python
+pydantic-settings
+```
+
+Main class:
+
+```python
+class Settings(BaseSettings)
+```
+
+It reads from:
+
+- process environment variables
+- `.env`
+- default values in code
+
+Important fields:
+
+- `app_env`
+- `app_name`
+- `api_host`
+- `api_port`
+- `api_base_url`
+- `api_cors_origins`
+- `database_url`
+- `redis_url`
+- `celery_broker_url`
+- `celery_result_backend`
+- `audit_enqueue_enabled`
+- local storage paths
+- `openai_api_key`
+- `openai_model`
+- OpenAI token/temperature settings
+
+#### `api_cors_origins`
+
+Uses `NoDecode` because `.env` stores it as:
+
+```text
+API_CORS_ORIGINS=http://localhost:3000
+```
+
+Without `NoDecode`, Pydantic Settings tries to parse list fields as JSON.
+
+#### `parse_origins(...)`
+
+Turns a comma-separated string into a Python list.
+
+Example:
+
+```text
+http://localhost:3000,http://localhost:3001
+```
+
+becomes:
+
+```python
+["http://localhost:3000", "http://localhost:3001"]
+```
+
+#### `get_settings()`
+
+Returns a cached `Settings` instance.
+
+The `@lru_cache` avoids re-reading `.env` for every request.
+
+### 8.2 `apps/shared/database.py`
+
+Creates the SQLAlchemy engine and session factory.
+
+Important objects:
+
+#### `engine`
+
+Created with:
+
+```python
+create_engine(settings.database_url, ...)
+```
+
+This is the connection pool for the database.
+
+#### `SessionLocal`
+
+Factory for database sessions.
+
+Used by:
+
+- FastAPI dependencies.
+- Worker tasks.
+
+#### `get_db_session()`
+
+FastAPI dependency generator.
+
+It:
+
+1. Opens a DB session.
+2. Yields it to the route.
+3. Closes it when the request finishes.
+
+### 8.3 `apps/shared/audit_states.py`
+
+Defines allowed audit lifecycle states.
+
+Main enum:
+
+```python
+class AuditStatus(StrEnum)
+```
+
+Allowed states:
+
+- `queued`
+- `crawling`
+- `collecting_performance`
+- `extracting`
+- `scoring`
+- `commenting`
+- `validating`
+- `rendering`
+- `complete`
+- `failed`
+
+`JOB_STATUS_VALUES` is used by the model to build a DB check constraint.
+
+`TERMINAL_STATUSES` identifies final states:
+
+- `complete`
+- `failed`
+
+### 8.4 `apps/shared/models.py`
+
+SQLAlchemy ORM models.
+
+#### `GUID`
+
+Custom SQLAlchemy type.
+
+Why it exists:
+
+- PostgreSQL uses native UUID.
+- SQLite tests use string UUIDs.
+
+This type lets the same model work in production-like Postgres and local SQLite unit tests.
+
+#### `json_type()`
+
+Returns a JSON column type that uses:
+
+- PostgreSQL `JSONB` in Postgres.
+- normal `JSON` in other DBs like SQLite.
+
+This keeps tests simple while using the right type in Postgres.
+
+#### `Base`
+
+SQLAlchemy declarative base.
+
+All ORM models inherit from it.
+
+Alembic imports `Base.metadata` to understand the model structure.
+
+#### `AuditJob`
+
+Tracks the lifecycle of a submitted audit.
+
+Table:
+
+```text
+audit_jobs
+```
+
+Important columns:
+
+- `id`: UUID primary key.
+- `url`: submitted website URL.
+- `niche`: optional metadata.
+- `target_audience`: optional metadata.
+- `status`: lifecycle state.
+- `current_stage`: human-readable current stage.
+- `progress_pct`: 0 to 100.
+- `error_message`: stored failure message.
+- `created_at`
+- `started_at`
+- `completed_at`
+
+Constraints/indexes:
+
+- progress must be between 0 and 100.
+- status must be one of `AuditStatus`.
+- indexed by status.
+- indexed by created date.
+
+Relationship:
+
+```python
+result: AuditResult | None
+```
+
+One job can have one result.
+
+#### `AuditResult`
+
+Stores completed audit output.
+
+Table:
+
+```text
+audit_results
+```
+
+Important columns:
+
+- `job_id`: FK to `audit_jobs`.
+- `seo_score`
+- `uxui_score`
+- `lead_gen_score`
+- `crawled_pages`
+- `seo_facts`
+- `uxui_facts`
+- `psi_facts`
+- `score_breakdown`
+- `commentary`
+- `validation_log`
+- `report_metadata`
+- `pdf_path`
+- `rubric_version`
+- `llm_model`
+- `created_at`
+
+Most output fields are JSON/JSONB because audit data is nested and will grow as later stages are added.
+
+---
+
+## 9. Worker Code: `apps/worker/`
+
+The worker runs async/background audit tasks.
+
+### 9.1 `apps/worker/celery_app.py`
+
+Creates the Celery application.
+
+Important config:
+
+- Broker: `settings.celery_broker_url`
+- Result backend: `settings.celery_result_backend`
+- Includes: `apps.worker.tasks`
+- JSON serializer.
+- UTC timezone.
+- task tracking enabled.
+
+This is what the Celery CLI points at:
+
+```bash
+celery -A apps.worker.celery_app.celery_app worker --loglevel=info
+```
+
+### 9.2 `apps/worker/tasks.py`
+
+Defines the current task implementation.
+
+#### `PLACEHOLDER_STAGES`
+
+Tuple of fake lifecycle stages used to prove the pipeline mechanics.
+
+Each entry contains:
+
+```python
+(AuditStatus, stage_label, progress_pct)
+```
+
+#### `_mark_job(db, job, status, stage, progress_pct, error_message=None)`
+
+Updates job state.
+
+It:
+
+1. Sets `started_at` if this is the first non-queued state.
+2. Sets `completed_at` for `complete` or `failed`.
+3. Updates status.
+4. Updates current stage.
+5. Updates progress.
+6. Saves optional error message.
+7. Commits DB transaction.
+8. Refreshes the ORM object.
+
+#### `run_collection_audit(job_id)`
+
+Current Epic P1-E2 collection process.
+
+It:
+
+1. Reads settings.
+2. Parses job UUID.
+3. Opens DB session.
+4. Loads the `AuditJob`.
+5. Returns silently if the job no longer exists.
+6. Marks the job as `crawling`.
+7. Runs the Playwright crawler.
+8. Marks the job as `collecting_performance`.
+9. Collects per-page PageSpeed facts, or stores a skipped/failed PSI artifact.
+10. Marks the job as `extracting`.
+11. Runs the SEO and UX/UI extractors.
+12. Creates or updates the `AuditResult`.
+13. Leaves scoring, commentary, validation, and PDF fields as explicit later-epic placeholders.
+14. Marks the job complete.
+
+If an exception happens:
+
+1. Roll back DB transaction.
+2. Mark job failed.
+3. Store error message.
+4. Re-raise the exception so Celery logs it.
+
+#### `run_audit(job_id)`
+
+Celery task.
+
+This is what the API enqueues.
+
+```python
+run_audit.delay(str(job.id))
+```
+
+Right now it calls:
+
+```python
+run_collection_audit(job_id)
+```
+
+Later, this is where scoring, OpenAI commentary, validation, and PDF generation will be added.
+
+### 9.3 `apps/worker/stages/`
+
+Package for worker pipeline stages.
+
+Current modules:
+
+- `crawler.py`: Playwright crawl orchestration, same-site link discovery, robots checks, screenshots, failed-page logs.
+- `psi_client.py`: PageSpeed Insights wrapper with retries, cache, normalization, `PSI_SCOPE` / `PSI_MAX_PAGES` page selection, API-key header auth, and graceful skip/failure artifacts.
+- `extractor_seo.py`: deterministic SEO facts from rendered HTML.
+- `extractor_uxui.py`: deterministic UX/UI and lead-capture heuristics from rendered HTML.
+
+Later modules:
+
+- scoring
+- OpenAI commentary
+- grounding validator
+- PDF renderer
+
+---
+
+## 10. Frontend Code: `apps/frontend/`
+
+The frontend is a Next.js TypeScript shell.
+
+It is intentionally light right now because the real operator UI is Epic P1-E5.
+
+### 10.1 `apps/frontend/package.json`
+
+Defines frontend dependencies and scripts.
+
+Important scripts:
+
+- `npm run dev`
+- `npm run build`
+- `npm run start`
+- `npm run lint`
+- `npm run typecheck`
+
+Dependencies:
+
+- Next.js
+- React
+- React DOM
+- TypeScript
+- ESLint
+
+### 10.2 `apps/frontend/package-lock.json`
+
+Locks frontend dependency versions.
+
+This makes `npm install` repeatable.
+
+### 10.3 `apps/frontend/next.config.js`
+
+Next.js config.
+
+Current setting:
+
+```js
+reactStrictMode: true
+```
+
+### 10.4 `apps/frontend/tsconfig.json`
+
+TypeScript compiler settings.
+
+It enforces strict TypeScript and Next-compatible module settings.
+
+### 10.5 `apps/frontend/next-env.d.ts`
+
+Next.js generated type references.
+
+Committed so TypeScript tooling works cleanly before first local dev run.
+
+### 10.6 `apps/frontend/.eslintrc.json`
+
+ESLint config.
+
+Extends:
+
+```json
+"next/core-web-vitals"
+```
+
+### 10.7 `apps/frontend/pages/_app.tsx`
+
+Global Next.js app wrapper.
+
+It imports:
+
+```tsx
+../styles/globals.css
+```
+
+Then renders the current page component.
+
+### 10.8 `apps/frontend/pages/index.tsx`
+
+Home page shell.
+
+Current purpose:
+
+- Shows the app name.
+- Explains that P1-E5 will add the real submission/progress/history UI.
+- Links to `/audits`.
+
+### 10.9 `apps/frontend/pages/audits.tsx`
+
+Audit history shell page.
+
+Current purpose:
+
+- Placeholder for future audit history table.
+- Links back to `/`.
+
+### 10.10 `apps/frontend/pages/audit/[id].tsx`
+
+Dynamic audit detail page shell.
+
+Example route:
+
+```text
+/audit/123
+```
+
+Current purpose:
+
+- Reads `id` from the URL.
+- Displays it.
+- Placeholder for future progress/PDF download UI.
+
+### 10.11 `apps/frontend/styles/globals.css`
+
+Global CSS for the frontend shell.
+
+Defines:
+
+- box sizing
+- body font/colors
+- link styles
+- centered shell layout
+- panel card
+- heading/text styles
+
+---
+
+## 11. Database Migrations: `migrations/`
+
+Alembic handles schema migrations.
+
+### 11.1 `migrations/env.py`
+
+Alembic runtime configuration.
+
+It:
+
+1. Adds repo root to Python path.
+2. Imports settings.
+3. Imports `Base.metadata`.
+4. Reads `DATABASE_URL` from settings.
+5. Configures online/offline migration modes.
+
+### 11.2 `migrations/script.py.mako`
+
+Template Alembic uses when generating new migration files.
+
+### 11.3 `migrations/versions/20260528_0001_create_audit_tables.py`
+
+Initial migration.
+
+Creates:
+
+- `pgcrypto` extension for `gen_random_uuid()`.
+- `audit_jobs`.
+- `audit_results`.
+- indexes.
+- constraints.
+
+This migration ran successfully in Docker logs.
+
+---
+
+## 12. Tests: `tests/`
+
+### 12.1 `tests/unit/test_audit_api.py`
+
+Tests API behavior.
+
+#### `test_swagger_ui_is_available()`
+
+Verifies:
+
+- `/` redirects to `/docs`.
+- `/docs` returns Swagger UI.
+- `/openapi.json` returns the correct app title.
+
+#### `test_create_and_read_audit_lifecycle(...)`
+
+Uses in-memory SQLite.
+
+Important setup:
+
+- `StaticPool` keeps the in-memory DB shared across sessions.
+- overrides FastAPI DB dependency.
+- disables enqueueing so the test does not need Redis/Celery.
+
+Verifies:
+
+- `POST /audits` returns 201.
+- job starts as `queued`.
+- status endpoint returns job state.
+- list endpoint returns one audit.
+
+### 12.2 `tests/unit/test_audit_lifecycle.py`
+
+Tests ORM persistence.
+
+It:
+
+- creates an `AuditJob`
+- commits it
+- creates an `AuditResult`
+- confirms relationship works
+
+### 12.3 `tests/fixtures/`
+
+Reserved for fixture files.
+
+Current use:
+
+- strong website fixture
+- weak website fixture
+- malformed HTML fixture
+- expected extractor outputs
+
+Current `.gitkeep` remains alongside the fixture files.
+
+### 12.4 `tests/integration/`
+
+Reserved for integration tests.
+
+Future use:
+
+- full API + worker + DB tests
+- crawler integration tests
+- report generation integration tests
+
+Current `.gitkeep` exists so the empty folder is preserved.
+
+---
+
+## 13. Planning And Handoff Docs: `docs/`
+
+### `docs/01_REQUIREMENTS.md`
+
+Requirements and scope source.
+
+Explains:
+
+- what Phase 1 is
+- what is in scope
+- what is out of scope
+- business/technical decisions
+
+### `docs/02_IMPLEMENTATION.md`
+
+Detailed implementation architecture.
+
+Explains:
+
+- target architecture
+- data model
+- pipeline design
+- future scoring/commentary/PDF/UI plans
+
+### `docs/03_PHASE1_JIRA_PLAN.md`
+
+Jira-ready plan.
+
+Contains:
+
+- Jira settings
+- 6 epics
+- 26 implementation tasks
+- subtasks
+- Phase 1 done criteria
+
+### `docs/04_PHASE1_CONFLUENCE_HANDOFF.md`
+
+Stakeholder handoff doc.
+
+Summarizes:
+
+- scope
+- architecture
+- risks
+- acceptance criteria
+- deferred work
+
+### `docs/05_CODE_WALKTHROUGH.md`
+
+This document.
+
+Explains:
+
+- current repo structure
+- runtime flow
+- what each file/folder does
+- how the audit lifecycle works today
+- what remains for later epics
+
+---
+
+## 14. Reserved Product Folders
+
+These are intentionally present now so later epics have stable locations.
+
+### `rubrics/`
+
+Future YAML scoring rubrics.
+
+Planned files:
+
+- `seo.yaml`
+- `uxui.yaml`
+- `composite.yaml`
+
+Purpose:
+
+- deterministic scoring
+- tunable weights
+- reproducible score breakdowns
+
+### `prompts/`
+
+Future OpenAI prompt templates.
+
+Planned files:
+
+- SEO commentary prompt
+- UX/UI commentary prompt
+- grounding validator prompt if needed
+
+Purpose:
+
+- keep prompts versioned
+- avoid hard-coding long prompt text inside Python functions
+
+### `templates/`
+
+Future report templates.
+
+Planned files:
+
+- `report.html`
+- `report.css`
+- partial templates
+
+Purpose:
+
+- branded PDF report generation
+
+### `templates/partials/`
+
+Future reusable report sections.
+
+Examples:
+
+- cover
+- summary
+- score breakdown
+- findings
+- recommendations
+
+### `storage/`
+
+Local output storage.
+
+### `storage/reports/`
+
+Future PDF report output folder.
+
+Current `.gitkeep` preserves folder.
+
+### `storage/screenshots/`
+
+Crawler screenshot output folder.
+
+Current `.gitkeep` preserves folder.
+
+---
+
+## 15. DOCX Source Folders
+
+The repo also contains DOCX source/reference folders.
+
+### `docx/current docx/`
+
+Current DOCX source material.
+
+Contains:
+
+- `Phase_1.docx`
+
+### `docx/starting docx/`
+
+Earlier source/reference DOCX files.
+
+Contains initial project planning material.
+
+These files are reference inputs, not runtime code.
+
+---
+
+## 16. Generated / Local-Only Folders
+
+These may exist locally after running commands, but they are not source code.
+
+Examples:
+
+- `apps/frontend/node_modules/`
+- `apps/frontend/.next/`
+- `__pycache__/`
+- `.pytest_cache/`
+- `.ruff_cache/`
+- `.DS_Store`
+
+They are ignored because:
+
+- they are generated
+- they can be recreated
+- they are large/noisy
+- they do not belong in source control
+
+---
+
+## 17. Tooling Workflow
+
+### 17.1 Conda
+
+Create the environment:
+
+```bash
+conda env create -f environment.yml
+```
+
+Activate it:
+
+```bash
+conda activate social-audit
+```
+
+### 17.2 Poetry
+
+Install Python dependencies into the active Conda env:
+
+```bash
+poetry install --with dev
+```
+
+Why Poetry is used:
+
+- dependency locking
+- repeatable installs
+- clear dependency groups
+
+Why `poetry.toml` disables virtualenv creation:
+
+- the project uses Conda as the environment boundary
+- Poetry should not create a nested virtualenv
+
+### 17.3 requirements.txt
+
+Alternative install path:
+
+```bash
+pip install -r requirements.txt
+```
+
+Use this when a deployment system expects requirements files.
+
+### 17.4 Pre-commit
+
+Install hook:
+
+```bash
+pre-commit install
+```
+
+Run manually:
+
+```bash
+pre-commit run --all-files
+```
+
+Current hooks:
+
+- Ruff check
+- Ruff format
+- backend tests
+- frontend typecheck for frontend files
+
+### 17.5 Backend Checks
+
+```bash
+pytest
+ruff check .
+python -m compileall apps/api apps/shared apps/worker migrations tests
+```
+
+### 17.6 Frontend Checks
+
+```bash
+cd apps/frontend
+npm run typecheck
+npm run lint
+npm run build
+```
+
+### 17.7 Docker
+
+Start stack:
+
+```bash
+docker compose up --build
+```
+
+Start in background:
+
+```bash
+docker compose up --build -d
+```
+
+Stop:
+
+```bash
+docker compose down
+```
+
+Stop and remove DB volume:
+
+```bash
+docker compose down -v
+```
+
+Only use `-v` when you want to delete the local database.
+
+---
+
+## 18. API Endpoints
+
+### `GET /`
+
+Redirects to Swagger UI at `/docs`.
+
+### `GET /docs`
+
+Swagger UI.
+
+Use this to test API endpoints from the browser.
+
+### `GET /openapi.json`
+
+Raw OpenAPI schema.
+
+Useful for API clients and generated documentation.
+
+### `GET /health`
+
+Health endpoint.
+
+Expected response:
+
+```json
+{
+  "status": "ok",
+  "app": "blc-website-audit",
+  "environment": "local"
+}
+```
+
+### `POST /audits`
+
+Creates an audit job and enqueues worker task.
+
+### `GET /audits`
+
+Lists recent audits.
+
+### `GET /audits/{job_id}/status`
+
+Returns one audit's lifecycle state.
+
+### `GET /audits/{job_id}/report`
+
+Returns generated PDF when available.
+
+Current collection results do not generate a PDF, so this may return `404`.
+
+---
+
+## 19. Environment Variables
+
+Important environment variables:
+
+| Variable | Purpose |
+|---|---|
+| `APP_ENV` | local/dev/prod marker |
+| `APP_NAME` | app display/internal name |
+| `API_PORT` | API port |
+| `API_CORS_ORIGINS` | allowed frontend origins |
+| `DATABASE_URL` | SQLAlchemy DB connection |
+| `REDIS_URL` | Redis connection |
+| `CELERY_BROKER_URL` | Celery task broker |
+| `CELERY_RESULT_BACKEND` | Celery result backend |
+| `AUDIT_ENQUEUE_ENABLED` | lets tests/dev disable worker enqueueing |
+| `LOCAL_REPORT_STORAGE_DIR` | local PDF storage |
+| `LOCAL_SCREENSHOT_STORAGE_DIR` | local screenshot storage |
+| `OPENAI_API_KEY` | OpenAI API key |
+| `OPENAI_MODEL` | model, currently `gpt-4o` |
+| `OPENAI_MAX_TOKENS` | future commentary token budget |
+| `OPENAI_TEMPERATURE` | future commentary randomness |
+
+Never commit `.env`.
+
+---
+
+## 20. Current Limitations
+
+This is expected at the current stage:
+
+- The worker crawls real websites, but only up to `CRAWLER_MAX_PAGES` total pages including the homepage and selected same-site internal pages.
+- PageSpeed is skipped unless `GOOGLE_PSI_API_KEY` is configured.
+- PageSpeed can be capped separately with `PSI_MAX_PAGES`, or limited to homepage-only mode with `PSI_SCOPE=homepage`.
+- PageSpeed failures are stored as PSI artifacts instead of failing the whole audit.
+- SEO facts are extracted from rendered HTML.
+- UX/UI facts are extracted with deterministic heuristics, not visual AI judgment.
+- Scores are placeholder zeros.
+- OpenAI commentary is not called yet.
+- Grounding validation is placeholder JSON.
+- PDF files are not generated yet.
+- `/audits/{job_id}/report` returns `404` until PDF generation exists.
+- Frontend pages are shells, not the final operator UI.
+
+These are not bugs in P1-E2. They are future tasks in P1-E3 through P1-E5.
+
+---
+
+## 21. What To Build Next
+
+Recommended next implementation order:
+
+1. Add YAML rubrics.
+2. Add scoring engine.
+3. Add OpenAI commentary client/prompts.
+4. Add grounding validator.
+5. Add report payload composition.
+6. Add PDF rendering.
+7. Build the final operator UI screens.
+9. Add PDF composer/renderer.
+10. Replace frontend shell with real submit/progress/history UI.
+
+The current foundation is ready for those additions because:
+
+- job lifecycle states exist
+- DB schema has JSON result fields
+- API endpoints exist
+- worker queue exists
+- storage folders exist
+- tests and tooling are in place

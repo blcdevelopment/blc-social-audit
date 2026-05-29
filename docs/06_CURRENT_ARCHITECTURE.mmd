@@ -1,0 +1,264 @@
+%% BLC Website Audit Automation - current implemented architecture
+%% Generated from local repo audit on 2026-05-29.
+%% Solid arrows are implemented runtime paths.
+%% Dotted arrows are scaffolds, placeholders, or future-epic integration points.
+
+flowchart TB
+  classDef implemented fill:#e8f4ff,stroke:#1b64a0,color:#102033
+  classDef data fill:#eef8ef,stroke:#2e7d32,color:#102033
+  classDef config fill:#fff7e6,stroke:#b26a00,color:#102033
+  classDef placeholder fill:#fff0f0,stroke:#b42318,color:#102033
+  classDef docs fill:#f4f0ff,stroke:#6941c6,color:#102033
+  classDef external fill:#f0f9ff,stroke:#0369a1,color:#102033
+
+  Operator["BLC operator / API client"]:::implemented
+
+  subgraph Frontend["apps/frontend - Next.js TypeScript shell"]
+    FrontendApp["pages/_app.tsx"]:::implemented
+    HomePage["pages/index.tsx<br/>Submission landing shell"]:::implemented
+    AuditsPage["pages/audits.tsx<br/>History shell"]:::implemented
+    AuditDetailPage["pages/audit/[id].tsx<br/>Detail shell"]:::implemented
+    FrontendStyles["styles/globals.css"]:::implemented
+    FrontendTooling["package.json<br/>tsconfig.json<br/>ESLint config"]:::config
+  end
+
+  subgraph Api["apps/api - FastAPI backend"]
+    FastApiApp["main.py<br/>FastAPI app, CORS, Swagger redirect"]:::implemented
+    HealthRouter["routes/health.py<br/>GET /health"]:::implemented
+    AuditsRouter["routes/audits.py<br/>/audits router"]:::implemented
+    AuditSchemas["schemas/audits.py<br/>Pydantic request/response models"]:::implemented
+    CreateAudit["POST /audits<br/>Create job and optionally enqueue"]:::implemented
+    ListAudits["GET /audits<br/>List recent jobs"]:::implemented
+    StatusAudit["GET /audits/{job_id}/status<br/>Read progress"]:::implemented
+    ReportAudit["GET /audits/{job_id}/report<br/>Stream local PDF when available"]:::implemented
+    ApiDockerfile["apps/api/Dockerfile<br/>Python image with uv install"]:::config
+  end
+
+  subgraph Shared["apps/shared - backend shared layer"]
+    Settings["config.py<br/>Pydantic settings from .env<br/>includes PSI_SCOPE and PSI_MAX_PAGES"]:::implemented
+    Database["database.py<br/>SQLAlchemy engine and sessions"]:::implemented
+    Models["models.py<br/>AuditJob and AuditResult ORM models"]:::implemented
+    States["audit_states.py<br/>Job status enum and terminal states"]:::implemented
+  end
+
+  subgraph Worker["apps/worker - Celery worker"]
+    CeleryApp["celery_app.py<br/>Celery app using Redis broker/backend"]:::implemented
+    RunAudit["tasks.py<br/>run_audit Celery task"]:::implemented
+    CollectionPipeline["tasks.py<br/>run_collection_audit orchestration"]:::implemented
+    CrawlerStage["stages/crawler.py<br/>Playwright crawl, robots, timeouts, failed-page logs"]:::implemented
+    PsiStage["stages/psi_client.py<br/>per-page PSI mobile and desktop, retries, cache, API-key header auth"]:::implemented
+    SeoStage["stages/extractor_seo.py<br/>meta, headings, links, image alt, schema"]:::implemented
+    UxStage["stages/extractor_uxui.py<br/>CTAs, forms, contacts, trust signals"]:::implemented
+    StagePackage["stages/__init__.py<br/>Worker pipeline package"]:::implemented
+    WorkerDockerfile["apps/worker/Dockerfile<br/>Python image with Playwright Chromium install"]:::config
+  end
+
+  subgraph External["External services and audited websites"]
+    TargetWebsite["Submitted website<br/>homepage plus same-site internal pages"]:::external
+    GooglePsiApi["Google PageSpeed Insights API<br/>Lighthouse mobile and desktop facts per analyzed page"]:::external
+  end
+
+  subgraph Storage["Local persistence and generated files"]
+    Postgres["PostgreSQL service"]:::data
+    Redis["Redis service<br/>Celery broker and result backend"]:::data
+    AuditJobsTable["audit_jobs<br/>id, url, status, stage, progress, timestamps"]:::data
+    AuditResultsTable["audit_results<br/>crawl, PSI, SEO, UX/UI facts, scores, pdf_path"]:::data
+    ReportStorage["storage/reports<br/>local PDF output target"]:::data
+    ScreenshotStorage["storage/screenshots<br/>local screenshot output target"]:::data
+    NoPdfYet["Current collection result leaves pdf_path null<br/>report endpoint returns 404 until P1-E4"]:::placeholder
+  end
+
+  subgraph Migrations["migrations - Alembic"]
+    AlembicConfig["alembic.ini"]:::config
+    AlembicEnv["env.py<br/>loads Settings.database_url"]:::implemented
+    InitialMigration["versions/20260528_0001_create_audit_tables.py"]:::implemented
+  end
+
+  subgraph Compose["docker-compose.yml - local runtime stack"]
+    ComposeFile["Docker Compose"]:::config
+    ApiService["api service<br/>alembic upgrade head then uvicorn --reload"]:::implemented
+    WorkerService["worker service<br/>celery worker"]:::implemented
+    PostgresService["postgres service<br/>postgres:16-alpine"]:::implemented
+    RedisService["redis service<br/>redis:7-alpine"]:::implemented
+    StorageBind["./storage bind mount"]:::data
+  end
+
+  subgraph Tooling["Local development and QA tooling"]
+    EnvExample[".env.example<br/>safe local config template"]:::config
+    EnvFile[".env<br/>local secrets, gitignored"]:::config
+    PyProject["pyproject.toml<br/>runtime deps, Ruff, pytest"]:::config
+    PoetryLock["poetry.lock and poetry.toml<br/>locked Python deps, no Poetry venv"]:::config
+    Requirements["requirements.txt<br/>pinned pip compatibility list"]:::config
+    CondaEnv["environment.yml<br/>Conda env with Poetry and pre-commit"]:::config
+    PreCommit[".pre-commit-config.yaml<br/>Ruff, pytest, frontend typecheck"]:::config
+    DockerIgnore[".dockerignore<br/>excludes caches, secrets, build output"]:::config
+    GitIgnore[".gitignore<br/>excludes .env, caches, storage output, frontend build"]:::config
+  end
+
+  subgraph Tests["tests - current verification"]
+    ApiTests["tests/unit/test_audit_api.py<br/>Swagger, create, status, list"]:::implemented
+    LifecycleTests["tests/unit/test_audit_lifecycle.py<br/>AuditJob and AuditResult persistence"]:::implemented
+    CrawlerTests["tests/unit/test_crawler_utils.py<br/>URL safety, same-site rules, HTTP failure logic"]:::implemented
+    ExtractorTests["tests/unit/test_extractors.py<br/>strong, weak, malformed fixture extraction"]:::implemented
+    PsiTests["tests/unit/test_psi_client.py<br/>normalization, skip path, key header auth"]:::implemented
+    WorkerCollectionTests["tests/unit/test_worker_collection.py<br/>collection artifact persistence"]:::implemented
+    FixturesDir["tests/fixtures<br/>strong, weak, malformed HTML and expected JSON"]:::implemented
+    SQLiteTestDb["SQLite in-memory DB for unit tests"]:::data
+  end
+
+  subgraph Docs["docs and planning"]
+    RequirementsDoc["01_REQUIREMENTS.md"]:::docs
+    ImplementationDoc["02_IMPLEMENTATION.md"]:::docs
+    JiraDoc["03_PHASE1_JIRA_PLAN.md"]:::docs
+    HandoffDoc["04_PHASE1_CONFLUENCE_HANDOFF.md"]:::docs
+    WalkthroughDoc["05_CODE_WALKTHROUGH.md"]:::docs
+    ArchitectureDoc["06_CURRENT_ARCHITECTURE.mmd"]:::docs
+  end
+
+  Operator -->|"opens"| HomePage
+  Operator -->|"HTTP / Swagger UI"| FastApiApp
+  FrontendApp --> HomePage
+  FrontendApp --> AuditsPage
+  FrontendApp --> AuditDetailPage
+  HomePage --> AuditsPage
+  AuditsPage --> HomePage
+  AuditDetailPage --> AuditsPage
+  HomePage -.->|"operator API integration planned in P1-E5"| FastApiApp
+  AuditsPage -.->|"history table planned in P1-E5"| ListAudits
+  AuditDetailPage -.->|"polling and download planned in P1-E5"| StatusAudit
+
+  FastApiApp --> HealthRouter
+  FastApiApp --> AuditsRouter
+  FastApiApp -->|"GET /"| SwaggerDocs["/docs and /openapi.json"]:::implemented
+  AuditsRouter --> CreateAudit
+  AuditsRouter --> ListAudits
+  AuditsRouter --> StatusAudit
+  AuditsRouter --> ReportAudit
+  CreateAudit --> AuditSchemas
+  CreateAudit --> Database
+  ListAudits --> Database
+  StatusAudit --> Database
+  ReportAudit --> Database
+
+  Settings --> FastApiApp
+  Settings --> Database
+  Settings --> CeleryApp
+  Settings --> AlembicEnv
+  States --> Models
+  Models --> Database
+  Database --> Postgres
+  Postgres --> AuditJobsTable
+  Postgres --> AuditResultsTable
+
+  CreateAudit -->|"insert queued AuditJob"| AuditJobsTable
+  CreateAudit -->|"AUDIT_ENQUEUE_ENABLED=true"| RunAudit
+  RunAudit -->|"Celery delay"| Redis
+  Redis --> CeleryApp
+  CeleryApp --> RunAudit
+  RunAudit --> CollectionPipeline
+  CollectionPipeline -->|"crawling stage/progress"| AuditJobsTable
+  CollectionPipeline --> CrawlerStage
+  CrawlerStage -->|"render homepage and selected same-site pages"| TargetWebsite
+  CrawlerStage -->|"optional screenshots"| ScreenshotStorage
+  CollectionPipeline -->|"collecting_performance stage/progress"| AuditJobsTable
+  CollectionPipeline --> PsiStage
+  PsiStage -->|"PSI_SCOPE / PSI_MAX_PAGES select analyzed pages; x-goog-api-key header when set"| GooglePsiApi
+  CollectionPipeline -->|"extracting stage/progress"| AuditJobsTable
+  CollectionPipeline --> SeoStage
+  CollectionPipeline --> UxStage
+  SeoStage -->|"SEO facts from rendered HTML"| CollectionPipeline
+  UxStage -->|"UX/UI facts from rendered HTML"| CollectionPipeline
+  PsiStage -->|"complete, skipped, partial, or failed PSI artifact"| CollectionPipeline
+  CrawlerStage -->|"crawled pages and failed-page log"| CollectionPipeline
+  CollectionPipeline -->|"collection AuditResult artifacts"| AuditResultsTable
+  CollectionPipeline -->|"complete or failed status"| AuditJobsTable
+  CollectionPipeline --> StagePackage
+
+  ListAudits -->|"reads jobs and optional scores"| AuditJobsTable
+  ListAudits --> AuditResultsTable
+  StatusAudit -->|"reads lifecycle state"| AuditJobsTable
+  StatusAudit -->|"report_available if pdf_path exists"| AuditResultsTable
+  ReportAudit -->|"checks pdf_path"| AuditResultsTable
+  ReportAudit -->|"FileResponse when file exists"| ReportStorage
+  ReportAudit -.-> NoPdfYet
+
+  ComposeFile --> ApiService
+  ComposeFile --> WorkerService
+  ComposeFile --> PostgresService
+  ComposeFile --> RedisService
+  ComposeFile --> StorageBind
+  ApiService --> ApiDockerfile
+  WorkerService --> WorkerDockerfile
+  ApiService --> FastApiApp
+  WorkerService --> CeleryApp
+  PostgresService --> Postgres
+  RedisService --> Redis
+  StorageBind --> ReportStorage
+  StorageBind --> ScreenshotStorage
+  ApiService -->|"runs migrations before API startup"| AlembicConfig
+
+  AlembicConfig --> AlembicEnv
+  AlembicEnv --> InitialMigration
+  InitialMigration --> AuditJobsTable
+  InitialMigration --> AuditResultsTable
+
+  EnvExample -.-> EnvFile
+  EnvFile --> Settings
+  PyProject --> ApiDockerfile
+  PyProject --> WorkerDockerfile
+  CondaEnv --> PoetryLock
+  PoetryLock --> PyProject
+  Requirements -.-> PyProject
+  PreCommit --> ApiTests
+  PreCommit --> LifecycleTests
+  PreCommit --> CrawlerTests
+  PreCommit --> ExtractorTests
+  PreCommit --> PsiTests
+  PreCommit --> WorkerCollectionTests
+  PreCommit --> FrontendTooling
+
+  ApiTests --> FastApiApp
+  ApiTests --> SQLiteTestDb
+  LifecycleTests --> Models
+  LifecycleTests --> SQLiteTestDb
+  CrawlerTests --> CrawlerStage
+  ExtractorTests --> SeoStage
+  ExtractorTests --> UxStage
+  ExtractorTests --> FixturesDir
+  PsiTests --> PsiStage
+  WorkerCollectionTests --> CollectionPipeline
+  WorkerCollectionTests --> SQLiteTestDb
+  SQLiteTestDb --> AuditJobsTable
+  SQLiteTestDb --> AuditResultsTable
+
+  RequirementsDoc --> ImplementationDoc
+  ImplementationDoc --> JiraDoc
+  JiraDoc --> HandoffDoc
+  HandoffDoc --> WalkthroughDoc
+  WalkthroughDoc --> ArchitectureDoc
+
+  subgraph EpicStatus["Epic P1-E1 and P1-E2 coverage in current repo"]
+    P11["P1-1 project structure: covered"]:::implemented
+    P12["P1-2 local tooling: covered in repo; uv is used in Dockerfiles but not on this active shell PATH"]:::implemented
+    P13["P1-3 Docker Compose stack: covered"]:::implemented
+    P14["P1-4 DB models and migrations: covered"]:::implemented
+    P15["P1-5 API and job lifecycle: covered with real collection worker lifecycle"]:::implemented
+    P16["P1-6 worker orchestration: Celery, Redis, enqueue, stages, failures"]:::implemented
+    P17["P1-7 safe Playwright crawler: homepage, same-site pages, robots, timeouts, failures"]:::implemented
+    P18["P1-8 PageSpeed collection: per selected crawled page, mobile, desktop, retries, timeouts, normalized facts"]:::implemented
+    P19["P1-9 SEO and UX/UI extractors: implemented deterministic facts"]:::implemented
+    P110["P1-10 extractor fixtures: strong, weak, malformed, expected outputs"]:::implemented
+    LaterEpics["Scoring, AI commentary, validation, PDF, and full operator UI are later epics"]:::placeholder
+  end
+
+  JiraDoc --> P11
+  JiraDoc --> P12
+  JiraDoc --> P13
+  JiraDoc --> P14
+  JiraDoc --> P15
+  JiraDoc --> P16
+  JiraDoc --> P17
+  JiraDoc --> P18
+  JiraDoc --> P19
+  JiraDoc --> P110
+  P110 -.-> LaterEpics
