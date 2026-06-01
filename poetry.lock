@@ -2097,4 +2097,4 @@ dev = ["pre-commit", "pytest", "ruff"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11"
-content-hash = "cdadf200f6a8090a149b56136cb80ada9c16e7ed2da9f8b1c02f5a640af2376e"
+content-hash = "a229019e0d7fcabfd10bf07b118bd0842346befe2fc9c23ef850cfd8c69ee103"

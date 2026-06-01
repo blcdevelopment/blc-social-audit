@@ -6,9 +6,9 @@ The Phase 1 build focuses on a website audit pipeline: URL submission, Playwrigh
 
 Production and AWS deployment work is intentionally prepared after the local application works end-to-end.
 
-## Phase 1 Foundation And Epic P1-E2 Collection Pipeline
+## Phase 1 Foundation Through Epic P1-E3
 
-The repo now includes the local app foundation and the Epic P1-E2 audit collection pipeline:
+The repo now includes the local app foundation, Epic P1-E2 collection pipeline, and Epic P1-E3 scoring/commentary pipeline:
 
 - FastAPI backend in `apps/api`.
 - Celery worker in `apps/worker`.
@@ -20,6 +20,10 @@ The repo now includes the local app foundation and the Epic P1-E2 audit collecti
 - Playwright crawler for homepage plus selected same-site internal pages.
 - PageSpeed Insights collection for each selected crawled page, mobile and desktop, with `PSI_SCOPE` / `PSI_MAX_PAGES` controls and graceful skip/failure handling.
 - Deterministic SEO and UX/UI fact extractors backed by fixture tests.
+- YAML scoring rubrics in `rubrics/` with schema validation and versioning.
+- Rule-based SEO, UX/UI, and Lead Generation Readiness scoring.
+- ChatGPT commentary prompts in `prompts/`, with a local fallback when no OpenAI key is configured.
+- Grounding validation that strips unsupported numeric commentary claims.
 
 ## Local Setup
 
@@ -40,7 +44,7 @@ The repo now includes the local app foundation and the Epic P1-E2 audit collecti
 2. Copy environment defaults:
 
    ```bash
-   cp .env.example .env
+   cp .env.template .env
    ```
 
 3. Install Python dependencies with Poetry inside the Conda environment:
@@ -108,4 +112,4 @@ The repo now includes the local app foundation and the Epic P1-E2 audit collecti
 - `GET /audits/{job_id}/status`
 - `GET /audits/{job_id}/report`
 
-The current worker runs the Epic P1-E2 collection pipeline. It crawls pages, collects or skips PageSpeed facts, extracts SEO/UX facts, and stores those artifacts in `audit_results`. Scoring, OpenAI commentary, validation, and PDF rendering remain explicit later-epic placeholders.
+The current worker runs collection, scoring, commentary, and grounding validation. It crawls pages, collects or skips PageSpeed facts, extracts SEO/UX facts, scores the audit through YAML rubrics, generates ChatGPT commentary when `OPENAI_API_KEY` is configured, falls back locally when it is not, validates numeric claims, and stores the result in `audit_results`. PDF rendering remains the next later-epic placeholder.

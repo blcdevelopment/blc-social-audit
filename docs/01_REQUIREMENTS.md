@@ -315,13 +315,13 @@ This is the current execution scope. Everything below is in scope. Anything not 
 - **Per-check audit trail** — every score has a visible breakdown explaining which rules contributed.
 - **Reproducibility guarantee** — running the same site twice produces the same numeric score.
 
-#### 4.2.4 OpenAI-powered commentary pipeline
+#### 4.2.4 ChatGPT-powered commentary pipeline
 
-- An OpenAI GPT-class model is the primary model; the exact model ID is configured at implementation time.
+- An OpenAI ChatGPT model is the primary model; the exact model ID is configured at implementation time.
 - Strict, structured system prompt.
 - Inputs to ChatGPT: pre-extracted facts + computed scores.
 - Outputs: structured JSON with findings, plain-language explanations, prioritized recommendations.
-- **Grounded generation:** ChatGPT does not produce numeric claims. It only commentates on facts and rule outputs already provided.
+- **Grounded generation:** ChatGPT does not invent numeric claims. Any numeric claim must match facts or rule outputs already provided.
 - **Validation pass:** secondary check verifies all factual claims in the generated commentary trace back to extracted data.
 - Recommendations grouped into Quick Wins (0–30 days), Mid-Term (1–3 months), Long-Term (3–12 months).
 
@@ -429,7 +429,7 @@ These are the technical decisions made during scope review that the build must r
 | Job Queue | Celery + Redis | Audits take minutes. Async with progress tracking and retry. |
 | Website Crawler | Playwright | Real browser rendering required for JS-heavy modern sites. |
 | Performance & SEO audit | Google PageSpeed Insights API, with local Lighthouse fallback considered only if needed | PSI returns Lighthouse-style performance, accessibility, SEO, and best-practices signals. |
-| LLM commentary | OpenAI GPT-class model for primary commentary; lower-cost model optional for bulk classification | Use stronger reasoning for report commentary and cheaper classification only where it is safe. |
+| LLM commentary | OpenAI ChatGPT model for primary commentary; lower-cost model optional for bulk classification | Use stronger reasoning for report commentary and cheaper classification only where it is safe. |
 | Scoring engine | Pure Python rules + weighted rubric config (YAML) | Deterministic, explainable, tunable without code changes. |
 | Database | PostgreSQL (local Docker Compose first; managed Postgres later) | JSONB columns suit audit results. Local-first keeps startup simple. |
 | Report rendering | WeasyPrint + Jinja2 + print CSS | Better fit for long structured PDF reports with headers, footers, page counters, and page-break control. |
@@ -466,7 +466,7 @@ These are the risks we are tracking through Phase 1. Each has a mitigation strat
 | R4 | Test sites break the crawler in unexpected ways | Medium | Test real builder sites early. Treat broken crawls as unblockers, not bugs to defer. |
 | R5 | LLM usage costs exceed expectations | Low | Use the strongest model only for report commentary, use cheaper classification only where safe, cap retries, and monitor token usage. |
 | R6 | Scope creep ("can we just add social media") | Medium | Polite-firm no, with reasoning. Park requests as Phase 2 inputs. |
-| R7 | Solo-builder schedule risk (sick day, outage) | Medium | Front-load risky product work: crawler, scoring, OpenAI grounding, PDF generation |
+| R7 | Solo-builder schedule risk (sick day, outage) | Medium | Front-load risky product work: crawler, scoring, ChatGPT grounding, PDF generation |
 | R8 | Calibration: scores feel "off" to BLC even though they're reproducible | Medium | Iterate weights with BLC after sample-site scoring. Bake in 5 contrasting test sites for calibration check. |
 
 ---
@@ -506,7 +506,7 @@ How much of the original Darius scope does Phase 1 cover? This is the honest acc
 **Estimated coverage by build effort:**
 
 - Phase 1 covers **~45–55%** of the total project effort.
-- The shared infrastructure built in Phase 1 (job queue, scoring engine, OpenAI commentary pipeline pattern, PDF generator) is reused by Phase 2, so Phase 2's incremental effort is roughly **35–45%** of the total — not 55% — even though it covers the remaining feature surface.
+- The shared infrastructure built in Phase 1 (job queue, scoring engine, ChatGPT commentary pipeline pattern, PDF generator) is reused by Phase 2, so Phase 2's incremental effort is roughly **35–45%** of the total — not 55% — even though it covers the remaining feature surface.
 
 ---
 

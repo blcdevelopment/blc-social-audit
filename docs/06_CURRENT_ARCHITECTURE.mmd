@@ -35,7 +35,7 @@ flowchart TB
   end
 
   subgraph Shared["apps/shared - backend shared layer"]
-    Settings["config.py<br/>Pydantic settings from .env<br/>includes PSI_SCOPE and PSI_MAX_PAGES"]:::implemented
+    Settings["config.py<br/>Pydantic settings from .env<br/>includes PSI, OpenAI, rubric, and prompt paths"]:::implemented
     Database["database.py<br/>SQLAlchemy engine and sessions"]:::implemented
     Models["models.py<br/>AuditJob and AuditResult ORM models"]:::implemented
     States["audit_states.py<br/>Job status enum and terminal states"]:::implemented
@@ -49,6 +49,9 @@ flowchart TB
     PsiStage["stages/psi_client.py<br/>per-page PSI mobile and desktop, retries, cache, API-key header auth"]:::implemented
     SeoStage["stages/extractor_seo.py<br/>meta, headings, links, image alt, schema"]:::implemented
     UxStage["stages/extractor_uxui.py<br/>CTAs, forms, contacts, trust signals"]:::implemented
+    ScoringStage["stages/scoring.py<br/>safe YAML rubrics, evaluators, score composer"]:::implemented
+    CommentaryStage["stages/commentary.py<br/>OpenAI Structured Outputs, Pydantic schema, local fallback"]:::implemented
+    GroundingStage["stages/grounding_validator.py<br/>numeric claim extraction, fact matching, stripping"]:::implemented
     StagePackage["stages/__init__.py<br/>Worker pipeline package"]:::implemented
     WorkerDockerfile["apps/worker/Dockerfile<br/>Python image with Playwright Chromium install"]:::config
   end
@@ -56,16 +59,18 @@ flowchart TB
   subgraph External["External services and audited websites"]
     TargetWebsite["Submitted website<br/>homepage plus same-site internal pages"]:::external
     GooglePsiApi["Google PageSpeed Insights API<br/>Lighthouse mobile and desktop facts per analyzed page"]:::external
+    OpenAIApi["OpenAI API<br/>ChatGPT commentary when API key is configured"]:::external
+    LocalFallback["Local fallback commentary<br/>used when OpenAI key is absent or provider fails"]:::implemented
   end
 
   subgraph Storage["Local persistence and generated files"]
     Postgres["PostgreSQL service"]:::data
     Redis["Redis service<br/>Celery broker and result backend"]:::data
     AuditJobsTable["audit_jobs<br/>id, url, status, stage, progress, timestamps"]:::data
-    AuditResultsTable["audit_results<br/>crawl, PSI, SEO, UX/UI facts, scores, pdf_path"]:::data
+    AuditResultsTable["audit_results<br/>crawl, PSI, SEO/UX facts, scores, commentary, validation, pdf_path"]:::data
     ReportStorage["storage/reports<br/>local PDF output target"]:::data
     ScreenshotStorage["storage/screenshots<br/>local screenshot output target"]:::data
-    NoPdfYet["Current collection result leaves pdf_path null<br/>report endpoint returns 404 until P1-E4"]:::placeholder
+    NoPdfYet["Current validated audit result leaves pdf_path null<br/>report endpoint returns 404 until P1-E4"]:::placeholder
   end
 
   subgraph Migrations["migrations - Alembic"]
@@ -84,7 +89,7 @@ flowchart TB
   end
 
   subgraph Tooling["Local development and QA tooling"]
-    EnvExample[".env.example<br/>safe local config template"]:::config
+    EnvExample[".env.template<br/>safe local config template"]:::config
     EnvFile[".env<br/>local secrets, gitignored"]:::config
     PyProject["pyproject.toml<br/>runtime deps, Ruff, pytest"]:::config
     PoetryLock["poetry.lock and poetry.toml<br/>locked Python deps, no Poetry venv"]:::config
@@ -95,13 +100,24 @@ flowchart TB
     GitIgnore[".gitignore<br/>excludes .env, caches, storage output, frontend build"]:::config
   end
 
+  subgraph ConfigAssets["Versioned scoring and prompt assets"]
+    SeoRubric["rubrics/seo.yaml<br/>phase1-seo-v1"]:::config
+    UxRubric["rubrics/uxui.yaml<br/>phase1-uxui-v1"]:::config
+    CompositeRubric["rubrics/composite.yaml<br/>phase1-composite-v1"]:::config
+    CommentarySystemPrompt["prompts/commentary_system.md<br/>grounding and security rules"]:::config
+    CommentaryUserPrompt["prompts/commentary_user.md<br/>facts and score prompt template"]:::config
+  end
+
   subgraph Tests["tests - current verification"]
     ApiTests["tests/unit/test_audit_api.py<br/>Swagger, create, status, list"]:::implemented
     LifecycleTests["tests/unit/test_audit_lifecycle.py<br/>AuditJob and AuditResult persistence"]:::implemented
     CrawlerTests["tests/unit/test_crawler_utils.py<br/>URL safety, same-site rules, HTTP failure logic"]:::implemented
     ExtractorTests["tests/unit/test_extractors.py<br/>strong, weak, malformed fixture extraction"]:::implemented
     PsiTests["tests/unit/test_psi_client.py<br/>normalization, skip path, key header auth"]:::implemented
-    WorkerCollectionTests["tests/unit/test_worker_collection.py<br/>collection artifact persistence"]:::implemented
+    ScoringTests["tests/unit/test_scoring_engine.py<br/>rubric validation, calibration, reproducibility"]:::implemented
+    CommentaryTests["tests/unit/test_commentary.py<br/>schema and local fallback"]:::implemented
+    GroundingTests["tests/unit/test_grounding_validator.py<br/>numeric claim validation and stripping"]:::implemented
+    WorkerCollectionTests["tests/unit/test_worker_collection.py<br/>full worker artifact persistence through P1-E3"]:::implemented
     FixturesDir["tests/fixtures<br/>strong, weak, malformed HTML and expected JSON"]:::implemented
     SQLiteTestDb["SQLite in-memory DB for unit tests"]:::data
   end
@@ -170,7 +186,25 @@ flowchart TB
   UxStage -->|"UX/UI facts from rendered HTML"| CollectionPipeline
   PsiStage -->|"complete, skipped, partial, or failed PSI artifact"| CollectionPipeline
   CrawlerStage -->|"crawled pages and failed-page log"| CollectionPipeline
-  CollectionPipeline -->|"collection AuditResult artifacts"| AuditResultsTable
+  CollectionPipeline -->|"scoring stage/progress"| AuditJobsTable
+  CollectionPipeline --> ScoringStage
+  ScoringStage --> SeoRubric
+  ScoringStage --> UxRubric
+  ScoringStage --> CompositeRubric
+  ScoringStage -->|"SEO, UX/UI, Lead Gen scores and rule breakdowns"| CollectionPipeline
+  CollectionPipeline -->|"commenting stage/progress"| AuditJobsTable
+  CollectionPipeline --> CommentaryStage
+  CommentaryStage --> CommentarySystemPrompt
+  CommentaryStage --> CommentaryUserPrompt
+  CommentaryStage -->|"OPENAI_API_KEY configured"| OpenAIApi
+  CommentaryStage -->|"missing key or provider failure"| LocalFallback
+  OpenAIApi -->|"structured parsed output"| CommentaryStage
+  LocalFallback -->|"valid local commentary payload"| CommentaryStage
+  CommentaryStage -->|"validated Pydantic commentary artifact"| CollectionPipeline
+  CollectionPipeline -->|"validating stage/progress"| AuditJobsTable
+  CollectionPipeline --> GroundingStage
+  GroundingStage -->|"sanitized commentary and validation log"| CollectionPipeline
+  CollectionPipeline -->|"validated AuditResult artifacts"| AuditResultsTable
   CollectionPipeline -->|"complete or failed status"| AuditJobsTable
   CollectionPipeline --> StagePackage
 
@@ -206,6 +240,8 @@ flowchart TB
   EnvFile --> Settings
   PyProject --> ApiDockerfile
   PyProject --> WorkerDockerfile
+  PyProject --> ScoringStage
+  PyProject --> CommentaryStage
   CondaEnv --> PoetryLock
   PoetryLock --> PyProject
   Requirements -.-> PyProject
@@ -214,6 +250,9 @@ flowchart TB
   PreCommit --> CrawlerTests
   PreCommit --> ExtractorTests
   PreCommit --> PsiTests
+  PreCommit --> ScoringTests
+  PreCommit --> CommentaryTests
+  PreCommit --> GroundingTests
   PreCommit --> WorkerCollectionTests
   PreCommit --> FrontendTooling
 
@@ -226,6 +265,14 @@ flowchart TB
   ExtractorTests --> UxStage
   ExtractorTests --> FixturesDir
   PsiTests --> PsiStage
+  ScoringTests --> ScoringStage
+  ScoringTests --> SeoRubric
+  ScoringTests --> UxRubric
+  ScoringTests --> CompositeRubric
+  CommentaryTests --> CommentaryStage
+  CommentaryTests --> CommentarySystemPrompt
+  CommentaryTests --> CommentaryUserPrompt
+  GroundingTests --> GroundingStage
   WorkerCollectionTests --> CollectionPipeline
   WorkerCollectionTests --> SQLiteTestDb
   SQLiteTestDb --> AuditJobsTable
@@ -237,7 +284,7 @@ flowchart TB
   HandoffDoc --> WalkthroughDoc
   WalkthroughDoc --> ArchitectureDoc
 
-  subgraph EpicStatus["Epic P1-E1 and P1-E2 coverage in current repo"]
+  subgraph EpicStatus["Epic P1-E1 through P1-E3 coverage in current repo"]
     P11["P1-1 project structure: covered"]:::implemented
     P12["P1-2 local tooling: covered in repo; uv is used in Dockerfiles but not on this active shell PATH"]:::implemented
     P13["P1-3 Docker Compose stack: covered"]:::implemented
@@ -248,7 +295,12 @@ flowchart TB
     P18["P1-8 PageSpeed collection: per selected crawled page, mobile, desktop, retries, timeouts, normalized facts"]:::implemented
     P19["P1-9 SEO and UX/UI extractors: implemented deterministic facts"]:::implemented
     P110["P1-10 extractor fixtures: strong, weak, malformed, expected outputs"]:::implemented
-    LaterEpics["Scoring, AI commentary, validation, PDF, and full operator UI are later epics"]:::placeholder
+    P111["P1-11 YAML scoring rubrics: SEO, UX/UI, composite, versioning, schema validation"]:::implemented
+    P112["P1-12 rule evaluators and score composer: boolean, presence, range, exact, threshold, linear, skipped rules"]:::implemented
+    P113["P1-13 calibration: strong and weak fixture score gates and reproducibility tests"]:::implemented
+    P114["P1-14 ChatGPT commentary and prompts: OpenAI client, structured output schema, recommendation tiers, Pydantic validation"]:::implemented
+    P115["P1-15 grounding validator: numeric claims, fact matching, unsupported-claim stripping, tests"]:::implemented
+    LaterEpics["PDF, final operator UI, QA packaging, and handoff remain later epics"]:::placeholder
   end
 
   JiraDoc --> P11
@@ -261,4 +313,9 @@ flowchart TB
   JiraDoc --> P18
   JiraDoc --> P19
   JiraDoc --> P110
-  P110 -.-> LaterEpics
+  JiraDoc --> P111
+  JiraDoc --> P112
+  JiraDoc --> P113
+  JiraDoc --> P114
+  JiraDoc --> P115
+  P115 -.-> LaterEpics

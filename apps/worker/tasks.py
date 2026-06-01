@@ -12,10 +12,13 @@ from apps.shared.config import Settings, get_settings
 from apps.shared.database import SessionLocal
 from apps.shared.models import AuditJob, AuditResult
 from apps.worker.celery_app import celery_app
+from apps.worker.stages.commentary import generate_commentary
 from apps.worker.stages.crawler import CrawlResult, crawl_site_sync
 from apps.worker.stages.extractor_seo import extract_seo_facts
 from apps.worker.stages.extractor_uxui import extract_uxui_facts
+from apps.worker.stages.grounding_validator import validate_commentary_grounding
 from apps.worker.stages.psi_client import collect_pagespeed_facts
+from apps.worker.stages.scoring import score_audit
 
 JsonDict = dict[str, Any]
 CrawlerFunc = Callable[[str, Settings, str | None], CrawlResult]
@@ -43,40 +46,29 @@ def _mark_job(
     db.refresh(job)
 
 
-def _pending_score_breakdown(crawl_result: CrawlResult, psi_facts: JsonDict) -> JsonDict:
-    return {
-        "status": "pending_p1_e3",
-        "reason": "P1-E2 collects facts only; deterministic scoring is implemented in P1-E3.",
-        "inputs_available": {
-            "crawled_pages": len(crawl_result.pages),
-            "psi_status": psi_facts.get("status"),
-            "seo_facts": True,
-            "uxui_facts": True,
-        },
-    }
-
-
 def _psi_page_urls(crawl_result: CrawlResult, fallback_url: str) -> list[str]:
     urls = [page.final_url or page.url for page in crawl_result.pages]
     return urls or [crawl_result.final_url or fallback_url]
 
 
-def _upsert_collection_result(
+def _upsert_audit_result(
     db: Session,
     job: AuditJob,
-    settings: Settings,
     crawl_result: CrawlResult,
     psi_facts: JsonDict,
     seo_facts: JsonDict,
     uxui_facts: JsonDict,
+    score_breakdown: JsonDict,
+    commentary: JsonDict,
+    validation_log: JsonDict,
 ) -> None:
     result = job.result
     if result is None:
         result = AuditResult(
             job_id=job.id,
-            seo_score=0,
-            uxui_score=0,
-            lead_gen_score=0,
+            seo_score=score_breakdown["scores"]["seo"],
+            uxui_score=score_breakdown["scores"]["uxui"],
+            lead_gen_score=score_breakdown["scores"]["lead_gen"],
             crawled_pages={},
             seo_facts={},
             uxui_facts={},
@@ -86,35 +78,31 @@ def _upsert_collection_result(
             validation_log={},
             report_metadata={},
             pdf_path=None,
-            rubric_version="pending-p1-e3",
-            llm_model=settings.openai_model or "not_configured",
+            rubric_version=score_breakdown["rubric_version"],
+            llm_model=str(commentary.get("model") or "not_configured"),
         )
         db.add(result)
 
-    result.seo_score = 0
-    result.uxui_score = 0
-    result.lead_gen_score = 0
+    result.seo_score = score_breakdown["scores"]["seo"]
+    result.uxui_score = score_breakdown["scores"]["uxui"]
+    result.lead_gen_score = score_breakdown["scores"]["lead_gen"]
     result.crawled_pages = crawl_result.to_dict()
     result.seo_facts = seo_facts
     result.uxui_facts = uxui_facts
     result.psi_facts = psi_facts
-    result.score_breakdown = _pending_score_breakdown(crawl_result, psi_facts)
-    result.commentary = {
-        "status": "pending_p1_e3",
-        "reason": "OpenAI commentary is intentionally not part of P1-E2.",
-    }
-    result.validation_log = {
-        "status": "pending_p1_e3",
-        "unsupported_claims": [],
-    }
+    result.score_breakdown = score_breakdown
+    result.commentary = commentary
+    result.validation_log = validation_log
     result.report_metadata = {
         "status": "pending_p1_e4",
         "renderer": "not_configured",
         "collection_completed_at": datetime.now(UTC).isoformat(),
+        "scoring_completed": True,
+        "commentary_provider": commentary.get("provider"),
     }
     result.pdf_path = None
-    result.rubric_version = "pending-p1-e3"
-    result.llm_model = settings.openai_model or "not_configured"
+    result.rubric_version = score_breakdown["rubric_version"]
+    result.llm_model = str(commentary.get("model") or "not_configured")
     db.commit()
     db.refresh(job)
 
@@ -150,16 +138,46 @@ def run_collection_audit(
             seo_facts = extract_seo_facts(crawl_result.pages)
             uxui_facts = extract_uxui_facts(crawl_result.pages)
 
-            _upsert_collection_result(
+            _mark_job(db, job, AuditStatus.SCORING, "Scoring extracted facts", 80)
+            score_breakdown = score_audit(seo_facts, uxui_facts, psi_facts, settings)
+
+            _mark_job(db, job, AuditStatus.COMMENTING, "Generating grounded commentary", 88)
+            commentary = generate_commentary(
+                audit_context={
+                    "url": job.url,
+                    "niche": job.niche,
+                    "target_audience": job.target_audience,
+                },
+                seo_facts=seo_facts,
+                uxui_facts=uxui_facts,
+                psi_facts=psi_facts,
+                score_breakdown=score_breakdown,
+                settings=settings,
+            )
+
+            _mark_job(db, job, AuditStatus.VALIDATING, "Validating commentary grounding", 95)
+            commentary, validation_log = validate_commentary_grounding(
+                commentary,
+                fact_sources={
+                    "seo_facts": seo_facts,
+                    "uxui_facts": uxui_facts,
+                    "psi_facts": psi_facts,
+                    "score_breakdown": score_breakdown,
+                },
+            )
+
+            _upsert_audit_result(
                 db,
                 job,
-                settings,
                 crawl_result,
                 psi_facts,
                 seo_facts,
                 uxui_facts,
+                score_breakdown,
+                commentary,
+                validation_log,
             )
-            _mark_job(db, job, AuditStatus.COMPLETE, "Collection pipeline complete", 100)
+            _mark_job(db, job, AuditStatus.COMPLETE, "Audit scoring and commentary complete", 100)
         except Exception as exc:
             db.rollback()
             failed_job = db.get(AuditJob, parsed_job_id)

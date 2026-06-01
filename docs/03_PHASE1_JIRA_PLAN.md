@@ -41,7 +41,7 @@ In scope:
 - Deterministic SEO score.
 - Deterministic UX/UI score.
 - Deterministic Lead Generation Readiness score.
-- OpenAI-generated commentary grounded in extracted facts.
+- ChatGPT-generated commentary grounded in extracted facts.
 - Branded PDF report.
 - Internal operator UI for submit, progress, history, and download.
 
@@ -64,7 +64,7 @@ Out of scope:
 |---|---|---|
 | P1-E1 | Local App Foundation & Backend | Set up the local-first application foundation: repo structure, tooling, Docker Compose, database schema, API endpoints, and audit job lifecycle. |
 | P1-E2 | Audit Collection Pipeline | Build the worker-driven audit pipeline that crawls websites, collects PageSpeed data, and extracts structured SEO/UX facts. |
-| P1-E3 | Scoring & AI Commentary | Build deterministic scoring and grounded OpenAI commentary. Scores come from rules only; ChatGPT writes commentary from extracted facts. |
+| P1-E3 | Scoring & AI Commentary | Build deterministic scoring and grounded ChatGPT commentary. Scores come from rules only; ChatGPT writes commentary from extracted facts. |
 | P1-E4 | PDF Report Generation | Generate the branded PDF report from audit metadata, scores, facts, commentary, and recommendations. |
 | P1-E5 | Internal Operator UI | Build the internal UI so a BLC operator can submit audits, track progress, view results, and download PDFs. |
 | P1-E6 | QA, Packaging & Handoff | Prove the local system works end-to-end, prepare future deployment packaging, and write handoff documentation. |
@@ -109,7 +109,7 @@ Recommended delivery order:
 - Add Ruff.
 - Add pytest.
 - Add TypeScript tooling.
-- Add `.env.example`.
+- Add `.env.template`.
 - Add setup commands.
 
 ### P1-3 Add Local Docker Compose Stack
@@ -217,7 +217,7 @@ Recommended delivery order:
 
 ## Epic P1-E3: Scoring & AI Commentary
 
-**Description:** Build deterministic scoring and grounded OpenAI commentary. Scores come from rules only; ChatGPT writes commentary from extracted facts.
+**Description:** Build deterministic scoring and grounded ChatGPT commentary. Scores come from rules only; ChatGPT writes commentary from extracted facts.
 
 ### P1-11 Add YAML Scoring Rubrics
 
@@ -259,7 +259,7 @@ Recommended delivery order:
 **Issue type:** Task
 **Subtasks:**
 
-- Add OpenAI client.
+- Add ChatGPT client.
 - Add prompt templates.
 - Add JSON schema.
 - Add recommendations tiers.
@@ -386,7 +386,7 @@ Recommended delivery order:
 - Verify crawler.
 - Verify extractors.
 - Verify scoring.
-- Verify OpenAI commentary.
+- Verify ChatGPT commentary.
 - Verify validation.
 - Verify PDF.
 - Verify database result.
@@ -439,7 +439,7 @@ Phase 1 is complete when:
 - PageSpeed data is collected or gracefully skipped.
 - SEO and UX/UI facts are extracted.
 - Rule-based scores are generated reproducibly.
-- OpenAI commentary is validated against extracted facts.
+- ChatGPT commentary is validated against extracted facts.
 - A branded PDF report is generated and downloadable.
 - Audit history and result views work for recent audits.
 - Local end-to-end QA and reproducibility QA are complete.

@@ -1,9 +1,9 @@
 # Code Walkthrough And System Explanation
 
 **Project:** BLC Website Audit Automation
-**Phase:** Phase 1 foundation + Epic P1-E2 collection pipeline
+**Phase:** Phase 1 foundation + Epic P1-E2 collection pipeline + Epic P1-E3 scoring/commentary
 **Audience:** Developer/operator handoff
-**Important note:** This document explains the current implemented code. Epic P1-E2 now provides the real crawler, PageSpeed collector, and SEO/UX extractors. Scoring, OpenAI commentary, validation, and PDF rendering remain planned in later Phase 1 epics.
+**Important note:** This document explains the current implemented code. Epic P1-E2 provides the real crawler, PageSpeed collector, and SEO/UX extractors. Epic P1-E3 now adds YAML scoring, ChatGPT commentary, local fallback commentary, and deterministic grounding validation. PDF rendering remains planned for Epic P1-E4.
 
 ---
 
@@ -18,9 +18,10 @@ The goal of Phase 1 is:
 3. A worker processes that job asynchronously.
 4. The system tracks job status and progress.
 5. Epic P1-E2 collects website crawl, PageSpeed, SEO, and UX/UI facts.
-6. Later epics will add scoring, OpenAI commentary, validation, and PDF report generation.
+6. Epic P1-E3 scores those facts, generates commentary, and validates numeric grounding.
+7. Later epics will add PDF report generation and final operator UI screens.
 
-Right now Epic P1-E1 and P1-E2 are implemented:
+Right now Epic P1-E1 through P1-E3 are implemented:
 
 - Backend API foundation.
 - Worker foundation.
@@ -28,6 +29,11 @@ Right now Epic P1-E1 and P1-E2 are implemented:
 - Playwright crawler.
 - PageSpeed Insights client.
 - SEO and UX/UI extractors.
+- YAML SEO, UX/UI, and composite scoring rubrics.
+- Deterministic scoring engine with per-rule audit trails.
+- ChatGPT commentary client and prompt templates.
+- Local fallback commentary when `OPENAI_API_KEY` is not configured.
+- Grounding validator that strips unsupported numeric claims.
 - Database models and migration.
 - Docker Compose local stack.
 - Conda/Poetry/Python tooling.
@@ -170,18 +176,24 @@ Redis receives task
         -> crawl homepage and selected internal pages
         -> collect or skip PageSpeed Insights facts
         -> extract SEO and UX/UI facts
-        -> write collection artifacts to audit_results
+        -> score facts through YAML rubrics
+        -> generate ChatGPT or local fallback commentary
+        -> validate commentary grounding
+        -> write audit artifacts to audit_results
         -> mark job complete
 ```
 
-Current collection stages:
+Current worker stages:
 
 | Status | Stage label | Progress |
 |---|---|---|
 | `crawling` | Rendering website pages | 15 |
 | `collecting_performance` | Collecting PageSpeed Insights | 45 |
 | `extracting` | Extracting SEO and UX/UI facts | 70 |
-| `complete` | Collection pipeline complete | 100 |
+| `scoring` | Scoring extracted facts | 80 |
+| `commenting` | Generating grounded commentary | 88 |
+| `validating` | Validating commentary grounding | 95 |
+| `complete` | Audit scoring and commentary complete | 100 |
 
 The current worker proves that:
 
@@ -330,14 +342,14 @@ Local secret configuration file.
 
 Important:
 
-- Contains real local secrets like `OPENAI_API_KEY`.
+- Contains real local secrets like `OPENAI_API_KEY` and `GOOGLE_PSI_API_KEY`.
 - Is ignored by git.
 - Should not be committed.
 - Should not be pasted into docs.
 
 The code reads this file through Pydantic Settings in `apps/shared/config.py`.
 
-#### `.env.example`
+#### `.env.template`
 
 Safe template version of `.env`.
 
@@ -806,7 +818,9 @@ Important fields:
 - local storage paths
 - `openai_api_key`
 - `openai_model`
-- OpenAI token/temperature settings
+- OpenAI token, timeout, and temperature settings
+- rubric paths
+- commentary prompt paths
 
 #### `api_cors_origins`
 
@@ -1063,7 +1077,7 @@ It:
 
 #### `run_collection_audit(job_id)`
 
-Current Epic P1-E2 collection process.
+Current Epic P1-E2 plus P1-E3 audit process.
 
 It:
 
@@ -1078,9 +1092,14 @@ It:
 9. Collects per-page PageSpeed facts, or stores a skipped/failed PSI artifact.
 10. Marks the job as `extracting`.
 11. Runs the SEO and UX/UI extractors.
-12. Creates or updates the `AuditResult`.
-13. Leaves scoring, commentary, validation, and PDF fields as explicit later-epic placeholders.
-14. Marks the job complete.
+12. Marks the job as `scoring`.
+13. Scores SEO, UX/UI, and Lead Generation Readiness through versioned YAML rubrics.
+14. Marks the job as `commenting`.
+15. Generates ChatGPT commentary when `OPENAI_API_KEY` is configured, or local fallback commentary when it is not.
+16. Marks the job as `validating`.
+17. Strips unsupported numeric commentary claims and stores the validation log.
+18. Creates or updates the `AuditResult`.
+19. Marks the job complete.
 
 If an exception happens:
 
@@ -1099,13 +1118,13 @@ This is what the API enqueues.
 run_audit.delay(str(job.id))
 ```
 
-Right now it calls:
+It calls:
 
 ```python
 run_collection_audit(job_id)
 ```
 
-Later, this is where scoring, OpenAI commentary, validation, and PDF generation will be added.
+PDF generation will be added in Epic P1-E4 after the validated audit result exists.
 
 ### 9.3 `apps/worker/stages/`
 
@@ -1117,12 +1136,12 @@ Current modules:
 - `psi_client.py`: PageSpeed Insights wrapper with retries, cache, normalization, `PSI_SCOPE` / `PSI_MAX_PAGES` page selection, API-key header auth, and graceful skip/failure artifacts.
 - `extractor_seo.py`: deterministic SEO facts from rendered HTML.
 - `extractor_uxui.py`: deterministic UX/UI and lead-capture heuristics from rendered HTML.
+- `scoring.py`: safe YAML rubric loading, evaluator primitives, score composition, and rubric version tracking.
+- `commentary.py`: OpenAI Structured Outputs commentary call, Pydantic output schema, prompt loading, and local fallback commentary.
+- `grounding_validator.py`: numeric claim extraction, fact comparison, unsupported-claim stripping, and validation log output.
 
-Later modules:
+Later module:
 
-- scoring
-- OpenAI commentary
-- grounding validator
 - PDF renderer
 
 ---
@@ -1426,9 +1445,9 @@ These are intentionally present now so later epics have stable locations.
 
 ### `rubrics/`
 
-Future YAML scoring rubrics.
+Versioned YAML scoring rubrics used by Epic P1-E3.
 
-Planned files:
+Files:
 
 - `seo.yaml`
 - `uxui.yaml`
@@ -1442,12 +1461,12 @@ Purpose:
 
 ### `prompts/`
 
-Future OpenAI prompt templates.
+ChatGPT prompt templates used by Epic P1-E3.
 
-Planned files:
+Files:
 
-- SEO commentary prompt
-- UX/UI commentary prompt
+- `commentary_system.md`
+- `commentary_user.md`
 - grounding validator prompt if needed
 
 Purpose:
@@ -1726,9 +1745,15 @@ Important environment variables:
 | `LOCAL_REPORT_STORAGE_DIR` | local PDF storage |
 | `LOCAL_SCREENSHOT_STORAGE_DIR` | local screenshot storage |
 | `OPENAI_API_KEY` | OpenAI API key |
-| `OPENAI_MODEL` | model, currently `gpt-4o` |
-| `OPENAI_MAX_TOKENS` | future commentary token budget |
-| `OPENAI_TEMPERATURE` | future commentary randomness |
+| `OPENAI_MODEL` | OpenAI model, currently `gpt-4o` |
+| `OPENAI_MAX_TOKENS` | commentary token budget |
+| `OPENAI_TEMPERATURE` | commentary randomness |
+| `OPENAI_TIMEOUT_SECONDS` | ChatGPT request timeout |
+| `RUBRIC_SEO_PATH` | SEO rubric YAML path |
+| `RUBRIC_UXUI_PATH` | UX/UI rubric YAML path |
+| `RUBRIC_COMPOSITE_PATH` | composite rubric YAML path |
+| `COMMENTARY_SYSTEM_PROMPT_PATH` | system prompt path |
+| `COMMENTARY_USER_PROMPT_PATH` | user prompt template path |
 
 Never commit `.env`.
 
@@ -1744,14 +1769,15 @@ This is expected at the current stage:
 - PageSpeed failures are stored as PSI artifacts instead of failing the whole audit.
 - SEO facts are extracted from rendered HTML.
 - UX/UI facts are extracted with deterministic heuristics, not visual AI judgment.
-- Scores are placeholder zeros.
-- OpenAI commentary is not called yet.
-- Grounding validation is placeholder JSON.
+- Scores are deterministic and produced from YAML rubrics.
+- ChatGPT commentary is called when `OPENAI_API_KEY` is configured.
+- Local fallback commentary is stored when no OpenAI key is configured.
+- Grounding validation checks numeric claims and strips unsupported numeric sentences.
 - PDF files are not generated yet.
 - `/audits/{job_id}/report` returns `404` until PDF generation exists.
 - Frontend pages are shells, not the final operator UI.
 
-These are not bugs in P1-E2. They are future tasks in P1-E3 through P1-E5.
+The remaining items are future tasks in P1-E4 through P1-E5.
 
 ---
 
@@ -1759,13 +1785,11 @@ These are not bugs in P1-E2. They are future tasks in P1-E3 through P1-E5.
 
 Recommended next implementation order:
 
-1. Add YAML rubrics.
-2. Add scoring engine.
-3. Add OpenAI commentary client/prompts.
-4. Add grounding validator.
-5. Add report payload composition.
-6. Add PDF rendering.
-7. Build the final operator UI screens.
+1. Add report payload composition.
+2. Add PDF rendering.
+3. Build the final operator UI screens.
+4. Run local end-to-end QA.
+5. Prepare production packaging.
 9. Add PDF composer/renderer.
 10. Replace frontend shell with real submit/progress/history UI.
 

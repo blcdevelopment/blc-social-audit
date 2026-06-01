@@ -32,8 +32,9 @@ class Settings(BaseSettings):
 
     openai_api_key: SecretStr | None = None
     openai_model: str = "gpt-4o"
-    openai_max_tokens: int = 4096
-    openai_temperature: float = 0.2
+    openai_max_tokens: int = Field(default=4096, ge=512)
+    openai_temperature: float = Field(default=0.2, ge=0, le=1)
+    openai_timeout_seconds: int = Field(default=60, ge=1)
 
     google_psi_api_key: SecretStr | None = None
     psi_scope: Literal["homepage", "all_crawled_pages"] = "all_crawled_pages"
@@ -50,6 +51,15 @@ class Settings(BaseSettings):
     crawler_screenshots_enabled: bool = True
     crawler_allow_private_hosts: bool = False
     crawler_chromium_executable_path: Path | None = None
+
+    rubric_seo_path: Path = Path("./rubrics/seo.yaml")
+    rubric_uxui_path: Path = Path("./rubrics/uxui.yaml")
+    rubric_composite_path: Path = Path("./rubrics/composite.yaml")
+    commentary_system_prompt_path: Path = Path("./prompts/commentary_system.md")
+    commentary_user_prompt_path: Path = Path("./prompts/commentary_user.md")
+    brand_config_path: Path = Path("./brand/blc.yaml")
+    report_template_path: Path = Path("./templates/report.html")
+    report_css_path: Path = Path("./templates/report.css")
 
     @field_validator("api_cors_origins", mode="before")
     @classmethod

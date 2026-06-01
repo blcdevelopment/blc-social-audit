@@ -95,7 +95,7 @@ def test_run_collection_audit_persists_epic_2_artifacts(monkeypatch) -> None:
         job = db.get(AuditJob, job_id)
         assert job is not None
         assert job.status == AuditStatus.COMPLETE.value
-        assert job.current_stage == "Collection pipeline complete"
+        assert job.current_stage == "Audit scoring and commentary complete"
         assert job.progress_pct == 100
         assert job.result is not None
         assert job.result.crawled_pages["summary"]["successful_pages"] == 1
@@ -103,4 +103,9 @@ def test_run_collection_audit_persists_epic_2_artifacts(monkeypatch) -> None:
         assert job.result.psi_facts["pages_requested"] == 1
         assert job.result.seo_facts["pages_analyzed"] == 1
         assert job.result.uxui_facts["summary"]["total_ctas"] == 1
-        assert job.result.score_breakdown["status"] == "pending_p1_e3"
+        assert job.result.seo_score > 0
+        assert job.result.uxui_score > 0
+        assert job.result.lead_gen_score > 0
+        assert job.result.score_breakdown["status"] == "complete"
+        assert job.result.commentary["status"] == "fallback_missing_api_key"
+        assert job.result.validation_log["status"] == "complete"
