@@ -26,7 +26,7 @@ AuditOffset = Annotated[int, Query(ge=0)]
 
 
 def _report_available(job: AuditJob) -> bool:
-    return bool(job.result and job.result.pdf_path)
+    return bool(job.result and job.result.pdf_path and Path(job.result.pdf_path).exists())
 
 
 def _status_response(job: AuditJob) -> AuditStatusResponse:

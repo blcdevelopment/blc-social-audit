@@ -17,6 +17,7 @@ from apps.worker.stages.crawler import CrawlResult, crawl_site_sync
 from apps.worker.stages.extractor_seo import extract_seo_facts
 from apps.worker.stages.extractor_uxui import extract_uxui_facts
 from apps.worker.stages.grounding_validator import validate_commentary_grounding
+from apps.worker.stages.pdf_renderer import PdfRenderResult, render_audit_pdf
 from apps.worker.stages.psi_client import collect_pagespeed_facts
 from apps.worker.stages.scoring import score_audit
 
@@ -61,7 +62,7 @@ def _upsert_audit_result(
     score_breakdown: JsonDict,
     commentary: JsonDict,
     validation_log: JsonDict,
-) -> None:
+) -> AuditResult:
     result = job.result
     if result is None:
         result = AuditResult(
@@ -94,8 +95,8 @@ def _upsert_audit_result(
     result.commentary = commentary
     result.validation_log = validation_log
     result.report_metadata = {
-        "status": "pending_p1_e4",
-        "renderer": "not_configured",
+        "status": "pending_pdf_render",
+        "renderer": "weasyprint",
         "collection_completed_at": datetime.now(UTC).isoformat(),
         "scoring_completed": True,
         "commentary_provider": commentary.get("provider"),
@@ -104,7 +105,16 @@ def _upsert_audit_result(
     result.rubric_version = score_breakdown["rubric_version"]
     result.llm_model = str(commentary.get("model") or "not_configured")
     db.commit()
+    db.refresh(result)
     db.refresh(job)
+    return result
+
+
+def _store_pdf_result(db: Session, result: AuditResult, pdf_result: PdfRenderResult) -> None:
+    result.report_metadata = pdf_result.report_metadata
+    result.pdf_path = pdf_result.pdf_path
+    db.commit()
+    db.refresh(result)
 
 
 def run_collection_audit(
@@ -166,7 +176,7 @@ def run_collection_audit(
                 },
             )
 
-            _upsert_audit_result(
+            result = _upsert_audit_result(
                 db,
                 job,
                 crawl_result,
@@ -177,7 +187,12 @@ def run_collection_audit(
                 commentary,
                 validation_log,
             )
-            _mark_job(db, job, AuditStatus.COMPLETE, "Audit scoring and commentary complete", 100)
+
+            _mark_job(db, job, AuditStatus.RENDERING, "Rendering branded PDF report", 98)
+            pdf_result = render_audit_pdf(job, result, settings)
+            _store_pdf_result(db, result, pdf_result)
+
+            _mark_job(db, job, AuditStatus.COMPLETE, "Audit report complete", 100)
         except Exception as exc:
             db.rollback()
             failed_job = db.get(AuditJob, parsed_job_id)

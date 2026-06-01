@@ -518,14 +518,14 @@ The PDF template loads brand variables from a single config file:
 
 ```yaml
 # brand/blc.yaml
-logo_path: "brand/blc-logo.svg"
-primary_color: "#1a3a5c"     # placeholder until actual brand asset arrives
-accent_color: "#f5a623"      # placeholder
+logo_path: "assets/brand/blc-logo.svg"
+primary_color: "#1f74b7"
+accent_color: "#28864b"
 font_heading: "Inter"
 font_body: "Inter"
 ```
 
-If brand assets arrive early, use them immediately in the PDF template. If they arrive late, develop with clearly marked placeholder branding and swap the real assets during PDF polish.
+The supplied BLC logo is stored as `assets/brand/blc-logo.svg`. If the logo file is missing in a local environment, the PDF template falls back to the configured text mark instead of failing report generation.
 
 #### 3.2.6 PDF testing strategy
 
@@ -601,10 +601,12 @@ blc-audit/
 │       ├── findings.html
 │       └── recommendations.html
 │
+├── assets/
+│   └── brand/
+│       └── blc-logo.svg        # supplied BLC logo
+│
 ├── brand/
-│   ├── blc.yaml
-│   ├── blc-logo.svg            # supplied by client
-│   └── fonts/
+│   └── blc.yaml
 │
 ├── migrations/                 # Alembic
 │   └── versions/
@@ -887,7 +889,7 @@ This section defines build order by dependency, not by calendar. The rule: prove
 
 - Confirm Lead Gen Readiness Score weights. Proposed default: 0.45 SEO / 0.55 UX/UI.
 - Receive 5–10 example builder/remodeler test sites.
-- Receive BLC brand assets, or approve placeholder branding until real assets arrive.
+- Confirm the supplied BLC logo asset and brand colors render correctly in sample PDFs.
 - Confirm communication channel for status updates and review requests.
 - Confirm OpenAI and PageSpeed Insights access.
 
@@ -1095,7 +1097,7 @@ Tick these off before implementation starts:
 - [ ] Current Phase 1 local-first scope confirmed
 - [ ] Kickoff call held; meeting notes captured
 - [ ] Lead Gen Readiness composite weighting confirmed with BLC
-- [ ] BLC brand assets received or placeholder branding approved
+- [ ] BLC logo asset and brand colors verified in generated PDFs
 - [ ] 5–10 test builder/remodeler URLs received from BLC
 - [ ] Communication channel agreed
 - [ ] Daily update format agreed

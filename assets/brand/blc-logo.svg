@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 503 204" role="img" aria-labelledby="title desc">
+  <title id="title">Builder Lead Converter logo</title>
+  <desc id="desc">Builder Lead Converter, your perfect sales assistant.</desc>
+  <rect width="503" height="204" fill="#fff"/>
+  <g fill="none" stroke-linejoin="miter" stroke-miterlimit="10">
+    <path d="M31 58V146h57V70L41 103" stroke="#1f74b7" stroke-width="9"/>
+    <path d="M32 30v25" stroke="#1f74b7" stroke-width="9"/>
+    <path d="M9 80 101 16l71 51v24" stroke="#28864b" stroke-width="9"/>
+    <path d="M97 83v63h74" stroke="#454545" stroke-width="9"/>
+    <path d="M113 66v80" stroke="#454545" stroke-width="9"/>
+  </g>
+  <g font-family="Impact, 'Arial Narrow', Arial, sans-serif" font-weight="900">
+    <text x="192" y="100" font-size="53" letter-spacing="0">
+      <tspan fill="#1f74b7">BUILDER</tspan>
+      <tspan dx="12" fill="#454545">LEAD</tspan>
+    </text>
+    <text x="193" y="150" fill="#28864b" font-size="50" letter-spacing="7">CONVERTER</text>
+  </g>
+  <text
+    x="22"
+    y="181"
+    fill="#454545"
+    font-family="'Arial Narrow', Arial, sans-serif"
+    font-size="23"
+    font-weight="700"
+    letter-spacing="4.7"
+  >YOUR PERFECT SALES ASSISTANT</text>
+</svg>

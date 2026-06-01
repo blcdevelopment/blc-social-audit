@@ -1,9 +1,9 @@
 # Code Walkthrough And System Explanation
 
 **Project:** BLC Website Audit Automation
-**Phase:** Phase 1 foundation + Epic P1-E2 collection pipeline + Epic P1-E3 scoring/commentary
+**Phase:** Phase 1 foundation + Epic P1-E2 collection pipeline + Epic P1-E3 scoring/commentary + Epic P1-E4 PDF reports
 **Audience:** Developer/operator handoff
-**Important note:** This document explains the current implemented code. Epic P1-E2 provides the real crawler, PageSpeed collector, and SEO/UX extractors. Epic P1-E3 now adds YAML scoring, ChatGPT commentary, local fallback commentary, and deterministic grounding validation. PDF rendering remains planned for Epic P1-E4.
+**Important note:** This document explains the current implemented code. Epic P1-E2 provides the real crawler, PageSpeed collector, and SEO/UX extractors. Epic P1-E3 adds YAML scoring, ChatGPT commentary, local fallback commentary, and deterministic grounding validation. Epic P1-E4 adds report payload composition, BLC branding configuration, and WeasyPrint PDF rendering.
 
 ---
 
@@ -19,9 +19,10 @@ The goal of Phase 1 is:
 4. The system tracks job status and progress.
 5. Epic P1-E2 collects website crawl, PageSpeed, SEO, and UX/UI facts.
 6. Epic P1-E3 scores those facts, generates commentary, and validates numeric grounding.
-7. Later epics will add PDF report generation and final operator UI screens.
+7. Epic P1-E4 renders a branded PDF report and stores its local `pdf_path`.
+8. Epic P1-E5 will replace the frontend shell with final operator UI screens.
 
-Right now Epic P1-E1 through P1-E3 are implemented:
+Right now Epic P1-E1 through P1-E4 are implemented:
 
 - Backend API foundation.
 - Worker foundation.
@@ -34,6 +35,10 @@ Right now Epic P1-E1 through P1-E3 are implemented:
 - ChatGPT commentary client and prompt templates.
 - Local fallback commentary when `OPENAI_API_KEY` is not configured.
 - Grounding validator that strips unsupported numeric claims.
+- Report payload composer.
+- Branding config with the BLC logo asset and text fallback.
+- Jinja2/WeasyPrint PDF renderer.
+- Branded HTML/CSS report template.
 - Database models and migration.
 - Docker Compose local stack.
 - Conda/Poetry/Python tooling.
@@ -180,6 +185,8 @@ Redis receives task
         -> generate ChatGPT or local fallback commentary
         -> validate commentary grounding
         -> write audit artifacts to audit_results
+        -> render branded PDF report
+        -> write report metadata and pdf_path
         -> mark job complete
 ```
 
@@ -193,7 +200,8 @@ Current worker stages:
 | `scoring` | Scoring extracted facts | 80 |
 | `commenting` | Generating grounded commentary | 88 |
 | `validating` | Validating commentary grounding | 95 |
-| `complete` | Audit scoring and commentary complete | 100 |
+| `rendering` | Rendering branded PDF report | 98 |
+| `complete` | Audit report complete | 100 |
 
 The current worker proves that:
 
@@ -274,13 +282,14 @@ GET /audits/{job_id}/report
 Current behavior:
 
 - This endpoint exists.
-- It returns `404` until a later PDF generation epic writes a real PDF and stores `pdf_path`.
+- It streams the generated local PDF once the worker has stored `pdf_path`.
+- It returns `404` if the audit has no generated PDF or the local file is missing.
 
 ---
 
 ## 4. How The Audit Pipeline Works
 
-Current implemented collection audit:
+Current implemented audit:
 
 ```text
 Submit URL
@@ -288,20 +297,6 @@ Submit URL
   -> enqueue Celery task
   -> render/crawl homepage and internal pages
   -> collect or gracefully skip PageSpeed mobile and desktop data for selected crawled pages
-  -> extract SEO facts
-  -> extract UX/UI facts
-  -> store collection result
-  -> mark complete
-```
-
-Target full Phase 1 audit after later epics:
-
-```text
-Submit URL
-  -> create DB job
-  -> enqueue Celery task
-  -> render/crawl homepage and internal pages
-  -> collect PageSpeed mobile and desktop data for selected crawled pages
   -> extract SEO facts
   -> extract UX/UI facts
   -> score facts through YAML rubrics
@@ -313,7 +308,8 @@ Submit URL
   -> mark complete
 ```
 
-The DB schema and API lifecycle are already shaped for the final version.
+The DB schema and API lifecycle are now wired through PDF generation. The remaining Phase 1 UI
+work is Epic P1-E5.
 
 ---
 
@@ -620,9 +616,8 @@ Purpose:
 Returns `True` if:
 
 - the job has an `AuditResult`
-- and that result has `pdf_path`
-
-Right now this usually returns `False` because PDF generation is not implemented yet.
+- that result has `pdf_path`
+- and the local PDF file exists
 
 #### `_status_response(job)`
 
@@ -715,7 +710,8 @@ Responsibilities:
 
 Current limitation:
 
-- Since PDF generation is not implemented yet, this usually returns `404`.
+- The Phase 1 endpoint serves local filesystem PDFs. Future object storage would need a storage
+  adapter rather than a direct `FileResponse`.
 
 ### 7.5 `apps/api/schemas/audits.py`
 
@@ -1124,7 +1120,8 @@ It calls:
 run_collection_audit(job_id)
 ```
 
-PDF generation will be added in Epic P1-E4 after the validated audit result exists.
+The task now runs collection, scoring, commentary, grounding validation, report payload
+composition, PDF rendering, and final `pdf_path` persistence.
 
 ### 9.3 `apps/worker/stages/`
 
@@ -1476,9 +1473,9 @@ Purpose:
 
 ### `templates/`
 
-Future report templates.
+Implemented report templates.
 
-Planned files:
+Files:
 
 - `report.html`
 - `report.css`
@@ -1490,7 +1487,7 @@ Purpose:
 
 ### `templates/partials/`
 
-Future reusable report sections.
+Reusable report sections for the Jinja2 PDF template.
 
 Examples:
 
@@ -1723,7 +1720,7 @@ Returns one audit's lifecycle state.
 
 Returns generated PDF when available.
 
-Current collection results do not generate a PDF, so this may return `404`.
+Returns `404` only when the audit has no generated PDF or the local PDF file is missing.
 
 ---
 
@@ -1773,11 +1770,11 @@ This is expected at the current stage:
 - ChatGPT commentary is called when `OPENAI_API_KEY` is configured.
 - Local fallback commentary is stored when no OpenAI key is configured.
 - Grounding validation checks numeric claims and strips unsupported numeric sentences.
-- PDF files are not generated yet.
-- `/audits/{job_id}/report` returns `404` until PDF generation exists.
+- PDF files are generated in `storage/reports/` with the BLC logo from `assets/brand/blc-logo.svg`.
+- `/audits/{job_id}/report` streams the generated PDF when the file exists.
 - Frontend pages are shells, not the final operator UI.
 
-The remaining items are future tasks in P1-E4 through P1-E5.
+The remaining application work is primarily Epic P1-E5 operator UI and final end-to-end packaging.
 
 ---
 
@@ -1785,13 +1782,11 @@ The remaining items are future tasks in P1-E4 through P1-E5.
 
 Recommended next implementation order:
 
-1. Add report payload composition.
-2. Add PDF rendering.
-3. Build the final operator UI screens.
-4. Run local end-to-end QA.
-5. Prepare production packaging.
-9. Add PDF composer/renderer.
-10. Replace frontend shell with real submit/progress/history UI.
+1. Build the final operator UI screens.
+2. Run local end-to-end QA through the UI.
+3. Prepare production packaging.
+4. Render 5-10 sample reports from real builder/remodeler sites.
+5. Finalize deployment and handoff checks.
 
 The current foundation is ready for those additions because:
 

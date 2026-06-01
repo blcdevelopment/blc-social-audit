@@ -462,7 +462,7 @@ These are the risks we are tracking through Phase 1. Each has a mitigation strat
 |---|---|---|---|
 | R1 | Rubric review by BLC delays scoring calibration | High | Draft rubrics early and request review as soon as the first scoring outputs exist |
 | R2 | PDF rendering edge cases consume more than budgeted | High | Use proven tools (WeasyPrint preferred over Puppeteer for long structured docs). Test on extreme cases (5 findings, 50 findings) early. |
-| R3 | BLC brand assets arrive late and block PDF styling | Medium | Request brand assets at kickoff; use clearly marked placeholder branding until assets arrive |
+| R3 | BLC brand assets change after PDF styling is implemented | Medium | Keep logo and colors centralized in `assets/brand/` and `brand/blc.yaml` so updates remain low-risk |
 | R4 | Test sites break the crawler in unexpected ways | Medium | Test real builder sites early. Treat broken crawls as unblockers, not bugs to defer. |
 | R5 | LLM usage costs exceed expectations | Low | Use the strongest model only for report commentary, use cheaper classification only where safe, cap retries, and monitor token usage. |
 | R6 | Scope creep ("can we just add social media") | Medium | Polite-firm no, with reasoning. Park requests as Phase 2 inputs. |

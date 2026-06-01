@@ -1,0 +1,283 @@
+from types import SimpleNamespace
+from uuid import uuid4
+
+import pytest
+from pypdf import PdfReader
+
+from apps.shared.config import Settings
+from apps.worker.stages.pdf_renderer import render_report_pdf
+from apps.worker.stages.report_payload import compose_report_payload
+
+
+@pytest.mark.parametrize(
+    ("variant", "extra_items", "missing_psi", "failed_pages"),
+    [
+        ("short", 0, False, False),
+        ("medium", 8, False, False),
+        ("long", 32, True, True),
+    ],
+)
+def test_render_report_pdf_qa_variants(
+    tmp_path,
+    variant: str,
+    extra_items: int,
+    missing_psi: bool,
+    failed_pages: bool,
+) -> None:
+    payload = compose_report_payload(
+        _job(),
+        _result(
+            extra_items=extra_items,
+            psi_facts=_missing_psi() if missing_psi else _complete_psi(),
+            crawled_pages=_crawled_pages(failed_pages=failed_pages),
+        ),
+    )
+    output_path = tmp_path / f"{variant}.pdf"
+
+    pdf_result = render_report_pdf(payload, settings=_settings(tmp_path), output_path=output_path)
+
+    assert output_path.exists()
+    assert pdf_result.size_bytes > 10_000
+    assert pdf_result.report_metadata["renderer"] == "weasyprint"
+    assert pdf_result.report_metadata["brand_logo_used"] is True
+    assert pdf_result.report_metadata["brand_logo_path"].endswith("assets/brand/blc-logo.svg")
+
+    reader = PdfReader(str(output_path))
+    text = "\n".join(page.extract_text() or "" for page in reader.pages)
+    assert len(reader.pages) == pdf_result.page_count
+    assert "Website Audit Report" in text
+    assert "Score Overview" in text
+    assert "SEO rule trail" in text
+    assert "UX/UI rule trail" in text
+
+    if variant == "long":
+        assert len(reader.pages) >= 8
+    if missing_psi:
+        assert "missing_google_psi_api_key" in text
+    if failed_pages:
+        assert "Timed out rendering" in text
+
+
+def _settings(tmp_path) -> Settings:
+    return Settings(
+        _env_file=None,
+        local_report_storage_dir=tmp_path,
+        brand_config_path="brand/blc.yaml",
+        report_template_path="templates/report.html",
+        report_css_path="templates/report.css",
+    )
+
+
+def _job() -> SimpleNamespace:
+    return SimpleNamespace(
+        id=uuid4(),
+        url="https://example.com/",
+        niche="builder",
+        target_audience="homeowners",
+    )
+
+
+def _result(
+    *,
+    extra_items: int,
+    psi_facts: dict,
+    crawled_pages: dict,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        seo_score=81,
+        uxui_score=74,
+        lead_gen_score=77,
+        crawled_pages=crawled_pages,
+        seo_facts={},
+        uxui_facts={},
+        psi_facts=psi_facts,
+        score_breakdown=_score_breakdown(extra_items=extra_items),
+        commentary=_commentary(extra_items=extra_items),
+        validation_log={
+            "status": "complete",
+            "numeric_claims_checked": 6,
+            "unsupported_claim_count": 0,
+            "action": "none",
+        },
+        report_metadata={},
+        pdf_path=None,
+        rubric_version="phase1-seo-v1+phase1-uxui-v1+phase1-composite-v1",
+        llm_model="gpt-4o",
+    )
+
+
+def _crawled_pages(*, failed_pages: bool) -> dict:
+    failed = [
+        {
+            "url": "https://example.com/gallery",
+            "reason": "Timed out rendering https://example.com/gallery",
+        }
+    ]
+    return {
+        "status": "partial" if failed_pages else "complete",
+        "requested_url": "https://example.com/",
+        "final_url": "https://example.com/",
+        "summary": {
+            "successful_pages": 3,
+            "failed_pages": len(failed) if failed_pages else 0,
+            "skipped_pages": 0,
+        },
+        "failed_pages": failed if failed_pages else [],
+        "skipped_pages": [],
+    }
+
+
+def _missing_psi() -> dict:
+    return {
+        "status": "skipped",
+        "reason": "missing_google_psi_api_key",
+        "scope": "all_crawled_pages",
+        "pages_requested": 3,
+        "pages_analyzed": 0,
+        "summary": {
+            "avg_mobile_performance": None,
+            "avg_desktop_performance": None,
+            "complete_mobile_pages": 0,
+            "complete_desktop_pages": 0,
+            "slowest_pages": [],
+        },
+    }
+
+
+def _complete_psi() -> dict:
+    return {
+        "status": "complete",
+        "scope": "all_crawled_pages",
+        "pages_requested": 3,
+        "pages_analyzed": 3,
+        "summary": {
+            "avg_mobile_performance": 72,
+            "avg_desktop_performance": 91,
+            "complete_mobile_pages": 3,
+            "complete_desktop_pages": 3,
+            "slowest_pages": [
+                {
+                    "url": "https://example.com/services",
+                    "mobile_performance": 64,
+                    "desktop_performance": 88,
+                    "average_performance": 76,
+                }
+            ],
+        },
+    }
+
+
+def _score_breakdown(*, extra_items: int) -> dict:
+    seo_rules = [
+        _rule("seo.title.present_all_pages", "Page titles are present.", "pass", 8, 8),
+        _rule("seo.meta_description.present_all_pages", "Add stronger metadata.", "fail", 0, 10),
+    ]
+    uxui_rules = [
+        _rule("uxui.primary_cta.present", "A primary CTA is present.", "partial", 5, 10),
+        _rule("uxui.forms.present", "The site includes a lead form.", "fail", 0, 8),
+    ]
+    for index in range(extra_items):
+        seo_rules.append(
+            _rule(
+                f"seo.synthetic.{index}",
+                f"Synthetic SEO pagination rule {index}.",
+                "partial" if index % 2 else "fail",
+                1,
+                3,
+            )
+        )
+        uxui_rules.append(
+            _rule(
+                f"uxui.synthetic.{index}",
+                f"Synthetic UX/UI pagination rule {index}.",
+                "partial" if index % 2 else "fail",
+                1,
+                3,
+            )
+        )
+
+    return {
+        "scores": {"seo": 81, "uxui": 74, "lead_gen": 77},
+        "categories": {
+            "seo": {"rules": seo_rules},
+            "uxui": {"rules": uxui_rules},
+        },
+    }
+
+
+def _rule(rule_id: str, description: str, result: str, awarded: float, possible: float) -> dict:
+    return {
+        "rule_id": rule_id,
+        "description": description,
+        "result": result,
+        "points_awarded": awarded,
+        "points_possible": possible,
+        "evidence": {"value": awarded, "reason": None},
+    }
+
+
+def _commentary(*, extra_items: int) -> dict:
+    return {
+        "status": "complete",
+        "provider": "openai",
+        "model": "gpt-4o",
+        "content": {
+            "executive_summary": "The site is close, but conversion clarity needs focus.",
+            "seo": _section("SEO metadata needs refinement", "seo", extra_items),
+            "uxui": _section("UX/UI conversion paths need refinement", "uxui", extra_items),
+            "lead_generation": _section("Lead generation needs focus", "lead_generation", 0),
+        },
+    }
+
+
+def _section(headline: str, evidence_prefix: str, extra_items: int) -> dict:
+    findings = [
+        {
+            "severity": "medium",
+            "title": headline,
+            "explanation": "The finding is grounded in extracted audit evidence.",
+            "evidence_refs": [f"{evidence_prefix}.example"],
+        }
+    ]
+    recommendations = [
+        {
+            "tier": "quick_win",
+            "title": f"Improve {headline}",
+            "rationale": "This is the fastest visible improvement.",
+            "action_items": ["Address the highest-confidence failed rule."],
+        },
+        {
+            "tier": "mid_term",
+            "title": f"Systematize {headline}",
+            "rationale": "This improves repeatable lead generation.",
+            "action_items": ["Roll the change across important pages."],
+        },
+        {
+            "tier": "long_term",
+            "title": f"Measure {headline}",
+            "rationale": "This supports before-and-after comparison.",
+            "action_items": ["Re-run the audit after implementation."],
+        },
+    ]
+    for index in range(extra_items):
+        findings.append(
+            {
+                "severity": "medium",
+                "title": f"{headline} finding {index}",
+                "explanation": "Additional pagination QA finding grounded in audit facts.",
+                "evidence_refs": [f"{evidence_prefix}.synthetic.{index}"],
+            }
+        )
+        recommendations.append(
+            {
+                "tier": "quick_win" if index % 3 == 0 else "mid_term",
+                "title": f"{headline} recommendation {index}",
+                "rationale": "Additional pagination QA recommendation.",
+                "action_items": ["Keep the page-break behavior stable."],
+            }
+        )
+    return {
+        "headline": headline,
+        "findings": findings,
+        "recommendations": recommendations,
+    }
