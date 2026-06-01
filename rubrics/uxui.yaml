@@ -1,0 +1,112 @@
+version: "phase1-uxui-v1"
+category: uxui
+max_score: 100
+normalization: rescale_to_max
+rules:
+  - id: uxui.collection.complete
+    description: UX/UI facts were extracted successfully.
+    weight: 4
+    fact_path: uxui.status
+    evaluator: exact_match
+    params:
+      full_credit: complete
+
+  - id: uxui.primary_cta.present
+    description: At least one crawled page has a primary call to action.
+    weight: 10
+    fact_path: uxui.summary.pages_with_primary_cta
+    evaluator: threshold
+    params:
+      min: 1
+
+  - id: uxui.cta.volume
+    description: The site offers multiple clear conversion paths.
+    weight: 8
+    fact_path: uxui.summary.total_ctas
+    evaluator: threshold
+    params:
+      min: 3
+      partial_min: 1
+
+  - id: uxui.cta.above_fold
+    description: At least one CTA appears early in the page experience.
+    weight: 8
+    fact_path: uxui.summary.above_fold_ctas
+    evaluator: threshold
+    params:
+      min: 1
+
+  - id: uxui.forms.present
+    description: The site includes a lead capture form.
+    weight: 8
+    fact_path: uxui.summary.total_forms
+    evaluator: threshold
+    params:
+      min: 1
+
+  - id: uxui.homepage_form.field_count
+    description: Homepage form length is practical for lead capture.
+    weight: 6
+    fact_path: uxui.pages[0].forms.total_field_count
+    evaluator: range
+    params:
+      full_credit: [1, 5]
+      partial_credit:
+        - [6, 8]
+
+  - id: uxui.phone.visible
+    description: A phone number is available on crawled pages.
+    weight: 8
+    fact_path: uxui.summary.pages_with_phone
+    evaluator: threshold
+    params:
+      min: 1
+
+  - id: uxui.email.visible
+    description: An email address is available on crawled pages.
+    weight: 6
+    fact_path: uxui.summary.pages_with_email
+    evaluator: threshold
+    params:
+      min: 1
+
+  - id: uxui.trust.present
+    description: Trust signals are visible on at least one crawled page.
+    weight: 9
+    fact_path: uxui.summary.pages_with_trust_signals
+    evaluator: threshold
+    params:
+      min: 1
+
+  - id: uxui.trust.depth
+    description: Trust evidence appears in more than one form.
+    weight: 5
+    fact_path: uxui.summary.total_trust_signals
+    evaluator: threshold
+    params:
+      min: 2
+      partial_min: 1
+
+  - id: uxui.navigation.present
+    description: Primary navigation is present.
+    weight: 8
+    fact_path: uxui.pages[0].navigation.has_nav
+    evaluator: boolean
+
+  - id: uxui.copy.substantial
+    description: Page copy is substantial enough to explain the offer.
+    weight: 6
+    fact_path: uxui.pages[0].content.has_substantial_copy
+    evaluator: boolean
+
+  - id: uxui.direct_contact.present
+    description: Visitors can contact the business directly.
+    weight: 7
+    fact_path: uxui.pages[0].lead_capture.has_direct_contact
+    evaluator: boolean
+
+  - id: uxui.lead_capture.cta
+    description: The homepage has at least one CTA.
+    weight: 7
+    fact_path: uxui.pages[0].lead_capture.has_cta
+    evaluator: boolean

@@ -56,7 +56,7 @@ If you're picking this up cold, read §1, §2, and §10 first — that gives you
 │     ├─ SEO rubric  (rubrics/seo.yaml)   → seo_score + audit_trail    │
 │     └─ UX/UI rubric (rubrics/uxui.yaml) → uxui_score + audit_trail   │
 │                                                                      │
-│   Stage 4: LLM commentary (OpenAI GPT-class model)                │
+│   Stage 4: LLM commentary (OpenAI ChatGPT model)                │
 │     ├─ Inputs: extracted facts + score breakdown                     │
 │     ├─ Output: structured JSON (findings, recommendations by tier)   │
 │     └─ Prompt enforces "no new numbers, only commentary"             │
@@ -93,7 +93,7 @@ The architecture is optimized for a local-first MVP that still has a clean path 
 | Playwright for crawling | Modern sites are JavaScript-heavy; static HTML parsing misses too much. |
 | PageSpeed Insights API for performance | Provides Lighthouse-style performance, accessibility, SEO, and best-practices signals. |
 | Hybrid scoring | Deterministic rules produce reproducible scores; LLMs provide commentary only. |
-| Grounded generation | OpenAI receives extracted facts and score breakdowns, not permission to invent facts. |
+| Grounded generation | ChatGPT receives extracted facts and score breakdowns, not permission to invent facts. |
 | Validation pass | A second check catches unsupported factual or numeric claims before report generation. |
 | Config-driven rubrics | BLC can tune weights and thresholds without code changes. |
 | WeasyPrint over Puppeteer for PDF | WeasyPrint has stronger print CSS support for long structured documents. |
@@ -548,7 +548,7 @@ blc-audit/
 ├── README.md
 ├── docker-compose.yml          # local dev: api + worker + redis + postgres
 ├── pyproject.toml              # poetry/uv
-├── .env.example
+├── .env.template
 ├── .gitignore
 │
 ├── apps/
@@ -569,7 +569,7 @@ blc-audit/
 │   │       ├── extractor_seo.py
 │   │       ├── extractor_uxui.py
 │   │       ├── scoring.py      # generic rubric engine
-│   │       ├── commentary.py   # OpenAI prompt + parser
+│   │       ├── commentary.py   # ChatGPT prompt + parser
 │   │       ├── validator.py    # grounding check
 │   │       └── pdf_renderer.py # WeasyPrint glue
 │   │
@@ -761,7 +761,7 @@ def score_category(rubric: Rubric, facts: dict) -> CategoryScore:
 
 ---
 
-## 7. Build instructions — OpenAI commentary pipeline
+## 7. Build instructions — ChatGPT commentary pipeline
 
 ### 7.1 Prompt structure
 
@@ -781,11 +781,11 @@ User-message payload includes:
 - The 5 highest-scoring rules (what's working)
 - Selected raw facts that ground the commentary
 
-Output schema is enforced via OpenAI structured outputs or tool-calling: define a single tool `submit_commentary` whose input schema matches the desired JSON, and ChatGPT is forced to call it. This eliminates parser fragility.
+Output schema is enforced via OpenAI Structured Outputs: the worker passes a Pydantic schema to the OpenAI SDK and validates the parsed response before saving it. This eliminates parser fragility.
 
 ### 7.2 Models
 
-- Use an OpenAI GPT-class model for the main commentary call.
+- Use an OpenAI ChatGPT model for the main commentary call.
 - Optional cheaper model usage is allowed only for low-risk classification tasks, not for numeric scoring.
 - Store the exact provider, model ID, prompt version, token usage, and completion status with each audit result.
 
@@ -901,7 +901,7 @@ This section defines build order by dependency, not by calendar. The rule: prove
 - Postgres + Alembic migration setup
 - Celery + Redis worker skeleton
 - Next.js frontend skeleton
-- Local `.env.example`
+- Local `.env.template`
 
 **Exit criteria:** API, worker, Postgres, Redis, and frontend can run locally.
 
@@ -962,11 +962,11 @@ This section defines build order by dependency, not by calendar. The rule: prove
 
 **Exit criteria:** Same facts produce identical numeric scores and score breakdowns are explainable.
 
-### 10.6 OpenAI commentary and grounding
+### 10.6 ChatGPT commentary and grounding
 
 **Goal:** Specific recommendations are generated without unsupported factual claims.
 
-- OpenAI client
+- ChatGPT client
 - Structured JSON output schema
 - SEO prompt
 - UX/UI prompt
@@ -1014,7 +1014,7 @@ This section defines build order by dependency, not by calendar. The rule: prove
 
 - End-to-end local audit QA
 - Same-site reproducibility QA
-- OpenAI grounding QA
+- ChatGPT grounding QA
 - PDF pagination QA
 - Final API Dockerfile
 - Final worker Dockerfile

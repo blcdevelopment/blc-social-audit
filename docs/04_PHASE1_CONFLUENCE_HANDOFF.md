@@ -19,7 +19,7 @@ The system is designed as a structured pipeline:
 2. Crawl the site with a real browser.
 3. Extract SEO and UX/UI facts.
 4. Compute deterministic scores.
-5. Generate OpenAI commentary from extracted facts and score breakdowns.
+5. Generate ChatGPT commentary from extracted facts and score breakdowns.
 6. Validate commentary grounding.
 7. Render a branded PDF report.
 8. Let the operator download the report.
@@ -61,7 +61,7 @@ The application should be considered healthy when the local end-to-end pipeline 
 - UX/UI score
 - Lead Generation Readiness score
 - Per-rule score audit trail
-- OpenAI-generated findings and recommendations
+- ChatGPT-generated findings and recommendations
 - Grounding validator for factual/numeric claims
 - Branded PDF report
 - Internal operator interface
@@ -102,7 +102,7 @@ Celery Worker + Redis
         +--> SEO extractor
         +--> UX/UI extractor
         +--> YAML scoring engine
-        +--> OpenAI commentary
+        +--> ChatGPT commentary
         +--> Grounding validator
         +--> WeasyPrint PDF renderer
         |
@@ -140,8 +140,8 @@ PostgreSQL + local report storage
 7. SEO extractor produces SEO facts.
 8. UX/UI extractor produces UX/UI facts.
 9. Scoring engine applies YAML rubrics.
-10. OpenAI receives only extracted facts and deterministic score breakdowns.
-11. OpenAI returns structured commentary.
+10. ChatGPT receives only extracted facts and deterministic score breakdowns.
+11. ChatGPT returns structured commentary.
 12. Grounding validator checks factual/numeric claims.
 13. Report composer builds final report payload.
 14. WeasyPrint renders and stores the PDF.
@@ -164,7 +164,7 @@ PostgreSQL + local report storage
 | Structured data extraction | extruct where useful |
 | Performance data | Google PageSpeed Insights API |
 | Scoring | Pure Python + YAML rubrics |
-| LLM commentary | GPT-4o |
+| LLM commentary | OpenAI GPT-4o |
 | PDF rendering | WeasyPrint + Jinja2 + print CSS |
 | Frontend | Next.js, TypeScript, Tailwind, shadcn/ui |
 | Frontend data fetching | TanStack Query or simple polling |
@@ -236,7 +236,7 @@ Recommended ticket structure:
 |---|---|
 | Local App Foundation & Backend | Set up project structure, local tooling, Docker Compose, database schema, API endpoints, and job lifecycle |
 | Audit Collection Pipeline | Configure Celery, build Playwright crawler, collect PageSpeed data, build SEO extractor, build UX/UI extractor, add fixtures |
-| Scoring & AI Commentary | Add YAML rubrics, build rule evaluators, compose scores, calibrate scores, add OpenAI prompts, validate grounding |
+| Scoring & AI Commentary | Add YAML rubrics, build rule evaluators, compose scores, calibrate scores, add ChatGPT prompts, validate grounding |
 | PDF Report Generation | Build report payload, branded WeasyPrint template, branding config, and PDF QA |
 | Internal Operator UI | Add submit page, progress/result page, audit history page, and PDF download |
 | QA, Packaging & Handoff | Run local end-to-end QA, run reproducibility QA, prepare container packaging, and write developer/operator documentation |
@@ -258,8 +258,8 @@ Phase 1 is successful when:
 - UX/UI score is generated deterministically.
 - Lead Generation Readiness score is generated deterministically.
 - Score breakdown explains each rule result.
-- OpenAI commentary is specific to the audited site.
-- OpenAI commentary is grounded in extracted facts and scores.
+- ChatGPT commentary is specific to the audited site.
+- ChatGPT commentary is grounded in extracted facts and scores.
 - Unsupported factual or numeric claims are caught or removed.
 - A branded PDF report is generated.
 - The UI supports submit, progress, history, and download.

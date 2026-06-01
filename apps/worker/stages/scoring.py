@@ -1,0 +1,371 @@
+from __future__ import annotations
+
+import re
+from pathlib import Path
+from typing import Any, Literal
+
+import yaml
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from apps.shared.config import Settings
+
+JsonDict = dict[str, Any]
+EvaluatorName = Literal["boolean", "presence", "range", "exact_match", "threshold", "linear_scale"]
+NormalizationMode = Literal["sum_of_weights", "rescale_to_max"]
+RuleResult = Literal["pass", "partial", "fail", "skipped"]
+_MISSING = object()
+_PATH_TOKEN_RE = re.compile(r"([^\.\[\]]+)|\[(\d+)\]")
+
+
+class RubricRule(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    description: str
+    weight: float = Field(gt=0)
+    fact_path: str
+    evaluator: EvaluatorName
+    params: JsonDict = Field(default_factory=dict)
+    skip_if_missing: bool = False
+
+
+class Rubric(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: str
+    category: Literal["seo", "uxui"]
+    max_score: int = Field(default=100, gt=0)
+    normalization: NormalizationMode = "rescale_to_max"
+    rules: list[RubricRule] = Field(min_length=1)
+
+    @field_validator("version", "category")
+    @classmethod
+    def non_empty_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("must not be empty")
+        return cleaned
+
+
+class CompositeRubric(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: str
+    max_score: int = Field(default=100, gt=0)
+    weights: dict[Literal["seo", "uxui"], float]
+
+    @model_validator(mode="after")
+    def validate_weights(self) -> CompositeRubric:
+        expected = {"seo", "uxui"}
+        actual = set(self.weights)
+        if actual != expected:
+            raise ValueError(f"composite weights must include exactly {sorted(expected)}")
+
+        total = sum(self.weights.values())
+        if abs(total - 1.0) > 0.0001:
+            raise ValueError("composite weights must sum to 1.0")
+
+        for category, weight in self.weights.items():
+            if weight < 0:
+                raise ValueError(f"composite weight for {category} must be non-negative")
+        return self
+
+
+class Evaluation(BaseModel):
+    result: RuleResult
+    ratio: float = Field(ge=0, le=1)
+    reason: str | None = None
+
+
+def load_rubric(path: Path) -> Rubric:
+    payload = _read_yaml(path)
+    return Rubric.model_validate(payload)
+
+
+def load_composite_rubric(path: Path) -> CompositeRubric:
+    payload = _read_yaml(path)
+    return CompositeRubric.model_validate(payload)
+
+
+def score_audit(
+    seo_facts: JsonDict,
+    uxui_facts: JsonDict,
+    psi_facts: JsonDict,
+    settings: Settings,
+) -> JsonDict:
+    seo_rubric = load_rubric(settings.rubric_seo_path)
+    uxui_rubric = load_rubric(settings.rubric_uxui_path)
+    composite_rubric = load_composite_rubric(settings.rubric_composite_path)
+    fact_bundle = {
+        "seo": seo_facts,
+        "uxui": uxui_facts,
+        "psi": psi_facts,
+    }
+
+    seo_breakdown = score_category(fact_bundle, seo_rubric)
+    uxui_breakdown = score_category(fact_bundle, uxui_rubric)
+    lead_gen = compose_lead_generation_score(
+        seo_breakdown["score"],
+        uxui_breakdown["score"],
+        composite_rubric,
+    )
+
+    rubric_version = f"{seo_rubric.version}+{uxui_rubric.version}+{composite_rubric.version}"
+    return {
+        "status": "complete",
+        "rubric_version": rubric_version,
+        "scores": {
+            "seo": seo_breakdown["score"],
+            "uxui": uxui_breakdown["score"],
+            "lead_gen": lead_gen["score"],
+        },
+        "categories": {
+            "seo": seo_breakdown,
+            "uxui": uxui_breakdown,
+        },
+        "composite": lead_gen,
+    }
+
+
+def score_category(facts: JsonDict, rubric: Rubric) -> JsonDict:
+    rule_results = [_score_rule(facts, rule) for rule in rubric.rules]
+    evaluated_rules = [rule for rule in rule_results if rule["result"] != "skipped"]
+    evaluated_weight = sum(rule["weight"] for rule in evaluated_rules)
+    skipped_weight = sum(rule["weight"] for rule in rule_results if rule["result"] == "skipped")
+    awarded_points = sum(rule["points_awarded"] for rule in evaluated_rules)
+
+    if not evaluated_rules or evaluated_weight <= 0:
+        score = 0
+    elif rubric.normalization == "sum_of_weights":
+        score = _round_score(awarded_points, rubric.max_score)
+    else:
+        normalized_points = (awarded_points / evaluated_weight) * rubric.max_score
+        score = _round_score(normalized_points, rubric.max_score)
+
+    return {
+        "status": "complete",
+        "category": rubric.category,
+        "rubric_version": rubric.version,
+        "score": score,
+        "max_score": rubric.max_score,
+        "normalization": rubric.normalization,
+        "weights": {
+            "configured": round(sum(rule.weight for rule in rubric.rules), 4),
+            "evaluated": round(evaluated_weight, 4),
+            "skipped": round(skipped_weight, 4),
+        },
+        "rules": rule_results,
+    }
+
+
+def compose_lead_generation_score(
+    seo_score: int,
+    uxui_score: int,
+    rubric: CompositeRubric,
+) -> JsonDict:
+    weighted = (seo_score * rubric.weights["seo"]) + (uxui_score * rubric.weights["uxui"])
+    score = _round_score(weighted, rubric.max_score)
+    return {
+        "status": "complete",
+        "rubric_version": rubric.version,
+        "score": score,
+        "max_score": rubric.max_score,
+        "weights": rubric.weights,
+        "inputs": {
+            "seo": seo_score,
+            "uxui": uxui_score,
+        },
+    }
+
+
+def _read_yaml(path: Path) -> JsonDict:
+    with path.open(encoding="utf-8") as file:
+        payload = yaml.safe_load(file)
+
+    if not isinstance(payload, dict):
+        raise ValueError(f"Rubric file {path} must contain a YAML object.")
+    return payload
+
+
+def _score_rule(facts: JsonDict, rule: RubricRule) -> JsonDict:
+    value = resolve_fact_path(facts, rule.fact_path)
+    if value is _MISSING or (value is None and rule.skip_if_missing):
+        if rule.skip_if_missing:
+            evaluation = Evaluation(result="skipped", ratio=0, reason="fact path missing")
+        else:
+            evaluation = Evaluation(result="fail", ratio=0, reason="fact path missing")
+    else:
+        evaluation = _evaluate(rule, value)
+
+    points = 0.0 if evaluation.result == "skipped" else round(rule.weight * evaluation.ratio, 4)
+    return {
+        "rule_id": rule.id,
+        "description": rule.description,
+        "weight": rule.weight,
+        "evaluator": rule.evaluator,
+        "fact_path": rule.fact_path,
+        "result": evaluation.result,
+        "points_awarded": points,
+        "points_possible": 0.0 if evaluation.result == "skipped" else rule.weight,
+        "evidence": {
+            "value": None if value is _MISSING else value,
+            "params": rule.params,
+            "reason": evaluation.reason,
+        },
+    }
+
+
+def _evaluate(rule: RubricRule, value: Any) -> Evaluation:
+    evaluator = rule.evaluator
+    params = rule.params
+    if evaluator == "boolean":
+        return _boolean(value)
+    if evaluator == "presence":
+        return _presence(value)
+    if evaluator == "range":
+        return _range(value, params)
+    if evaluator == "exact_match":
+        return _exact_match(value, params)
+    if evaluator == "threshold":
+        return _threshold(value, params)
+    if evaluator == "linear_scale":
+        return _linear_scale(value, params)
+    raise ValueError(f"Unsupported evaluator: {evaluator}")
+
+
+def _boolean(value: Any) -> Evaluation:
+    if value is True:
+        return Evaluation(result="pass", ratio=1)
+    return Evaluation(result="fail", ratio=0)
+
+
+def _presence(value: Any) -> Evaluation:
+    if value is None:
+        return Evaluation(result="fail", ratio=0)
+    if isinstance(value, str) and not value.strip():
+        return Evaluation(result="fail", ratio=0)
+    if isinstance(value, (list, dict, set, tuple)) and not value:
+        return Evaluation(result="fail", ratio=0)
+    return Evaluation(result="pass", ratio=1)
+
+
+def _range(value: Any, params: JsonDict) -> Evaluation:
+    number = _as_number(value)
+    if number is None:
+        return Evaluation(result="fail", ratio=0, reason="value is not numeric")
+
+    full_credit = params.get("full_credit")
+    if _within_range(number, full_credit):
+        return Evaluation(result="pass", ratio=1)
+
+    partial_ranges = params.get("partial_credit") or []
+    if any(_within_range(number, item) for item in partial_ranges):
+        return Evaluation(result="partial", ratio=0.5)
+
+    return Evaluation(result="fail", ratio=0)
+
+
+def _exact_match(value: Any, params: JsonDict) -> Evaluation:
+    full_credit = params.get("full_credit")
+    if value == full_credit:
+        return Evaluation(result="pass", ratio=1)
+
+    partial_credit = params.get("partial_credit") or []
+    if value in partial_credit:
+        return Evaluation(result="partial", ratio=0.5)
+
+    return Evaluation(result="fail", ratio=0)
+
+
+def _threshold(value: Any, params: JsonDict) -> Evaluation:
+    number = _as_number(value)
+    if number is None:
+        return Evaluation(result="fail", ratio=0, reason="value is not numeric")
+
+    min_value = params.get("min")
+    max_value = params.get("max")
+    partial_min = params.get("partial_min")
+    partial_max = params.get("partial_max")
+
+    if _meets_bounds(number, min_value, max_value):
+        return Evaluation(result="pass", ratio=1)
+    if _meets_bounds(number, partial_min, partial_max):
+        return Evaluation(result="partial", ratio=0.5)
+    return Evaluation(result="fail", ratio=0)
+
+
+def _linear_scale(value: Any, params: JsonDict) -> Evaluation:
+    number = _as_number(value)
+    if number is None:
+        return Evaluation(result="fail", ratio=0, reason="value is not numeric")
+
+    input_range = params.get("input_range") or [0, 100]
+    if not isinstance(input_range, list | tuple) or len(input_range) != 2:
+        return Evaluation(result="fail", ratio=0, reason="invalid input_range")
+
+    start = _as_number(input_range[0])
+    end = _as_number(input_range[1])
+    if start is None or end is None or end == start:
+        return Evaluation(result="fail", ratio=0, reason="invalid input_range")
+
+    ratio = (number - start) / (end - start)
+    clamped = min(max(ratio, 0.0), 1.0)
+    if clamped >= 1:
+        result: RuleResult = "pass"
+    elif clamped > 0:
+        result = "partial"
+    else:
+        result = "fail"
+    return Evaluation(result=result, ratio=clamped)
+
+
+def _within_range(number: float, range_value: Any) -> bool:
+    if not isinstance(range_value, list | tuple) or len(range_value) != 2:
+        return False
+    start = _as_number(range_value[0])
+    end = _as_number(range_value[1])
+    if start is None or end is None:
+        return False
+    return start <= number <= end
+
+
+def _meets_bounds(number: float, min_value: Any, max_value: Any) -> bool:
+    if min_value is None and max_value is None:
+        return False
+    minimum = _as_number(min_value)
+    maximum = _as_number(max_value)
+    if minimum is not None and number < minimum:
+        return False
+    return not (maximum is not None and number > maximum)
+
+
+def _as_number(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return float(value)
+    return None
+
+
+def _round_score(value: float, max_score: int) -> int:
+    return min(max(int(value + 0.5), 0), max_score)
+
+
+def resolve_fact_path(facts: Any, path: str) -> Any:
+    current = facts
+    for raw_part in path.split("."):
+        if not raw_part:
+            return _MISSING
+        for token, index in _PATH_TOKEN_RE.findall(raw_part):
+            if token:
+                if not isinstance(current, dict) or token not in current:
+                    return _MISSING
+                current = current[token]
+            elif index:
+                if not isinstance(current, list):
+                    return _MISSING
+                position = int(index)
+                if position >= len(current):
+                    return _MISSING
+                current = current[position]
+    return current
