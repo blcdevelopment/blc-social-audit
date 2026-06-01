@@ -1,8 +1,14 @@
 name: social-audit
 channels:
+  - conda-forge
   - defaults
 dependencies:
   - python=3.12
+  - cairo
+  - fontconfig
+  - gdk-pixbuf
+  - glib
+  - pango
   - pip
   - pip:
       - poetry>=2.0

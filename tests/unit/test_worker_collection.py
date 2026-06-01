@@ -62,7 +62,7 @@ def _fake_psi(urls: list[str], settings: Settings) -> dict:
     }
 
 
-def test_run_collection_audit_persists_epic_2_artifacts(monkeypatch) -> None:
+def test_run_collection_audit_persists_epic_4_artifacts(monkeypatch, tmp_path) -> None:
     engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)
     TestingSession = sessionmaker(bind=engine, autoflush=False, autocommit=False)
@@ -77,6 +77,28 @@ def test_run_collection_audit_persists_epic_2_artifacts(monkeypatch) -> None:
             crawler_screenshots_enabled=False,
         ),
     )
+    pdf_path = tmp_path / "report.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n% unit test placeholder\n")
+
+    def fake_render_audit_pdf(job, result, settings):
+        return tasks.PdfRenderResult(
+            pdf_path=str(pdf_path),
+            report_metadata={
+                "status": "complete",
+                "renderer": "weasyprint",
+                "renderer_version": "unit-test",
+                "report_payload_version": "phase1-report-v1",
+                "generated_at": "2026-06-01T00:00:00+00:00",
+                "pdf_path": str(pdf_path),
+                "pdf_size_bytes": pdf_path.stat().st_size,
+                "page_count": 1,
+                "storage": {"type": "local_filesystem", "directory": str(tmp_path)},
+            },
+            page_count=1,
+            size_bytes=pdf_path.stat().st_size,
+        )
+
+    monkeypatch.setattr(tasks, "render_audit_pdf", fake_render_audit_pdf)
 
     with TestingSession() as db:
         job = AuditJob(
@@ -95,7 +117,7 @@ def test_run_collection_audit_persists_epic_2_artifacts(monkeypatch) -> None:
         job = db.get(AuditJob, job_id)
         assert job is not None
         assert job.status == AuditStatus.COMPLETE.value
-        assert job.current_stage == "Audit scoring and commentary complete"
+        assert job.current_stage == "Audit report complete"
         assert job.progress_pct == 100
         assert job.result is not None
         assert job.result.crawled_pages["summary"]["successful_pages"] == 1
@@ -109,3 +131,5 @@ def test_run_collection_audit_persists_epic_2_artifacts(monkeypatch) -> None:
         assert job.result.score_breakdown["status"] == "complete"
         assert job.result.commentary["status"] == "fallback_missing_api_key"
         assert job.result.validation_log["status"] == "complete"
+        assert job.result.pdf_path == str(pdf_path)
+        assert job.result.report_metadata["renderer"] == "weasyprint"

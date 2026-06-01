@@ -35,7 +35,7 @@ flowchart TB
   end
 
   subgraph Shared["apps/shared - backend shared layer"]
-    Settings["config.py<br/>Pydantic settings from .env<br/>includes PSI, OpenAI, rubric, and prompt paths"]:::implemented
+    Settings["config.py<br/>Pydantic settings from .env<br/>includes PSI, OpenAI, rubric, prompt, brand, and report paths"]:::implemented
     Database["database.py<br/>SQLAlchemy engine and sessions"]:::implemented
     Models["models.py<br/>AuditJob and AuditResult ORM models"]:::implemented
     States["audit_states.py<br/>Job status enum and terminal states"]:::implemented
@@ -52,8 +52,11 @@ flowchart TB
     ScoringStage["stages/scoring.py<br/>safe YAML rubrics, evaluators, score composer"]:::implemented
     CommentaryStage["stages/commentary.py<br/>OpenAI Structured Outputs, Pydantic schema, local fallback"]:::implemented
     GroundingStage["stages/grounding_validator.py<br/>numeric claim extraction, fact matching, stripping"]:::implemented
+    ReportPayloadStage["stages/report_payload.py<br/>report schema, metadata, scores, findings, recommendations, validation, PSI"]:::implemented
+    BrandStage["stages/report_branding.py<br/>BLC brand config and placeholder fallback"]:::implemented
+    PdfRendererStage["stages/pdf_renderer.py<br/>Jinja2 and WeasyPrint PDF rendering"]:::implemented
     StagePackage["stages/__init__.py<br/>Worker pipeline package"]:::implemented
-    WorkerDockerfile["apps/worker/Dockerfile<br/>Python image with Playwright Chromium install"]:::config
+    WorkerDockerfile["apps/worker/Dockerfile<br/>Python image with Playwright Chromium and WeasyPrint native libraries"]:::config
   end
 
   subgraph External["External services and audited websites"]
@@ -70,7 +73,7 @@ flowchart TB
     AuditResultsTable["audit_results<br/>crawl, PSI, SEO/UX facts, scores, commentary, validation, pdf_path"]:::data
     ReportStorage["storage/reports<br/>local PDF output target"]:::data
     ScreenshotStorage["storage/screenshots<br/>local screenshot output target"]:::data
-    NoPdfYet["Current validated audit result leaves pdf_path null<br/>report endpoint returns 404 until P1-E4"]:::placeholder
+    GeneratedPdf["Generated PDF files<br/>storage/reports/{job_id}.pdf"]:::data
   end
 
   subgraph Migrations["migrations - Alembic"]
@@ -106,6 +109,9 @@ flowchart TB
     CompositeRubric["rubrics/composite.yaml<br/>phase1-composite-v1"]:::config
     CommentarySystemPrompt["prompts/commentary_system.md<br/>grounding and security rules"]:::config
     CommentaryUserPrompt["prompts/commentary_user.md<br/>facts and score prompt template"]:::config
+    BrandConfig["brand/blc.yaml<br/>logo path, colors, fonts, placeholder fallback"]:::config
+    ReportTemplate["templates/report.html<br/>Jinja2 branded report template"]:::config
+    ReportCss["templates/report.css<br/>print CSS, page breaks, headers, footers"]:::config
   end
 
   subgraph Tests["tests - current verification"]
@@ -117,7 +123,9 @@ flowchart TB
     ScoringTests["tests/unit/test_scoring_engine.py<br/>rubric validation, calibration, reproducibility"]:::implemented
     CommentaryTests["tests/unit/test_commentary.py<br/>schema and local fallback"]:::implemented
     GroundingTests["tests/unit/test_grounding_validator.py<br/>numeric claim validation and stripping"]:::implemented
-    WorkerCollectionTests["tests/unit/test_worker_collection.py<br/>full worker artifact persistence through P1-E3"]:::implemented
+    WorkerCollectionTests["tests/unit/test_worker_collection.py<br/>full worker artifact persistence through P1-E4"]:::implemented
+    ReportPayloadTests["tests/unit/test_report_payload.py<br/>report schema and edge summaries"]:::implemented
+    PdfRendererTests["tests/unit/test_pdf_renderer.py<br/>short, medium, long, missing PSI, failed pages"]:::implemented
     FixturesDir["tests/fixtures<br/>strong, weak, malformed HTML and expected JSON"]:::implemented
     SQLiteTestDb["SQLite in-memory DB for unit tests"]:::data
   end
@@ -205,16 +213,25 @@ flowchart TB
   CollectionPipeline --> GroundingStage
   GroundingStage -->|"sanitized commentary and validation log"| CollectionPipeline
   CollectionPipeline -->|"validated AuditResult artifacts"| AuditResultsTable
+  CollectionPipeline -->|"rendering stage/progress"| AuditJobsTable
+  CollectionPipeline --> ReportPayloadStage
+  ReportPayloadStage -->|"validated report payload"| PdfRendererStage
+  BrandStage --> PdfRendererStage
+  BrandConfig --> BrandStage
+  ReportTemplate --> PdfRendererStage
+  ReportCss --> PdfRendererStage
+  PdfRendererStage -->|"writes PDF"| ReportStorage
+  PdfRendererStage -->|"report metadata and pdf_path"| AuditResultsTable
   CollectionPipeline -->|"complete or failed status"| AuditJobsTable
   CollectionPipeline --> StagePackage
 
   ListAudits -->|"reads jobs and optional scores"| AuditJobsTable
   ListAudits --> AuditResultsTable
   StatusAudit -->|"reads lifecycle state"| AuditJobsTable
-  StatusAudit -->|"report_available if pdf_path exists"| AuditResultsTable
+  StatusAudit -->|"report_available if pdf_path file exists"| AuditResultsTable
   ReportAudit -->|"checks pdf_path"| AuditResultsTable
   ReportAudit -->|"FileResponse when file exists"| ReportStorage
-  ReportAudit -.-> NoPdfYet
+  ReportStorage --> GeneratedPdf
 
   ComposeFile --> ApiService
   ComposeFile --> WorkerService
@@ -284,7 +301,7 @@ flowchart TB
   HandoffDoc --> WalkthroughDoc
   WalkthroughDoc --> ArchitectureDoc
 
-  subgraph EpicStatus["Epic P1-E1 through P1-E3 coverage in current repo"]
+  subgraph EpicStatus["Epic P1-E1 through P1-E4 coverage in current repo"]
     P11["P1-1 project structure: covered"]:::implemented
     P12["P1-2 local tooling: covered in repo; uv is used in Dockerfiles but not on this active shell PATH"]:::implemented
     P13["P1-3 Docker Compose stack: covered"]:::implemented
@@ -300,7 +317,11 @@ flowchart TB
     P113["P1-13 calibration: strong and weak fixture score gates and reproducibility tests"]:::implemented
     P114["P1-14 ChatGPT commentary and prompts: OpenAI client, structured output schema, recommendation tiers, Pydantic validation"]:::implemented
     P115["P1-15 grounding validator: numeric claims, fact matching, unsupported-claim stripping, tests"]:::implemented
-    LaterEpics["PDF, final operator UI, QA packaging, and handoff remain later epics"]:::placeholder
+    P116["P1-16 report payload composer: schema, metadata, scores, findings, recommendations, validation, PSI"]:::implemented
+    P117["P1-17 branded PDF template: cover, summary, scores, SEO, UX/UI, roadmap, appendix, headers, footers"]:::implemented
+    P118["P1-18 branding config: logo path, colors, fonts, placeholder fallback"]:::implemented
+    P119["P1-19 PDF QA: short, medium, long, missing PSI, failed internal pages"]:::implemented
+    LaterEpics["Final operator UI, QA packaging, and handoff remain later epics"]:::placeholder
   end
 
   JiraDoc --> P11
@@ -318,4 +339,8 @@ flowchart TB
   JiraDoc --> P113
   JiraDoc --> P114
   JiraDoc --> P115
-  P115 -.-> LaterEpics
+  JiraDoc --> P116
+  JiraDoc --> P117
+  JiraDoc --> P118
+  JiraDoc --> P119
+  P119 -.-> LaterEpics

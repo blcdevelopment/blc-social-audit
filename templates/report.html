@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>{{ payload.metadata.site_domain }} Website Audit Report</title>
+    <style>
+      {{ report_css }}
+    </style>
+  </head>
+  <body style="--primary: {{ brand.primary_color }}; --accent: {{ brand.accent_color }};">
+    <div
+      class="running-metadata"
+      data-domain="{{ payload.metadata.site_domain }}"
+      data-date="{{ payload.metadata.generated_date }}"
+    ></div>
+
+    <section class="cover">
+      <div class="cover-brand">
+        {% if brand.logo_uri %}
+          <img class="brand-logo" src="{{ brand.logo_uri }}" alt="{{ brand.name }} logo">
+        {% else %}
+          <div class="brand-mark">{{ brand.placeholder_fallback }}</div>
+          <div>
+            <p class="eyebrow">{{ brand.name }}</p>
+            <p class="brand-subtitle">Website Audit</p>
+          </div>
+        {% endif %}
+      </div>
+      <div class="cover-main">
+        <h1>Website Audit Report</h1>
+        <p class="cover-url">{{ payload.metadata.final_url }}</p>
+        <dl class="cover-details">
+          <div>
+            <dt>Generated</dt>
+            <dd>{{ payload.metadata.generated_date }}</dd>
+          </div>
+          <div>
+            <dt>Pages Crawled</dt>
+            <dd>{{ payload.metadata.pages_crawled }}</dd>
+          </div>
+          {% if payload.metadata.niche %}
+            <div>
+              <dt>Niche</dt>
+              <dd>{{ payload.metadata.niche }}</dd>
+            </div>
+          {% endif %}
+          {% if payload.metadata.target_audience %}
+            <div>
+              <dt>Audience</dt>
+              <dd>{{ payload.metadata.target_audience }}</dd>
+            </div>
+          {% endif %}
+        </dl>
+      </div>
+      <p class="cover-footer">Prepared for internal BLC review and prospect-facing follow-up.</p>
+    </section>
+
+    <section class="page-section toc" id="contents">
+      <p class="eyebrow">Report Contents</p>
+      <h2>Contents</h2>
+      <ol>
+        <li><a href="#executive">Executive Summary</a></li>
+        <li><a href="#scores">Score Overview</a></li>
+        <li><a href="#seo">SEO Findings</a></li>
+        <li><a href="#uxui">UX/UI Findings</a></li>
+        <li><a href="#roadmap">Roadmap</a></li>
+        <li><a href="#appendix">Appendix</a></li>
+      </ol>
+    </section>
+
+    <section class="page-section" id="executive">
+      <p class="eyebrow">Executive Summary</p>
+      <h2>What matters first</h2>
+      <p class="summary-copy">{{ payload.executive_summary }}</p>
+
+      <div class="score-strip">
+        {% for score in payload.scores %}
+          <article class="score-pill score-pill-{{ score.id }}">
+            <p>{{ score.label }}</p>
+            <strong>{{ score.score }}</strong>
+            <span>/ {{ score.max_score }}</span>
+          </article>
+        {% endfor %}
+      </div>
+
+      <div class="two-column">
+        <article>
+          <h3>Top Findings</h3>
+          <ul class="plain-list">
+            {% for section in payload.sections %}
+              {% for finding in section.findings[:1] %}
+                <li>
+                  <strong>{{ section.label }}:</strong>
+                  {{ finding.title }}
+                </li>
+              {% endfor %}
+            {% endfor %}
+          </ul>
+        </article>
+        <article>
+          <h3>Top Recommendations</h3>
+          <ul class="plain-list">
+            {% for tier in payload.roadmap %}
+              {% for recommendation in tier.recommendations[:1] %}
+                <li>
+                  <strong>{{ tier.label }}:</strong>
+                  {{ recommendation.title }}
+                </li>
+              {% endfor %}
+            {% endfor %}
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="page-section" id="scores">
+      <p class="eyebrow">Score Overview</p>
+      <h2>Lead generation readiness at a glance</h2>
+      <div class="score-overview">
+        {% for score in payload.scores %}
+          <article class="score-row">
+            <div class="score-row-header">
+              <div>
+                <h3>{{ score.label }}</h3>
+                <p>{{ score.description }}</p>
+              </div>
+              <strong>{{ score.score }}/{{ score.max_score }}</strong>
+            </div>
+            <div class="score-bar" aria-hidden="true">
+              <span style="width: {{ score.score }}%"></span>
+            </div>
+          </article>
+        {% endfor %}
+      </div>
+    </section>
+
+    {% for section in payload.sections %}
+      {% if section.id in ["seo", "uxui"] %}
+        <section class="page-section" id="{{ section.id }}">
+          <p class="eyebrow">{{ section.label }} Section</p>
+          <h2>{{ section.headline }}</h2>
+          <p class="section-score">{{ section.label }} score: <strong>{{ section.score }}/100</strong></p>
+
+          <h3>Findings</h3>
+          <div class="finding-list">
+            {% for finding in section.findings %}
+              <article class="finding-card severity-{{ finding.severity }}">
+                <div class="finding-meta">
+                  <span>{{ finding.severity }}</span>
+                  {% if finding.evidence_refs %}
+                    <small>{{ finding.evidence_refs | join(", ") }}</small>
+                  {% endif %}
+                </div>
+                <h4>{{ finding.title }}</h4>
+                <p>{{ finding.explanation }}</p>
+              </article>
+            {% endfor %}
+          </div>
+
+          {% if section.opportunities %}
+            <h3>Highest-confidence rubric opportunities</h3>
+            <table class="rules-table compact-table">
+              <thead>
+                <tr>
+                  <th>Rule</th>
+                  <th>Result</th>
+                  <th>Points</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for rule in section.opportunities[:8] %}
+                  <tr>
+                    <td>
+                      <strong>{{ rule.rule_id }}</strong>
+                      <span>{{ rule.description }}</span>
+                    </td>
+                    <td>{{ rule.result }}</td>
+                    <td>{{ "%.1f"|format(rule.points_awarded) }} / {{ "%.1f"|format(rule.points_possible) }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          {% endif %}
+
+          <h3>Recommendations</h3>
+          <div class="recommendation-list">
+            {% for recommendation in section.recommendations %}
+              <article class="recommendation">
+                <p class="recommendation-tier">{{ recommendation.tier.replace("_", " ") }}</p>
+                <h4>{{ recommendation.title }}</h4>
+                <p>{{ recommendation.rationale }}</p>
+                {% if recommendation.action_items %}
+                  <ul>
+                    {% for item in recommendation.action_items %}
+                      <li>{{ item }}</li>
+                    {% endfor %}
+                  </ul>
+                {% endif %}
+              </article>
+            {% endfor %}
+          </div>
+        </section>
+      {% endif %}
+    {% endfor %}
+
+    <section class="page-section" id="roadmap">
+      <p class="eyebrow">Action Roadmap</p>
+      <h2>Prioritized lead generation roadmap</h2>
+      {% for tier in payload.roadmap %}
+        <article class="roadmap-tier">
+          <h3>{{ tier.label }}</h3>
+          {% if tier.recommendations %}
+            <ol>
+              {% for recommendation in tier.recommendations %}
+                <li>
+                  <strong>{{ recommendation.title }}</strong>
+                  <p>{{ recommendation.rationale }}</p>
+                  {% if recommendation.action_items %}
+                    <ul>
+                      {% for item in recommendation.action_items %}
+                        <li>{{ item }}</li>
+                      {% endfor %}
+                    </ul>
+                  {% endif %}
+                </li>
+              {% endfor %}
+            </ol>
+          {% else %}
+            <p>No {{ tier.label | lower }} recommendations were generated for this audit.</p>
+          {% endif %}
+        </article>
+      {% endfor %}
+    </section>
+
+    <section class="page-section" id="appendix">
+      <p class="eyebrow">Appendix</p>
+      <h2>Methodology, validation, and raw score trail</h2>
+      <p>{{ payload.appendix.scoring_note }}</p>
+
+      <div class="qa-grid">
+        <article>
+          <h3>PageSpeed Summary</h3>
+          <dl class="metric-list">
+            <div><dt>Status</dt><dd>{{ payload.pagespeed_summary.status }}</dd></div>
+            {% if payload.pagespeed_summary.reason %}
+              <div><dt>Reason</dt><dd>{{ payload.pagespeed_summary.reason }}</dd></div>
+            {% endif %}
+            <div><dt>Pages analyzed</dt><dd>{{ payload.pagespeed_summary.pages_analyzed }} / {{ payload.pagespeed_summary.pages_requested }}</dd></div>
+            <div><dt>Mobile avg</dt><dd>{{ payload.pagespeed_summary.avg_mobile_performance or "N/A" }}</dd></div>
+            <div><dt>Desktop avg</dt><dd>{{ payload.pagespeed_summary.avg_desktop_performance or "N/A" }}</dd></div>
+          </dl>
+        </article>
+        <article>
+          <h3>Validation Summary</h3>
+          <dl class="metric-list">
+            <div><dt>Status</dt><dd>{{ payload.validation_summary.status }}</dd></div>
+            <div><dt>Numeric claims checked</dt><dd>{{ payload.validation_summary.numeric_claims_checked }}</dd></div>
+            <div><dt>Unsupported claims</dt><dd>{{ payload.validation_summary.unsupported_claim_count }}</dd></div>
+            <div><dt>Action</dt><dd>{{ payload.validation_summary.action }}</dd></div>
+          </dl>
+        </article>
+      </div>
+
+      <h3>Crawl QA</h3>
+      <dl class="metric-list inline">
+        <div><dt>Status</dt><dd>{{ payload.crawl_summary.status }}</dd></div>
+        <div><dt>Successful</dt><dd>{{ payload.crawl_summary.successful_pages }}</dd></div>
+        <div><dt>Failed</dt><dd>{{ payload.crawl_summary.failed_pages }}</dd></div>
+        <div><dt>Skipped</dt><dd>{{ payload.crawl_summary.skipped_pages }}</dd></div>
+      </dl>
+
+      {% if payload.crawl_summary.failed_page_items %}
+        <h4>Failed internal pages</h4>
+        <table class="compact-table">
+          <thead>
+            <tr><th>URL</th><th>Reason</th></tr>
+          </thead>
+          <tbody>
+            {% for page in payload.crawl_summary.failed_page_items %}
+              <tr><td>{{ page.url }}</td><td>{{ page.reason }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% endif %}
+
+      <h3>SEO rule trail</h3>
+      {% set rules = payload.appendix.seo_rules %}
+      {% include "partials/rule_table.html" %}
+
+      <h3>UX/UI rule trail</h3>
+      {% set rules = payload.appendix.uxui_rules %}
+      {% include "partials/rule_table.html" %}
+    </section>
+  </body>
+</html>
