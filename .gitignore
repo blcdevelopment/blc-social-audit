@@ -228,3 +228,8 @@ storage/screenshots/*
 apps/frontend/.next/
 apps/frontend/node_modules/
 apps/frontend/tsconfig.tsbuildinfo
+
+# Frontend source overrides — the generic Python "lib/" rule above must not
+# swallow the operator UI's TypeScript source directory.
+!apps/frontend/lib/
+!apps/frontend/lib/**

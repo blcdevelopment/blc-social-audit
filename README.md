@@ -6,15 +6,17 @@ The Phase 1 build focuses on a website audit pipeline: URL submission, Playwrigh
 
 Production and AWS deployment work is intentionally prepared after the local application works end-to-end.
 
-## Phase 1 Foundation Through Epic P1-E4
+## Phase 1 Foundation Through Epic P1-E5
 
 The repo now includes the local app foundation, Epic P1-E2 collection pipeline, Epic
-P1-E3 scoring/commentary pipeline, and Epic P1-E4 PDF report generation:
+P1-E3 scoring/commentary pipeline, Epic P1-E4 PDF report generation, and the Epic
+P1-E5 internal operator UI:
 
 - FastAPI backend in `apps/api`.
 - Celery worker in `apps/worker`.
 - Shared settings, database, models, and lifecycle states in `apps/shared`.
-- Next.js TypeScript frontend shell in `apps/frontend`.
+- Next.js TypeScript operator UI in `apps/frontend` (audit submission, live progress,
+  result view, and audit history).
 - Alembic migrations in `migrations`.
 - Shared folders for `rubrics/`, `prompts/`, `templates/`, and `tests/fixtures/`.
 - Local Docker Compose stack for PostgreSQL, Redis, API, worker, and local report storage.
@@ -29,6 +31,9 @@ P1-E3 scoring/commentary pipeline, and Epic P1-E4 PDF report generation:
   PageSpeed, and crawl QA artifacts.
 - Branded WeasyPrint/Jinja2 PDF rendering with the BLC logo asset and text fallback.
 - Local PDF output in `storage/reports/` and download support through `GET /audits/{job_id}/report`.
+- Operator UI screens: audit submission with validation and error handling, an
+  auto-polling progress + result page (stage stepper, percentage, scores, findings,
+  PDF download), and an audit history table with status, scores, and report links.
 
 ## Local Setup
 
@@ -99,7 +104,7 @@ P1-E3 scoring/commentary pipeline, and Epic P1-E4 PDF report generation:
    pre-commit install
    ```
 
-10. Start the frontend shell:
+10. Start the operator UI:
 
    ```bash
    cd apps/frontend
@@ -107,7 +112,16 @@ P1-E3 scoring/commentary pipeline, and Epic P1-E4 PDF report generation:
    npm run dev
    ```
 
-   The frontend is available at `http://localhost:3000`.
+   The UI is available at `http://localhost:3000` and talks to the API at
+   `http://localhost:8000` by default. Point it at a different API with the
+   `NEXT_PUBLIC_API_BASE_URL` environment variable, e.g.:
+
+   ```bash
+   NEXT_PUBLIC_API_BASE_URL=http://localhost:8000 npm run dev
+   ```
+
+   The API's `API_CORS_ORIGINS` setting must include the UI origin
+   (`http://localhost:3000` by default).
 
 ## API Endpoints
 
@@ -116,6 +130,7 @@ P1-E3 scoring/commentary pipeline, and Epic P1-E4 PDF report generation:
 - `GET /openapi.json`
 - `POST /audits`
 - `GET /audits`
+- `GET /audits/{job_id}` (audit detail with scores and composed report payload)
 - `GET /audits/{job_id}/status`
 - `GET /audits/{job_id}/report`
 

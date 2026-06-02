@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import ipaddress
 import os
+import socket
 from collections import defaultdict
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -69,16 +70,10 @@ def is_same_site(start_url: str, candidate_url: str) -> bool:
     return _site_host(start_url) == _site_host(candidate_url)
 
 
-def _hostname_is_private(hostname: str) -> bool:
-    lowered = hostname.lower().rstrip(".")
-    if lowered in {"localhost"} or lowered.endswith(".localhost") or lowered.endswith(".local"):
-        return True
+IpAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
-    try:
-        ip_address = ipaddress.ip_address(lowered.strip("[]"))
-    except ValueError:
-        return False
 
+def _ip_is_blocked(ip_address: IpAddress) -> bool:
     return any(
         (
             ip_address.is_private,
@@ -91,14 +86,54 @@ def _hostname_is_private(hostname: str) -> bool:
     )
 
 
+def _hostname_is_private(hostname: str) -> bool:
+    lowered = hostname.lower().rstrip(".")
+    if lowered in {"localhost"} or lowered.endswith(".localhost") or lowered.endswith(".local"):
+        return True
+
+    try:
+        ip_address = ipaddress.ip_address(lowered.strip("[]"))
+    except ValueError:
+        return False
+
+    return _ip_is_blocked(ip_address)
+
+
+def _resolve_host_ips(hostname: str) -> list[IpAddress]:
+    resolved: list[IpAddress] = []
+    for info in socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP):
+        raw_address = str(info[4][0]).split("%")[0]
+        try:
+            resolved.append(ipaddress.ip_address(raw_address))
+        except ValueError:
+            continue
+    return resolved
+
+
 def assert_crawlable_url(url: str, allow_private_hosts: bool) -> None:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"}:
         raise CrawlerError("Only HTTP and HTTPS URLs can be crawled.")
     if parsed.hostname is None:
         raise CrawlerError("URL must include a hostname.")
-    if not allow_private_hosts and _hostname_is_private(parsed.hostname):
+    if allow_private_hosts:
+        return
+    if _hostname_is_private(parsed.hostname):
         raise CrawlerError("Private, local, and reserved hosts are not crawlable by default.")
+
+    # Resolve DNS so a public hostname that points at a private or cloud-metadata IP
+    # (e.g. 127.0.0.1 or 169.254.169.254) is rejected before any navigation happens.
+    try:
+        resolved = _resolve_host_ips(parsed.hostname)
+    except OSError as exc:
+        raise CrawlerError(f"Could not resolve host '{parsed.hostname}': {exc}") from exc
+    if not resolved:
+        raise CrawlerError(f"Host '{parsed.hostname}' did not resolve to any IP address.")
+    if any(_ip_is_blocked(ip_address) for ip_address in resolved):
+        raise CrawlerError(
+            "Host resolves to a private, loopback, link-local, or reserved IP address "
+            "and is not crawlable by default."
+        )
 
 
 def is_failed_http_status(status_code: int | None) -> bool:
@@ -482,6 +517,9 @@ async def crawl_site(url: str, settings: Settings, audit_id: str | None = None) 
 
             if not is_same_site(start_url, homepage.final_url):
                 raise CrawlerError("Homepage redirected outside the starting site.")
+            # Re-validate the post-redirect host so a redirect to a private/reserved
+            # address (or DNS that rebound during navigation) is rejected.
+            assert_crawlable_url(homepage.final_url, settings.crawler_allow_private_hosts)
 
             pages.append(homepage)
             discovered_links = discover_internal_links(homepage.html, homepage.final_url)

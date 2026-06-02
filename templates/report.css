@@ -135,8 +135,9 @@ td span {
 }
 
 .cover {
-  background: linear-gradient(135deg, var(--primary), #101828 68%);
-  color: #fff;
+  background: #fff;
+  border-top: 0.12in solid var(--primary);
+  color: #182230;
   display: flex;
   flex-direction: column;
   height: 11in;
@@ -144,10 +145,8 @@ td span {
   padding: 0.76in;
 }
 
-.cover h1,
-.cover .eyebrow,
-.cover .brand-subtitle {
-  color: #fff;
+.cover h1 {
+  color: var(--primary);
 }
 
 .cover-brand {
@@ -157,12 +156,9 @@ td span {
 }
 
 .brand-logo {
-  background: #fff;
-  border-radius: 6px;
-  max-height: 0.92in;
-  max-width: 2.55in;
-  object-fit: contain;
-  padding: 0.06in;
+  display: block;
+  height: 0.85in;
+  width: auto;
 }
 
 .brand-mark {
@@ -180,7 +176,7 @@ td span {
 
 .brand-subtitle,
 .cover-url {
-  color: #e4e7ec;
+  color: #475467;
 }
 
 .cover-main {
@@ -202,24 +198,24 @@ td span {
 }
 
 .cover-details div {
-  border-top: 1px solid rgba(255, 255, 255, 0.24);
+  border-top: 1px solid #e4e7ec;
   padding-top: 0.09in;
 }
 
 .cover-details dt {
-  color: #d0d5dd;
+  color: #667085;
   font-size: 8.5pt;
   text-transform: uppercase;
 }
 
 .cover-details dd {
-  color: #fff;
+  color: #182230;
   font-size: 12pt;
   margin: 0.04in 0 0;
 }
 
 .cover-footer {
-  color: #d0d5dd;
+  color: #667085;
   font-size: 9.5pt;
 }
 
