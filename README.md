@@ -6,11 +6,11 @@ The Phase 1 build focuses on a website audit pipeline: URL submission, Playwrigh
 
 Production and AWS deployment work is intentionally prepared after the local application works end-to-end.
 
-## Phase 1 Foundation Through Epic P1-E5
+## Phase 1 Foundation Through Epic P1-E6
 
 The repo now includes the local app foundation, Epic P1-E2 collection pipeline, Epic
-P1-E3 scoring/commentary pipeline, Epic P1-E4 PDF report generation, and the Epic
-P1-E5 internal operator UI:
+P1-E3 scoring/commentary pipeline, Epic P1-E4 PDF report generation, the Epic
+P1-E5 internal operator UI, and the Epic P1-E6 QA, packaging, and handoff work:
 
 - FastAPI backend in `apps/api`.
 - Celery worker in `apps/worker`.
@@ -34,6 +34,11 @@ P1-E5 internal operator UI:
 - Operator UI screens: audit submission with validation and error handling, an
   auto-polling progress + result page (stage stepper, percentage, scores, findings,
   PDF download), and an audit history table with status, scores, and report links.
+- Hermetic QA harness in `scripts/` that runs the real pipeline end-to-end and
+  proves reproducibility with no PostgreSQL, Docker, or paid API keys required.
+- A `Makefile` of common developer and QA commands.
+- Developer, architecture, rubric, operator, and known-limitations documentation
+  plus a QA report under `docs/`.
 
 ## Local Setup
 
@@ -139,3 +144,36 @@ composition, and branded PDF rendering. It crawls pages, collects or skips PageS
 extracts SEO/UX facts, scores the audit through YAML rubrics, generates ChatGPT commentary when
 `OPENAI_API_KEY` is configured, falls back locally when it is not, validates numeric claims,
 renders a PDF into local storage, and stores the final `pdf_path` in `audit_results`.
+
+## Common Commands
+
+A `Makefile` wraps the everyday commands (run `make help` for the full list):
+
+```bash
+make install      # poetry install --with dev
+make browsers     # install the Playwright Chromium browser
+make migrate      # alembic upgrade head
+make run-api      # uvicorn on :8000
+make run-worker   # celery worker
+make test         # pytest
+make qa           # P1-23 local end-to-end QA (hermetic; no infra/keys needed)
+make qa-repro     # P1-24 reproducibility QA
+make docker-up    # build + start the local stack
+```
+
+## Documentation
+
+| Doc | Contents |
+|---|---|
+| [docs/01_REQUIREMENTS.md](docs/01_REQUIREMENTS.md) | Product requirements |
+| [docs/02_IMPLEMENTATION.md](docs/02_IMPLEMENTATION.md) | Implementation plan |
+| [docs/03_PHASE1_JIRA_PLAN.md](docs/03_PHASE1_JIRA_PLAN.md) | Epics, tasks, done criteria |
+| [docs/04_PHASE1_CONFLUENCE_HANDOFF.md](docs/04_PHASE1_CONFLUENCE_HANDOFF.md) | Stakeholder handoff |
+| [docs/05_CODE_WALKTHROUGH.md](docs/05_CODE_WALKTHROUGH.md) | Line-by-line code tour |
+| [docs/06_CURRENT_ARCHITECTURE.mmd](docs/06_CURRENT_ARCHITECTURE.mmd) | Architecture diagram (Mermaid) |
+| [docs/07_SETUP_GUIDE.md](docs/07_SETUP_GUIDE.md) | Developer setup guide |
+| [docs/08_ARCHITECTURE_OVERVIEW.md](docs/08_ARCHITECTURE_OVERVIEW.md) | Architecture overview |
+| [docs/09_RUBRIC_GUIDE.md](docs/09_RUBRIC_GUIDE.md) | Scoring rubric guide & tuning |
+| [docs/10_OPERATOR_GUIDE.md](docs/10_OPERATOR_GUIDE.md) | Operator usage guide |
+| [docs/11_KNOWN_LIMITATIONS.md](docs/11_KNOWN_LIMITATIONS.md) | Known limitations |
+| [docs/12_QA_REPORT.md](docs/12_QA_REPORT.md) | End-to-end & reproducibility QA results |
