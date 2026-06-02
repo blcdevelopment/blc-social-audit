@@ -233,3 +233,4 @@ apps/frontend/tsconfig.tsbuildinfo
 # swallow the operator UI's TypeScript source directory.
 !apps/frontend/lib/
 !apps/frontend/lib/**
+.claude/
