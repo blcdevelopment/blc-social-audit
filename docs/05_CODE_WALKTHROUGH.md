@@ -1,9 +1,9 @@
 # Code Walkthrough And System Explanation
 
 **Project:** BLC Website Audit Automation
-**Phase:** Phase 1 foundation + Epic P1-E2 collection pipeline + Epic P1-E3 scoring/commentary + Epic P1-E4 PDF reports
+**Phase:** Phase 1 foundation + Epic P1-E2 collection pipeline + Epic P1-E3 scoring/commentary + Epic P1-E4 PDF reports + Epic P1-E5 operator UI
 **Audience:** Developer/operator handoff
-**Important note:** This document explains the current implemented code. Epic P1-E2 provides the real crawler, PageSpeed collector, and SEO/UX extractors. Epic P1-E3 adds YAML scoring, ChatGPT commentary, local fallback commentary, and deterministic grounding validation. Epic P1-E4 adds report payload composition, BLC branding configuration, and WeasyPrint PDF rendering.
+**Important note:** This document explains the current implemented code. Epic P1-E2 provides the real crawler, PageSpeed collector, and SEO/UX extractors. Epic P1-E3 adds YAML scoring, ChatGPT commentary, local fallback commentary, and deterministic grounding validation. Epic P1-E4 adds report payload composition, BLC branding configuration, and WeasyPrint PDF rendering. Epic P1-E5 adds the internal operator UI (audit submission, live progress/result, history) and the `GET /audits/{job_id}` detail endpoint that serves per-audit scores and the composed report payload to the UI.
 
 ---
 
@@ -20,9 +20,9 @@ The goal of Phase 1 is:
 5. Epic P1-E2 collects website crawl, PageSpeed, SEO, and UX/UI facts.
 6. Epic P1-E3 scores those facts, generates commentary, and validates numeric grounding.
 7. Epic P1-E4 renders a branded PDF report and stores its local `pdf_path`.
-8. Epic P1-E5 will replace the frontend shell with final operator UI screens.
+8. Epic P1-E5 provides the operator UI screens (submit, progress/result, history) plus the audit detail endpoint they consume.
 
-Right now Epic P1-E1 through P1-E4 are implemented:
+Right now Epic P1-E1 through P1-E5 are implemented:
 
 - Backend API foundation.
 - Worker foundation.
@@ -42,7 +42,8 @@ Right now Epic P1-E1 through P1-E4 are implemented:
 - Database models and migration.
 - Docker Compose local stack.
 - Conda/Poetry/Python tooling.
-- Next.js frontend shell.
+- Next.js operator UI: audit submission, live progress/result, and history screens.
+- `GET /audits/{job_id}` detail endpoint serving per-audit scores and report content to the UI.
 - Swagger UI.
 - Tests and pre-commit.
 
@@ -72,7 +73,10 @@ What each service does:
 - **Redis:** acts as the Celery message broker and result backend.
 - **Celery worker:** receives queued audit tasks and updates job lifecycle progress.
 
-The frontend shell exists under `apps/frontend`, but the real operator UI screens are planned for Epic P1-E5.
+The operator UI under `apps/frontend` (Epic P1-E5) is a separate Next.js process. In local
+development it runs on `http://localhost:3000` and calls the FastAPI backend over HTTP/CORS
+(`NEXT_PUBLIC_API_BASE_URL`, default `http://localhost:8000`). It submits audits, polls the audit
+detail endpoint for live progress, and links to the PDF report endpoint for download.
 
 ---
 
@@ -308,8 +312,9 @@ Submit URL
   -> mark complete
 ```
 
-The DB schema and API lifecycle are now wired through PDF generation. The remaining Phase 1 UI
-work is Epic P1-E5.
+The DB schema and API lifecycle are now wired through PDF generation, and the Epic P1-E5 operator
+UI consumes them. The remaining Phase 1 work is Epic P1-E6 (end-to-end QA, reproducibility QA,
+production packaging, and handoff documentation).
 
 ---
 
@@ -637,6 +642,20 @@ Used by:
 
 It includes scores only if an audit result exists.
 
+#### `_detail_response(job)`
+
+Converts an `AuditJob` into an `AuditDetailResponse`.
+
+Used by:
+
+- `GET /audits/{job_id}`
+
+If the job has an `AuditResult`, it reuses the worker's `compose_report_payload(job, result)` to
+build the full report payload (scores, executive summary, findings, recommendations, roadmap,
+PageSpeed/validation summaries). While the audit is still running there is no result yet, so
+`report` is `null`. This keeps a single source of truth for report shaping shared by the PDF and the
+UI.
+
 #### `create_audit(payload, db)`
 
 Route:
@@ -692,6 +711,23 @@ Responsibilities:
 - Load the job by UUID.
 - Return `404` if missing.
 - Return current status/progress if found.
+
+#### `get_audit_detail(job_id, db)`
+
+Route:
+
+```http
+GET /audits/{job_id}
+```
+
+Responsibilities:
+
+- Load the job by UUID.
+- Return `404` if missing.
+- Return job status/timestamps plus a composed `report` payload when a result exists.
+
+This is the endpoint the operator UI polls for the progress and result screen, because it returns
+per-audit scores and report content that `GET /audits/{job_id}/status` does not.
 
 #### `get_audit_report(job_id, db)`
 
@@ -769,6 +805,20 @@ Wrapper response:
 ```python
 audits: list[AuditListItem]
 ```
+
+#### `AuditDetailResponse`
+
+Response from `GET /audits/{job_id}`.
+
+Fields:
+
+- job identity, URL, niche, target audience
+- status, stage, progress, error message
+- timestamps
+- report availability
+- `report`: the composed `ReportPayload` (from `apps/worker/stages/report_payload.py`) when a result
+  exists, otherwise `null`. Reusing that model keeps the schema typed and the report shape identical
+  to the PDF.
 
 ---
 
@@ -1046,15 +1096,15 @@ celery -A apps.worker.celery_app.celery_app worker --loglevel=info
 
 Defines the current task implementation.
 
-#### `PLACEHOLDER_STAGES`
+#### Module-level task helpers
 
-Tuple of fake lifecycle stages used to prove the pipeline mechanics.
+`apps/worker/tasks.py` defines the real audit task plus small helpers (there is no placeholder or
+fake-stage logic):
 
-Each entry contains:
-
-```python
-(AuditStatus, stage_label, progress_pct)
-```
+- `_psi_page_urls(crawl_result, fallback_url)`: chooses the page URLs to send to PageSpeed.
+- `_upsert_audit_result(...)`: creates or updates the `AuditResult` row from the collected facts,
+  scores, commentary, and validation log.
+- `_store_pdf_result(db, result, pdf_result)`: saves the rendered PDF path and report metadata.
 
 #### `_mark_job(db, job, status, stage, progress_pct, error_message=None)`
 
@@ -1073,7 +1123,8 @@ It:
 
 #### `run_collection_audit(job_id)`
 
-Current Epic P1-E2 plus P1-E3 audit process.
+Current Epic P1-E2 through P1-E4 audit process (collection, scoring, commentary, validation, and PDF
+rendering).
 
 It:
 
@@ -1095,7 +1146,9 @@ It:
 16. Marks the job as `validating`.
 17. Strips unsupported numeric commentary claims and stores the validation log.
 18. Creates or updates the `AuditResult`.
-19. Marks the job complete.
+19. Marks the job as `rendering`.
+20. Renders the branded PDF and stores its local `pdf_path` and report metadata.
+21. Marks the job complete.
 
 If an exception happens:
 
@@ -1145,9 +1198,12 @@ Later module:
 
 ## 10. Frontend Code: `apps/frontend/`
 
-The frontend is a Next.js TypeScript shell.
+The frontend is the Epic P1-E5 internal operator UI: a Next.js (pages router) TypeScript app.
 
-It is intentionally light right now because the real operator UI is Epic P1-E5.
+It uses plain CSS (no Tailwind/component library, no extra runtime dependencies), a small typed API
+client, and a shared layout with the BLC logo. The three operator screens are submission, live
+progress/result, and audit history. All data is fetched client-side from the API using
+`NEXT_PUBLIC_API_BASE_URL` (default `http://localhost:8000`).
 
 ### 10.1 `apps/frontend/package.json`
 
@@ -1219,28 +1275,54 @@ It imports:
 
 Then renders the current page component.
 
-### 10.8 `apps/frontend/pages/index.tsx`
+### 10.8 `apps/frontend/lib/api.ts`
 
-Home page shell.
+Typed API client shared by every screen.
 
-Current purpose:
+Contents:
 
-- Shows the app name.
-- Explains that P1-E5 will add the real submission/progress/history UI.
-- Links to `/audits`.
+- `API_BASE_URL` from `NEXT_PUBLIC_API_BASE_URL` (default `http://localhost:8000`).
+- TypeScript interfaces mirroring the backend schemas (`AuditListItem`, `AuditDetail`,
+  `ReportPayload`, `ScoreCard`, etc.).
+- `ApiError` (carries the HTTP status) and a `request()` helper that parses FastAPI error detail
+  shapes and reports a clear message when the backend is unreachable.
+- Functions: `createAudit`, `listAudits`, `getAuditDetail`, and `reportUrl` (builds the PDF link).
 
-### 10.9 `apps/frontend/pages/audits.tsx`
+### 10.9 `apps/frontend/lib/format.ts`
 
-Audit history shell page.
+Presentation helpers shared across screens.
 
-Current purpose:
+Contents:
 
-- Placeholder for future audit history table.
-- Links back to `/`.
+- `isTerminal(status)` — true for `complete`/`failed`.
+- `statusLabel(status)` — human-readable label per audit status.
+- `statusTone(status)` — badge tone (`success`/`danger`/`progress`/`neutral`).
+- `scoreTone(score)` — colour band (`strong`/`fair`/`weak`/`empty`) matching the report bands.
+- `formatDate(value)` — locale date/time formatting with a `—` fallback.
 
-### 10.10 `apps/frontend/pages/audit/[id].tsx`
+### 10.10 `apps/frontend/components/Layout.tsx`
 
-Dynamic audit detail page shell.
+Shared page chrome.
+
+Renders the sticky top bar with the BLC logo (`/blc-logo.svg`) and primary nav (New Audit, Audit
+History), the page `<main>`, and the footer. Sets the page `<title>` per screen.
+
+### 10.11 `apps/frontend/pages/index.tsx`
+
+Audit submission page (story P1-20).
+
+Behavior:
+
+- Inputs: website URL (required), optional niche, optional target audience.
+- Client validation normalizes a missing scheme to `https://` and rejects whitespace or a
+  non-dotted host, showing an inline field error.
+- Submitting shows a loading spinner and disables inputs; on success it routes to
+  `/audit/{job_id}`.
+- API/network failures surface as an error alert via `ApiError`.
+
+### 10.12 `apps/frontend/pages/audit/[id].tsx`
+
+Audit progress and result page (story P1-21).
 
 Example route:
 
@@ -1248,24 +1330,44 @@ Example route:
 /audit/123
 ```
 
-Current purpose:
+Behavior:
 
-- Reads `id` from the URL.
-- Displays it.
-- Placeholder for future progress/PDF download UI.
+- Polls `GET /audits/{id}` every 2.5s until the status is terminal (chained `setTimeout`, cleaned up
+  on unmount); retries transient/network errors and stops on `404`.
+- While running: shows the current stage, a percentage progress bar, and a pipeline stepper.
+- On failure: shows the `error_message`.
+- On completion: shows the three score cards, executive summary, per-section findings and
+  recommendations, a metadata footer (PageSpeed, validation, rubric, model), and the
+  **Download PDF report** button (links to `GET /audits/{id}/report`).
 
-### 10.11 `apps/frontend/styles/globals.css`
+### 10.13 `apps/frontend/pages/audits.tsx`
 
-Global CSS for the frontend shell.
+Audit history page (story P1-22).
+
+Behavior:
+
+- Loads `GET /audits` (most recent first) with a manual refresh button.
+- Table columns: website (links to detail), status badge, submitted date, scores
+  (Lead · SEO · UX), and Details/PDF actions.
+- Score column shows colour-coded chips when complete, or `Failed` / `Incomplete` / `In progress`
+  labels otherwise. The PDF link appears only when `report_available` is true.
+- Empty and loading states are handled explicitly.
+
+### 10.14 `apps/frontend/public/blc-logo.svg`
+
+The Builder Lead Converter logo asset (copied from `assets/brand/blc-logo.svg`), served by Next.js
+at `/blc-logo.svg` and used in the layout header.
+
+### 10.15 `apps/frontend/styles/globals.css`
+
+Global CSS and the small branded design system.
 
 Defines:
 
-- box sizing
-- body font/colors
-- link styles
-- centered shell layout
-- panel card
-- heading/text styles
+- BLC brand CSS variables (primary `#1f74b7`, accent `#28864b`) and base typography.
+- App shell: top bar, nav, content container, footer.
+- Components: cards, form fields, buttons, alerts, spinner, status badges, score cards/chips,
+  progress bar and stepper, severity tags, the history table, and responsive rules.
 
 ---
 
@@ -1772,18 +1874,20 @@ This is expected at the current stage:
 - Grounding validation checks numeric claims and strips unsupported numeric sentences.
 - PDF files are generated in `storage/reports/` with the BLC logo from `assets/brand/blc-logo.svg`.
 - `/audits/{job_id}/report` streams the generated PDF when the file exists.
-- Frontend pages are shells, not the final operator UI.
+- `/audits/{job_id}` returns per-audit scores and the composed report payload for the UI.
+- The operator UI screens (submit, progress/result, history) are implemented and call the API.
 
-The remaining application work is primarily Epic P1-E5 operator UI and final end-to-end packaging.
+The remaining application work is primarily Epic P1-E6: end-to-end QA, reproducibility QA,
+production packaging, and handoff documentation.
 
 ---
 
 ## 21. What To Build Next
 
-Recommended next implementation order:
+Recommended next implementation order (Epic P1-E6):
 
-1. Build the final operator UI screens.
-2. Run local end-to-end QA through the UI.
+1. Run local end-to-end QA through the UI.
+2. Run reproducibility QA (same site twice, compare scores and rule breakdowns).
 3. Prepare production packaging.
 4. Render 5-10 sample reports from real builder/remodeler sites.
 5. Finalize deployment and handoff checks.

@@ -18,4 +18,6 @@ celery_app.conf.update(
     task_serializer="json",
     task_track_started=True,
     timezone="UTC",
+    task_time_limit=settings.celery_task_time_limit_seconds,
+    task_soft_time_limit=settings.celery_task_soft_time_limit_seconds,
 )

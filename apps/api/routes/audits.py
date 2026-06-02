@@ -5,12 +5,13 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import FileResponse
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from apps.api.deps import get_db_session
 from apps.api.schemas.audits import (
     AuditCreateRequest,
     AuditCreateResponse,
+    AuditDetailResponse,
     AuditListItem,
     AuditListResponse,
     AuditStatusResponse,
@@ -18,6 +19,7 @@ from apps.api.schemas.audits import (
 from apps.shared.audit_states import AuditStatus
 from apps.shared.config import get_settings
 from apps.shared.models import AuditJob
+from apps.worker.stages.report_payload import compose_report_payload
 
 router = APIRouter(prefix="/audits", tags=["audits"])
 DbSession = Annotated[Session, Depends(get_db_session)]
@@ -41,6 +43,27 @@ def _status_response(job: AuditJob) -> AuditStatusResponse:
         started_at=job.started_at,
         completed_at=job.completed_at,
         report_available=_report_available(job),
+    )
+
+
+def _detail_response(job: AuditJob) -> AuditDetailResponse:
+    report = None
+    if job.result is not None:
+        report = compose_report_payload(job, job.result)
+    return AuditDetailResponse(
+        job_id=job.id,
+        url=job.url,
+        niche=job.niche,
+        target_audience=job.target_audience,
+        status=job.status,
+        current_stage=job.current_stage,
+        progress_pct=job.progress_pct,
+        error_message=job.error_message,
+        created_at=job.created_at,
+        started_at=job.started_at,
+        completed_at=job.completed_at,
+        report_available=_report_available(job),
+        report=report,
     )
 
 
@@ -113,7 +136,11 @@ def list_audits(
     offset: AuditOffset = 0,
 ) -> AuditListResponse:
     jobs = db.scalars(
-        select(AuditJob).order_by(AuditJob.created_at.desc()).offset(offset).limit(limit)
+        select(AuditJob)
+        .options(selectinload(AuditJob.result))
+        .order_by(AuditJob.created_at.desc())
+        .offset(offset)
+        .limit(limit)
     ).all()
     return AuditListResponse(audits=[_list_item(job) for job in jobs])
 
@@ -124,6 +151,14 @@ def get_audit_status(job_id: UUID, db: DbSession) -> AuditStatusResponse:
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audit job not found.")
     return _status_response(job)
+
+
+@router.get("/{job_id}", response_model=AuditDetailResponse)
+def get_audit_detail(job_id: UUID, db: DbSession) -> AuditDetailResponse:
+    job = db.get(AuditJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audit job not found.")
+    return _detail_response(job)
 
 
 @router.get("/{job_id}/report")

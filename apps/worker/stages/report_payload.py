@@ -169,7 +169,7 @@ def compose_report_payload(job: Any, result: Any) -> ReportPayload:
     commentary = _dict(result.commentary)
 
     final_url = str(crawled_pages.get("final_url") or job.url)
-    generated_at = datetime.now(UTC)
+    generated_at = _report_generated_at(result)
     metadata = ReportMetadata(
         audit_id=job.id,
         source_url=str(job.url),
@@ -435,6 +435,29 @@ def _crawl_summary(crawled_pages: JsonDict) -> CrawlSummary:
         failed_page_items=[_dict(page) for page in _list(crawled_pages.get("failed_pages"))],
         skipped_page_items=[_dict(page) for page in _list(crawled_pages.get("skipped_pages"))],
     )
+
+
+def _report_generated_at(result: Any) -> datetime:
+    """Return a stable report-generation timestamp.
+
+    Prefer the PDF renderer's recorded ``generated_at``, then the result row's
+    ``created_at`` (collection completion), so the value does not drift every time
+    the detail endpoint is polled. Only fall back to "now" when neither exists.
+    """
+    metadata = _dict(getattr(result, "report_metadata", None))
+    raw = metadata.get("generated_at")
+    if isinstance(raw, str):
+        try:
+            parsed = datetime.fromisoformat(raw)
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+        except ValueError:
+            pass
+
+    created = getattr(result, "created_at", None)
+    if isinstance(created, datetime):
+        return created if created.tzinfo else created.replace(tzinfo=UTC)
+
+    return datetime.now(UTC)
 
 
 def _domain(url: str) -> str:

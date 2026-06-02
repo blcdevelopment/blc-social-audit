@@ -3,6 +3,8 @@ from uuid import UUID
 
 from pydantic import AnyHttpUrl, BaseModel, Field
 
+from apps.worker.stages.report_payload import ReportPayload
+
 
 class AuditCreateRequest(BaseModel):
     url: AnyHttpUrl
@@ -45,3 +47,19 @@ class AuditListItem(BaseModel):
 
 class AuditListResponse(BaseModel):
     audits: list[AuditListItem]
+
+
+class AuditDetailResponse(BaseModel):
+    job_id: UUID
+    url: str
+    niche: str | None
+    target_audience: str | None
+    status: str
+    current_stage: str | None
+    progress_pct: int
+    error_message: str | None
+    created_at: datetime
+    started_at: datetime | None
+    completed_at: datetime | None
+    report_available: bool
+    report: ReportPayload | None = None

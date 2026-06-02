@@ -15,6 +15,7 @@ MappingLike = dict[str, Any]
 PAGESPEED_ENDPOINT = "https://www.googleapis.com/pagespeedonline/v5/runPagespeed"
 PSI_STRATEGIES = ("mobile", "desktop")
 PSI_CATEGORIES = ("performance", "accessibility", "best-practices", "seo")
+_CACHE_MAX_ENTRIES = 512
 _CACHE: dict[tuple[str, str], tuple[float, JsonDict]] = {}
 
 
@@ -95,8 +96,12 @@ def _cache_get(url: str, strategy: str, ttl_seconds: int) -> JsonDict | None:
 
 
 def _cache_set(url: str, strategy: str, value: JsonDict, ttl_seconds: int) -> None:
-    if ttl_seconds > 0:
-        _CACHE[(url, strategy)] = (time.time(), copy.deepcopy(value))
+    if ttl_seconds <= 0:
+        return
+    if len(_CACHE) >= _CACHE_MAX_ENTRIES and (url, strategy) not in _CACHE:
+        oldest_key = min(_CACHE, key=lambda key: _CACHE[key][0])
+        _CACHE.pop(oldest_key, None)
+    _CACHE[(url, strategy)] = (time.time(), copy.deepcopy(value))
 
 
 def _build_params(url: str, strategy: str) -> list[tuple[str, str]]:

@@ -1,5 +1,5 @@
 %% BLC Website Audit Automation - current implemented architecture
-%% Generated from local repo audit on 2026-05-29.
+%% Generated from local repo audit on 2026-05-29; updated 2026-06-01 for the Epic P1-E5 operator UI.
 %% Solid arrows are implemented runtime paths.
 %% Dotted arrows are scaffolds, placeholders, or future-epic integration points.
 
@@ -13,12 +13,16 @@ flowchart TB
 
   Operator["BLC operator / API client"]:::implemented
 
-  subgraph Frontend["apps/frontend - Next.js TypeScript shell"]
+  subgraph Frontend["apps/frontend - Next.js TypeScript operator UI (P1-E5)"]
     FrontendApp["pages/_app.tsx"]:::implemented
-    HomePage["pages/index.tsx<br/>Submission landing shell"]:::implemented
-    AuditsPage["pages/audits.tsx<br/>History shell"]:::implemented
-    AuditDetailPage["pages/audit/[id].tsx<br/>Detail shell"]:::implemented
-    FrontendStyles["styles/globals.css"]:::implemented
+    HomePage["pages/index.tsx<br/>Audit submission (P1-20)"]:::implemented
+    AuditsPage["pages/audits.tsx<br/>Audit history (P1-22)"]:::implemented
+    AuditDetailPage["pages/audit/[id].tsx<br/>Progress + result, polling, PDF (P1-21)"]:::implemented
+    Layout["components/Layout.tsx<br/>Header with BLC logo and nav"]:::implemented
+    ApiClient["lib/api.ts<br/>Typed API client and error handling"]:::implemented
+    FormatHelpers["lib/format.ts<br/>Status/score/date presentation helpers"]:::implemented
+    LogoAsset["public/blc-logo.svg<br/>BLC logo asset"]:::implemented
+    FrontendStyles["styles/globals.css<br/>Branded design system"]:::implemented
     FrontendTooling["package.json<br/>tsconfig.json<br/>ESLint config"]:::config
   end
 
@@ -30,6 +34,7 @@ flowchart TB
     CreateAudit["POST /audits<br/>Create job and optionally enqueue"]:::implemented
     ListAudits["GET /audits<br/>List recent jobs"]:::implemented
     StatusAudit["GET /audits/{job_id}/status<br/>Read progress"]:::implemented
+    DetailAudit["GET /audits/{job_id}<br/>Scores + composed report payload (P1-E5)"]:::implemented
     ReportAudit["GET /audits/{job_id}/report<br/>Stream local PDF when available"]:::implemented
     ApiDockerfile["apps/api/Dockerfile<br/>Python image with uv install"]:::config
   end
@@ -147,9 +152,18 @@ flowchart TB
   HomePage --> AuditsPage
   AuditsPage --> HomePage
   AuditDetailPage --> AuditsPage
-  HomePage -.->|"operator API integration planned in P1-E5"| FastApiApp
-  AuditsPage -.->|"history table planned in P1-E5"| ListAudits
-  AuditDetailPage -.->|"polling and download planned in P1-E5"| StatusAudit
+  HomePage --> ApiClient
+  AuditsPage --> ApiClient
+  AuditDetailPage --> ApiClient
+  HomePage --> Layout
+  AuditsPage --> Layout
+  AuditDetailPage --> Layout
+  Layout --> LogoAsset
+  ApiClient --> FormatHelpers
+  ApiClient -->|"POST /audits"| CreateAudit
+  ApiClient -->|"GET /audits"| ListAudits
+  ApiClient -->|"poll GET /audits/{job_id}"| DetailAudit
+  AuditDetailPage -->|"download link"| ReportAudit
 
   FastApiApp --> HealthRouter
   FastApiApp --> AuditsRouter
@@ -157,11 +171,14 @@ flowchart TB
   AuditsRouter --> CreateAudit
   AuditsRouter --> ListAudits
   AuditsRouter --> StatusAudit
+  AuditsRouter --> DetailAudit
   AuditsRouter --> ReportAudit
   CreateAudit --> AuditSchemas
   CreateAudit --> Database
   ListAudits --> Database
   StatusAudit --> Database
+  DetailAudit --> Database
+  DetailAudit -->|"reuse compose_report_payload"| ReportPayloadStage
   ReportAudit --> Database
 
   Settings --> FastApiApp
@@ -301,7 +318,7 @@ flowchart TB
   HandoffDoc --> WalkthroughDoc
   WalkthroughDoc --> ArchitectureDoc
 
-  subgraph EpicStatus["Epic P1-E1 through P1-E4 coverage in current repo"]
+  subgraph EpicStatus["Epic P1-E1 through P1-E5 coverage in current repo"]
     P11["P1-1 project structure: covered"]:::implemented
     P12["P1-2 local tooling: covered in repo; uv is used in Dockerfiles but not on this active shell PATH"]:::implemented
     P13["P1-3 Docker Compose stack: covered"]:::implemented
@@ -321,7 +338,10 @@ flowchart TB
     P117["P1-17 branded PDF template: cover, summary, scores, SEO, UX/UI, roadmap, appendix, headers, footers"]:::implemented
     P118["P1-18 branding config: logo path, colors, fonts, placeholder fallback"]:::implemented
     P119["P1-19 PDF QA: short, medium, long, missing PSI, failed internal pages"]:::implemented
-    LaterEpics["Final operator UI, QA packaging, and handoff remain later epics"]:::placeholder
+    P120["P1-20 audit submission page: URL, niche, audience, validation, loading, API error states"]:::implemented
+    P121["P1-21 progress and result page: status polling, stage, percentage, failure, scores, PDF download"]:::implemented
+    P122["P1-22 audit history page: recent audits, status, created date, scores, detail link, PDF link, failed/incomplete labels"]:::implemented
+    LaterEpics["Epic P1-E6 (QA, reproducibility, packaging, handoff) remains"]:::placeholder
   end
 
   JiraDoc --> P11
@@ -343,4 +363,7 @@ flowchart TB
   JiraDoc --> P117
   JiraDoc --> P118
   JiraDoc --> P119
-  P119 -.-> LaterEpics
+  JiraDoc --> P120
+  JiraDoc --> P121
+  JiraDoc --> P122
+  P122 -.-> LaterEpics

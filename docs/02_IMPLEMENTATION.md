@@ -807,17 +807,19 @@ Implementation can be either a deterministic matcher or a second OpenAI call ask
 
 ## 8. Build instructions — frontend
 
-Next.js App Router, TypeScript, Tailwind, shadcn/ui.
+Next.js (pages router), TypeScript, plain CSS. Implemented in Epic P1-E5 with no extra runtime
+dependencies (no Tailwind/shadcn) and a small typed API client (`lib/api.ts`) that calls the backend
+via `NEXT_PUBLIC_API_BASE_URL` (default `http://localhost:8000`).
 
 Three pages, that's it:
 
-1. **`/`** — single form: URL field, optional niche dropdown, submit button. POST to `/api/audits`, redirect to `/audit/{id}`.
+1. **`/`** — single form: URL field, optional niche, optional target audience, submit button. POST to `/audits`, redirect to `/audit/{id}`.
 
-2. **`/audit/[id]`** — polls `/api/audits/{id}/status` every 2s. Shows progress bar with current stage label. When complete, shows scores + download button.
+2. **`/audit/[id]`** — polls the audit detail endpoint `/audits/{id}` every ~2.5s (status alone does not include scores). Shows a progress bar with the current stage label and a stage stepper. When complete, shows scores, findings/recommendations, and the PDF download button.
 
-3. **`/audits`** — list of past audits with timestamps, URLs, scores, links to PDFs. Useful for BLC team to see history during evaluation.
+3. **`/audits`** — list of past audits with timestamps, URLs, scores, status, and links to PDFs. Useful for the BLC team to see history during evaluation.
 
-No login. No fancy state management. React Query for polling.
+No login. No fancy state management. Polling is plain chained `setTimeout` that stops on terminal status.
 
 ---
 
@@ -913,6 +915,7 @@ This section defines build order by dependency, not by calendar. The rule: prove
 
 - `POST /audits`
 - `GET /audits/{id}/status`
+- `GET /audits/{id}` — audit detail with scores and composed report payload (added in P1-E5 for the UI)
 - `GET /audits/{id}/report`
 - `GET /audits`
 - `GET /health`

@@ -1,5 +1,8 @@
+import ipaddress
+
 import pytest
 
+from apps.worker.stages import crawler
 from apps.worker.stages.crawler import (
     CrawlerError,
     assert_crawlable_url,
@@ -51,6 +54,31 @@ def test_private_hosts_are_blocked_by_default() -> None:
         assert_crawlable_url("http://127.0.0.1:8000", allow_private_hosts=False)
 
     assert_crawlable_url("http://127.0.0.1:8000", allow_private_hosts=True)
+
+
+def test_public_hostname_resolving_to_private_ip_is_blocked(monkeypatch) -> None:
+    # DNS-rebinding / metadata SSRF: a public name that resolves to a private IP.
+    monkeypatch.setattr(
+        crawler, "_resolve_host_ips", lambda hostname: [ipaddress.ip_address("169.254.169.254")]
+    )
+    with pytest.raises(CrawlerError, match="private"):
+        assert_crawlable_url("https://evil.example.com/", allow_private_hosts=False)
+
+
+def test_public_hostname_resolving_to_public_ip_is_allowed(monkeypatch) -> None:
+    monkeypatch.setattr(
+        crawler, "_resolve_host_ips", lambda hostname: [ipaddress.ip_address("93.184.216.34")]
+    )
+    assert_crawlable_url("https://example.com/", allow_private_hosts=False)
+
+
+def test_unresolvable_host_is_blocked(monkeypatch) -> None:
+    def _raise(hostname: str):
+        raise OSError("Name or service not known")
+
+    monkeypatch.setattr(crawler, "_resolve_host_ips", _raise)
+    with pytest.raises(CrawlerError, match="resolve"):
+        assert_crawlable_url("https://does-not-exist.example/", allow_private_hosts=False)
 
 
 def test_failed_http_status_detection() -> None:

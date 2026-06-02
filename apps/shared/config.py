@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     celery_broker_url: str = "redis://localhost:6379/0"
     celery_result_backend: str = "redis://localhost:6379/0"
     audit_enqueue_enabled: bool = True
+    # Hard limit kills the worker process; soft limit raises inside the task so the
+    # job can be marked FAILED instead of leaving a row stuck in a non-terminal state.
+    celery_task_time_limit_seconds: int = Field(default=900, ge=30)
+    celery_task_soft_time_limit_seconds: int = Field(default=840, ge=15)
 
     local_report_storage_dir: Path = Path("./storage/reports")
     local_screenshot_storage_dir: Path = Path("./storage/screenshots")
@@ -74,6 +78,15 @@ class Settings(BaseSettings):
         if value == "":
             return None
         return value
+
+    @model_validator(mode="after")
+    def validate_celery_time_limits(self) -> "Settings":
+        if self.celery_task_soft_time_limit_seconds >= self.celery_task_time_limit_seconds:
+            raise ValueError(
+                "celery_task_soft_time_limit_seconds must be less than "
+                "celery_task_time_limit_seconds so the soft limit fires first."
+            )
+        return self
 
 
 @lru_cache
