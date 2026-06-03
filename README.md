@@ -177,3 +177,4 @@ make docker-up    # build + start the local stack
 | [docs/10_OPERATOR_GUIDE.md](docs/10_OPERATOR_GUIDE.md) | Operator usage guide |
 | [docs/11_KNOWN_LIMITATIONS.md](docs/11_KNOWN_LIMITATIONS.md) | Known limitations |
 | [docs/12_QA_REPORT.md](docs/12_QA_REPORT.md) | End-to-end & reproducibility QA results |
+| [docs/13_INTERNAL_DEPLOYMENT_GUIDE.md](docs/13_INTERNAL_DEPLOYMENT_GUIDE.md) | Internal deployment guide & Epic P1-E7 plan |

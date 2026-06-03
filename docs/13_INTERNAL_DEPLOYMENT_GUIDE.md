@@ -42,9 +42,40 @@ UI in `apps/frontend`. The options below build on that.
 | **C. Small cloud VM, locked to VPN/allowlist** | Same as B but on a cloud VM (EC2/Lightsail/DigitalOcean) reachable only via VPN or IP allowlist | Off-laptop, stable URL for the test window | Small cloud cost, must lock down networking (no auth in app yet) | Team is distributed and a shared laptop won't work |
 | **D. Full managed/AWS production** | Managed Postgres, container orchestration, object storage, TLS, auth, monitoring | Real production posture | Out of scope for testing; depends on Phase 2 hardening (auth, SSRF, storage) | **Deferred — Phase 2**, see §6 |
 
-**Recommendation:** Start with **Option A** for a single operator smoke test, then
-use **Option B** (one shared internal host, Docker Compose, private network/VPN
-only) for the team testing window. Treat **Option D** as Phase 2.
+### 2.1 R&D Findings & Decision Record (P1-27)
+
+**Cost / effort to stand up:**
+
+| Option | Infra cost | Setup effort | Ongoing ownership |
+|---|---|---|---|
+| A. localhost | $0 | Minutes (already documented) | The operator keeps their machine on |
+| B. shared internal host | $0 if a box already exists, else a small VM | ~1–2 hrs first time | One owner restarts/maintains the host |
+| C. cloud VM (VPN/allowlist) | Low (small VM + VPN) | ~2–4 hrs (provision + lock down networking) | One owner + networking |
+| D. managed/AWS | Ongoing (managed DB, compute, object storage, TLS) | Days — Phase 2 hardening must come first | Real ops burden |
+
+**Decision (recommended):** Use **Option A** for the first single-operator smoke
+test, then **Option B** — one shared internal host running the existing Docker
+Compose stack, reachable only over the private network/VPN — for the team testing
+window. Treat **Option D** as Phase 2.
+
+**Why:**
+
+- The Compose stack (postgres, redis, api, worker) already works and runs
+  migrations on start, so Option B reuses proven infrastructure with near-zero new code.
+- A single shared instance gives the team one URL and one shared audit history,
+  which is exactly what a testing window needs — not uptime or scale.
+- The app has **no authentication** and only **partial SSRF protection**, so every
+  option must stay on a private network/VPN. That rules out public exposure and
+  makes full managed/AWS hosting (Option D) premature until Phase 2 hardening.
+
+**Constraints acknowledged** (see §4 and [`docs/11_KNOWN_LIMITATIONS.md`](11_KNOWN_LIMITATIONS.md)):
+no auth, partial SSRF, local-filesystem report storage, dev-flavoured Compose.
+All acceptable for a short internal test; none acceptable for public production.
+
+**Revisit when:** the team needs external/client access, multiple concurrent
+operators at scale, or persistent hosting — at which point Phase 2 (P1-32) takes over.
+
+**Status:** ✅ Done — this section is the P1-27 deliverable.
 
 ---
 
@@ -155,19 +186,22 @@ scope Phase 2.
 
 Recommended order: P1-27 → P1-28 → P1-29 → P1-30 → P1-31 → P1-32.
 
-### P1-27 R&D: Deployment Options For Internal Use
+**Status legend:** ✅ Done · ⬜ To do.
+
+### P1-27 R&D: Deployment Options For Internal Use — ✅ Done
 
 **Issue type:** Task
 **Goal:** Compare realistic ways to deploy the existing stack for internal testing and write down the trade-offs.
+**Deliverable:** Findings + decision record in §2 and §2.1 of this doc.
 **Subtasks:**
 
-- Review the existing Docker Compose stack and frontend run/build options.
-- List options: localhost, shared internal host, cloud VM (VPN/allowlist), managed/AWS.
-- Capture pros/cons, cost, and security implications of each.
-- Note constraints: no auth, partial SSRF, local-only storage.
-- Record findings in this doc (§2).
+- [x] Review the existing Docker Compose stack and frontend run/build options.
+- [x] List options: localhost, shared internal host, cloud VM (VPN/allowlist), managed/AWS.
+- [x] Capture pros/cons, cost, and security implications of each.
+- [x] Note constraints: no auth, partial SSRF, local-only storage.
+- [x] Record findings in this doc (§2, §2.1).
 
-### P1-28 Choose & Document The Internal Deployment Approach
+### P1-28 Choose & Document The Internal Deployment Approach — ⬜ To do
 
 **Issue type:** Task
 **Goal:** Pick the recommended approach for the team test window and write a repeatable runbook.
@@ -179,7 +213,7 @@ Recommended order: P1-27 → P1-28 → P1-29 → P1-30 → P1-31 → P1-32.
 - Document the internal-use security guardrails (§4).
 - Get sign-off from the team owner of the host.
 
-### P1-29 Stand Up The Internal Test Deployment
+### P1-29 Stand Up The Internal Test Deployment — ⬜ To do
 
 **Issue type:** Task
 **Goal:** Get a working, team-reachable instance running on the chosen internal environment.
@@ -191,7 +225,7 @@ Recommended order: P1-27 → P1-28 → P1-29 → P1-30 → P1-31 → P1-32.
 - Confirm `/health`, run one end-to-end smoke audit, confirm PDF download.
 - Share the internal URL + short usage note with the team.
 
-### P1-30 Validate The System On Team-Provided Sites
+### P1-30 Validate The System On Team-Provided Sites — ⬜ To do
 
 **Issue type:** Task
 **Goal:** Run real audits on sites the team provides and capture results and failures.
@@ -203,7 +237,7 @@ Recommended order: P1-27 → P1-28 → P1-29 → P1-30 → P1-31 → P1-32.
 - Note crawler page-cap effects and any scoring surprises.
 - Summarize results in a short test log.
 
-### P1-31 Update Documentation With Deployment & Test Insights
+### P1-31 Update Documentation With Deployment & Test Insights — ⬜ To do
 
 **Issue type:** Task
 **Goal:** Fold everything learned back into the docs so the next person can repeat it.
@@ -215,7 +249,7 @@ Recommended order: P1-27 → P1-28 → P1-29 → P1-30 → P1-31 → P1-32.
 - Capture the test-site results summary as an appendix or linked note.
 - Note any `.env` / CORS / networking gotchas discovered.
 
-### P1-32 R&D: Phase 2 Scope & Readiness
+### P1-32 R&D: Phase 2 Scope & Readiness — ⬜ To do
 
 **Issue type:** Task
 **Goal:** Use the internal test results to scope Phase 2 (productionization + deferred features).
