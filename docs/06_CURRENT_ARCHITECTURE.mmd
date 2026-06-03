@@ -318,7 +318,7 @@ flowchart TB
   HandoffDoc --> WalkthroughDoc
   WalkthroughDoc --> ArchitectureDoc
 
-  subgraph EpicStatus["Epic P1-E1 through P1-E5 coverage in current repo"]
+  subgraph EpicStatus["Epic P1-E1 through P1-E6 coverage in current repo"]
     P11["P1-1 project structure: covered"]:::implemented
     P12["P1-2 local tooling: covered in repo; uv is used in Dockerfiles but not on this active shell PATH"]:::implemented
     P13["P1-3 Docker Compose stack: covered"]:::implemented
@@ -341,7 +341,10 @@ flowchart TB
     P120["P1-20 audit submission page: URL, niche, audience, validation, loading, API error states"]:::implemented
     P121["P1-21 progress and result page: status polling, stage, percentage, failure, scores, PDF download"]:::implemented
     P122["P1-22 audit history page: recent audits, status, created date, scores, detail link, PDF link, failed/incomplete labels"]:::implemented
-    LaterEpics["Epic P1-E6 (QA, reproducibility, packaging, handoff) remains"]:::placeholder
+    P123["P1-23 local end-to-end QA: hermetic full-pipeline harness"]:::implemented
+    P124["P1-24 reproducibility QA: repeated scores and rule breakdowns match"]:::implemented
+    P125["P1-25 production packaging: API/worker Dockerfiles, Compose startup, migration command, local storage"]:::implemented
+    P126["P1-26 developer and operator documentation: setup, architecture, rubric, operator, limitations, QA report"]:::implemented
   end
 
   JiraDoc --> P11
@@ -366,4 +369,7 @@ flowchart TB
   JiraDoc --> P120
   JiraDoc --> P121
   JiraDoc --> P122
-  P122 -.-> LaterEpics
+  JiraDoc --> P123
+  JiraDoc --> P124
+  JiraDoc --> P125
+  JiraDoc --> P126

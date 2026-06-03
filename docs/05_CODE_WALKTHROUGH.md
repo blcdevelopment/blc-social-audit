@@ -1,9 +1,9 @@
 # Code Walkthrough And System Explanation
 
 **Project:** BLC Website Audit Automation
-**Phase:** Phase 1 foundation + Epic P1-E2 collection pipeline + Epic P1-E3 scoring/commentary + Epic P1-E4 PDF reports + Epic P1-E5 operator UI
+**Phase:** Phase 1 foundation + Epic P1-E2 collection pipeline + Epic P1-E3 scoring/commentary + Epic P1-E4 PDF reports + Epic P1-E5 operator UI + Epic P1-E6 QA, packaging, and handoff
 **Audience:** Developer/operator handoff
-**Important note:** This document explains the current implemented code. Epic P1-E2 provides the real crawler, PageSpeed collector, and SEO/UX extractors. Epic P1-E3 adds YAML scoring, ChatGPT commentary, local fallback commentary, and deterministic grounding validation. Epic P1-E4 adds report payload composition, BLC branding configuration, and WeasyPrint PDF rendering. Epic P1-E5 adds the internal operator UI (audit submission, live progress/result, history) and the `GET /audits/{job_id}` detail endpoint that serves per-audit scores and the composed report payload to the UI.
+**Important note:** This document explains the current implemented code. Epic P1-E2 provides the real crawler, PageSpeed collector, and SEO/UX extractors. Epic P1-E3 adds YAML scoring, ChatGPT commentary, local fallback commentary, and deterministic grounding validation. Epic P1-E4 adds report payload composition, BLC branding configuration, and WeasyPrint PDF rendering. Epic P1-E5 adds the internal operator UI (audit submission, live progress/result, history) and the `GET /audits/{job_id}` detail endpoint that serves per-audit scores and the composed report payload to the UI. Epic P1-E6 adds hermetic end-to-end QA, reproducibility QA, production packaging preparation, and handoff documentation.
 
 ---
 
@@ -21,8 +21,9 @@ The goal of Phase 1 is:
 6. Epic P1-E3 scores those facts, generates commentary, and validates numeric grounding.
 7. Epic P1-E4 renders a branded PDF report and stores its local `pdf_path`.
 8. Epic P1-E5 provides the operator UI screens (submit, progress/result, history) plus the audit detail endpoint they consume.
+9. Epic P1-E6 proves the pipeline with repeatable QA, prepares local container packaging, and documents developer/operator handoff.
 
-Right now Epic P1-E1 through P1-E5 are implemented:
+Right now Epic P1-E1 through P1-E6 are implemented:
 
 - Backend API foundation.
 - Worker foundation.
@@ -44,6 +45,10 @@ Right now Epic P1-E1 through P1-E5 are implemented:
 - Conda/Poetry/Python tooling.
 - Next.js operator UI: audit submission, live progress/result, and history screens.
 - `GET /audits/{job_id}` detail endpoint serving per-audit scores and report content to the UI.
+- Hermetic QA harness (`scripts/qa_e2e.py`, `scripts/qa_reproducibility.py`, and shared `scripts/qa_common.py`).
+- Makefile QA commands for P1-23 and P1-24 (`make qa`, `make qa-repro`).
+- API and worker Dockerfiles plus Docker Compose startup/migration commands.
+- Developer setup, architecture, rubric, operator, known-limitations, and QA report documentation.
 - Swagger UI.
 - Tests and pre-commit.
 
@@ -312,9 +317,10 @@ Submit URL
   -> mark complete
 ```
 
-The DB schema and API lifecycle are now wired through PDF generation, and the Epic P1-E5 operator
-UI consumes them. The remaining Phase 1 work is Epic P1-E6 (end-to-end QA, reproducibility QA,
-production packaging, and handoff documentation).
+The DB schema and API lifecycle are wired through PDF generation, and the Epic P1-E5 operator
+UI consumes them. Epic P1-E6 is also in place: the QA harness runs the real pipeline against
+local fixtures, the reproducibility harness compares repeated score/rule output, Docker packaging
+is prepared for the API and worker, and the handoff documentation is written.
 
 ---
 
@@ -1876,21 +1882,20 @@ This is expected at the current stage:
 - `/audits/{job_id}/report` streams the generated PDF when the file exists.
 - `/audits/{job_id}` returns per-audit scores and the composed report payload for the UI.
 - The operator UI screens (submit, progress/result, history) are implemented and call the API.
-
-The remaining application work is primarily Epic P1-E6: end-to-end QA, reproducibility QA,
-production packaging, and handoff documentation.
+- Epic P1-E6 QA and handoff work is implemented through the hermetic QA scripts, reproducibility
+  script, Docker packaging files, Makefile commands, and docs under `docs/`.
 
 ---
 
 ## 21. What To Build Next
 
-Recommended next implementation order (Epic P1-E6):
+Recommended next validation order before a client demo or Phase 2:
 
-1. Run local end-to-end QA through the UI.
-2. Run reproducibility QA (same site twice, compare scores and rule breakdowns).
-3. Prepare production packaging.
+1. Run `make test`, `make qa`, and `make qa-repro` inside the `social-audit` Conda environment.
+2. Run `docker compose up --build` and submit a live audit through the operator UI.
+3. If API keys are available, smoke-test the live PageSpeed and OpenAI paths.
 4. Render 5-10 sample reports from real builder/remodeler sites.
-5. Finalize deployment and handoff checks.
+5. Decide Phase 2 scope for social audits, auth, analytics integrations, sharing, and deployment.
 
 The current foundation is ready for those additions because:
 
