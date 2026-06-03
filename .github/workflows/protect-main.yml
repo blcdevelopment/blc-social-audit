@@ -24,11 +24,14 @@ jobs:
 
       - name: Fail on a direct (non-merge) commit
         run: |
-          # `git rev-list --parents -n 1 HEAD` prints "<commit> <parent>..."
-          #   normal commit  -> 2 tokens (one parent)
-          #   PR merge commit -> 3+ tokens (two parents)  -> allowed
-          token_count=$(git rev-list --parents -n 1 HEAD | wc -w)
-          if [ "$token_count" -lt 3 ]; then
+          # A shallow checkout (fetch-depth: 1) grafts HEAD as a root commit, so
+          # graph-traversal commands like `git rev-list --parents` hide the real
+          # parents and a legitimate PR merge looks parent-less. Read the raw
+          # commit object instead — it always lists every `parent` line:
+          #   normal commit   -> 1 parent line
+          #   PR merge commit -> 2+ parent lines  -> allowed
+          parent_count=$(git cat-file -p HEAD | grep -c '^parent ')
+          if [ "$parent_count" -lt 2 ]; then
             echo "::error::Direct commit pushed to main. Open a pull request instead of committing to main directly."
             exit 1
           fi
