@@ -146,6 +146,104 @@ list (`API_CORS_ORIGINS`) includes the UI URL.
 - Submit one audit from the UI and confirm it reaches `completed` and the PDF
   downloads. (Full operating steps: [`docs/10_OPERATOR_GUIDE.md`](10_OPERATOR_GUIDE.md).)
 
+### 3.6 VPS specifics (Option C): provision & lock down
+
+Use this when the shared host is a cloud VM — a **plain VPS** (Lightsail,
+DigitalOcean, Hetzner, a bare EC2 instance), **not** managed AWS. The app deploy
+itself is still §3.2–§3.5; this subsection adds the provisioning and the network
+lockdown an internet-facing VM needs.
+
+> **Why lockdown is non-negotiable here.** The app has no authentication and only
+> partial SSRF protection (§4). `docker-compose.yml` publishes the API on `0.0.0.0`
+> (and `next start` serves the UI on `0.0.0.0` too), so on a public VM those ports
+> are world-reachable unless a firewall blocks them. An exposed instance lets anyone
+> run audits and make your server fetch arbitrary URLs. Lock it to your team
+> **before** sharing the URL.
+
+#### a. Pick the VM
+
+| Item | Recommendation | Why |
+|---|---|---|
+| OS | Ubuntu 22.04 / 24.04 LTS | First-class Docker support |
+| Size | ≥ 2 vCPU / 4 GB RAM | Postgres + Redis + API + worker **and** a headless Chromium crawl; 2 GB is tight |
+| Disk | ≥ 20 GB | Images, Chromium, and PDFs/screenshots under `storage/` accumulate |
+| Region | Near the team | Lower latency to the UI |
+
+#### b. First-boot hardening (SSH)
+
+```bash
+# As root on the new VM: create a sudo user and use SSH key auth.
+adduser blc && usermod -aG sudo blc
+rsync --archive --chown=blc:blc ~/.ssh /home/blc        # copy your authorized key
+```
+
+Then in `/etc/ssh/sshd_config` set `PasswordAuthentication no` and
+`PermitRootLogin no`, run `sudo systemctl restart ssh`, and log in as `blc` from here on.
+
+#### c. Network lockdown — do this BEFORE bringing the app up
+
+Pick **one** access method (a VPN is cleanest):
+
+- **Option 1 — VPN (recommended): Tailscale / WireGuard.** Install it, join your
+  tailnet, and have teammates reach the VM by its VPN IP.
+- **Option 2 — IP allowlist.** Restrict access to your team's office/static IPs.
+
+Then enforce it with the **cloud provider's firewall / security group** as the
+primary control (network level, upstream of the host):
+
+| Port | Allow from | Purpose |
+|---|---|---|
+| 22 (SSH) | your IPs / VPN only | admin |
+| 8000 (API) | VPN / team allowlist only | backend |
+| 3000 (UI) | VPN / team allowlist only | operator UI |
+| everything else | **deny** | — |
+
+> **Docker + `ufw` gotcha:** Docker writes its own iptables rules and can bypass a
+> host `ufw` config for *published* ports. Don't rely on `ufw` alone for 8000/3000 —
+> enforce it at the **cloud security-group / firewall** level (or don't publish the
+> ports publicly at all and reach them only over the VPN interface).
+
+#### d. Install Docker + Node
+
+```bash
+# Docker Engine + Compose plugin (Ubuntu)
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker blc          # log out/in so group membership applies
+
+# Node.js 20 for the operator UI
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+```
+
+#### e. Deploy the app (VPS notes on top of §3.2–§3.5)
+
+- In `.env`: set a real `POSTGRES_PASSWORD` and set `API_CORS_ORIGINS` to the URL
+  teammates actually use (e.g. `http://<vpn-ip>:3000`). Keep `CRAWLER_ALLOW_PRIVATE_HOSTS=false`.
+- Run the backend **detached** so it survives your SSH session:
+
+  ```bash
+  docker compose up --build -d        # detached (note: -d; `make docker-up` runs in the foreground)
+  docker compose logs -f              # follow logs when needed
+  ```
+
+- Serve the UI **built** (not the dev server) and keep it running past logout:
+
+  ```bash
+  cd apps/frontend
+  npm ci
+  NEXT_PUBLIC_API_BASE_URL=http://<vpn-ip>:8000 npm run build
+  nohup npm run start >/tmp/blc-ui.log 2>&1 &     # or run it under pm2 / a systemd unit
+  ```
+
+#### f. Verify + hand off
+
+- From a teammate **on the VPN/allowlist**: `curl http://<vpn-ip>:8000/health` returns OK.
+- From an **outside** network: the same request should **time out or be refused** —
+  that's the proof your lockdown works.
+- Run one end-to-end audit from the UI and confirm the PDF downloads.
+- Share the internal URL plus a one-line note: "internal test tool — do not share
+  publicly."
+
 ---
 
 ## 4. Security Notes For Internal Use (read before exposing)
@@ -186,7 +284,7 @@ scope Phase 2.
 
 Recommended order: P1-27 → P1-28 → P1-29 → P1-30 → P1-31 → P1-32.
 
-**Status legend:** ✅ Done · ⬜ To do.
+**Status legend:** ✅ Done · ◐ Doc ready, pending human action · ⬜ To do.
 
 ### P1-27 R&D: Deployment Options For Internal Use — ✅ Done
 
@@ -201,17 +299,18 @@ Recommended order: P1-27 → P1-28 → P1-29 → P1-30 → P1-31 → P1-32.
 - [x] Note constraints: no auth, partial SSRF, local-only storage.
 - [x] Record findings in this doc (§2, §2.1).
 
-### P1-28 Choose & Document The Internal Deployment Approach — ⬜ To do
+### P1-28 Choose & Document The Internal Deployment Approach — ◐ Doc ready, pending host sign-off
 
 **Issue type:** Task
 **Goal:** Pick the recommended approach for the team test window and write a repeatable runbook.
+**Deliverable:** Decision in §2.1; generic runbook in §3; VPS provisioning + lockdown in §3.6; security guardrails in §4.
 **Subtasks:**
 
-- Select the approach (recommendation: shared internal host + Docker Compose, VPN-only).
-- Define host prerequisites and required `.env` changes (real DB password, CORS origins, optional API keys).
-- Write the step-by-step deploy + UI-serve runbook (§3).
-- Document the internal-use security guardrails (§4).
-- Get sign-off from the team owner of the host.
+- [x] Select the approach (VPS running Docker Compose, locked to VPN/IP allowlist).
+- [x] Define host prerequisites and required `.env` changes (real DB password, CORS origins, optional API keys).
+- [x] Write the step-by-step deploy + UI-serve runbook (§3, §3.6).
+- [x] Document the internal-use security guardrails (§4).
+- [ ] Get sign-off from the team owner of the host. *(human action)*
 
 ### P1-29 Stand Up The Internal Test Deployment — ⬜ To do
 
@@ -249,17 +348,18 @@ Recommended order: P1-27 → P1-28 → P1-29 → P1-30 → P1-31 → P1-32.
 - Capture the test-site results summary as an appendix or linked note.
 - Note any `.env` / CORS / networking gotchas discovered.
 
-### P1-32 R&D: Phase 2 Scope & Readiness — ⬜ To do
+### P1-32 R&D: Phase 2 Scope & Readiness — ◐ Draft ready, pending P1-30 feedback
 
 **Issue type:** Task
 **Goal:** Use the internal test results to scope Phase 2 (productionization + deferred features).
+**Deliverable:** Phase 2 scope / approach / timeline draft in [`docs/14_PHASE2_PLAN.md`](14_PHASE2_PLAN.md) (grounded in `docx/starting docx/`).
 **Subtasks:**
 
-- List production-hardening needs: authentication, complete SSRF interception, TLS, object storage, monitoring/backups, data retention.
-- Evaluate hosting target (managed/AWS) and rough cost.
-- Capture deferred product scope (social audits, competitor benchmarking, analytics integrations).
-- Prioritize Phase 2 candidates against test feedback.
-- Draft a Phase 2 epic outline for review.
+- [x] List production-hardening needs: authentication, complete SSRF interception, TLS, object storage, monitoring/backups, data retention.
+- [x] Evaluate hosting target (managed/AWS) and rough cost.
+- [x] Capture deferred product scope (social audits, competitor benchmarking, analytics integrations).
+- [ ] Prioritize Phase 2 candidates against test feedback. *(needs P1-30 results)*
+- [x] Draft a Phase 2 epic outline for review (§8).
 
 ---
 
@@ -271,4 +371,4 @@ Epic P1-E7 is complete when:
 - A team-reachable internal instance is running and passed a smoke audit (P1-29).
 - Real team-provided sites have been audited and results/failures recorded (P1-30).
 - The docs reflect the real deployment and test findings (P1-31).
-- A reviewed Phase 2 scope/readiness outline exists (P1-32).
+- A reviewed Phase 2 scope/readiness outline exists (P1-32) — see [`docs/14_PHASE2_PLAN.md`](14_PHASE2_PLAN.md).

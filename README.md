@@ -178,3 +178,4 @@ make docker-up    # build + start the local stack
 | [docs/11_KNOWN_LIMITATIONS.md](docs/11_KNOWN_LIMITATIONS.md) | Known limitations |
 | [docs/12_QA_REPORT.md](docs/12_QA_REPORT.md) | End-to-end & reproducibility QA results |
 | [docs/13_INTERNAL_DEPLOYMENT_GUIDE.md](docs/13_INTERNAL_DEPLOYMENT_GUIDE.md) | Internal deployment guide & Epic P1-E7 plan |
+| [docs/14_PHASE2_PLAN.md](docs/14_PHASE2_PLAN.md) | Phase 2 scope, approach & timeline (P1-32 R&D) |
