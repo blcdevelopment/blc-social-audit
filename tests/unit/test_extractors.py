@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from apps.worker.stages.extractor_seo import extract_seo_facts
-from apps.worker.stages.extractor_uxui import extract_uxui_facts
+from apps.worker.stages.extractor_uxui import extract_uxui_facts, extract_uxui_facts_for_page
 
 FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures"
 
@@ -75,6 +75,23 @@ def test_extractors_match_weak_site_fixture() -> None:
         is expected["uxui"]["page"]["has_direct_contact"]
     )
     assert uxui["pages"][0]["navigation"]["has_nav"] is expected["uxui"]["page"]["has_nav"]
+
+
+def test_uxui_required_field_count_ignores_aria_required_false() -> None:
+    html = """
+    <form>
+      <input type="text" name="name" required>
+      <input type="email" name="email" aria-required="true">
+      <input type="text" name="company" aria-required="false">
+      <button type="submit">Send</button>
+    </form>
+    """
+    facts = extract_uxui_facts_for_page(_page("forms", html))
+    form = facts["forms"]["items"][0]
+
+    assert form["field_count"] == 3
+    # name (required) + email (aria-required="true"); company (aria-required="false") excluded.
+    assert form["required_field_count"] == 2
 
 
 def test_extractors_handle_malformed_html_fixture() -> None:

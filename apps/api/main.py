@@ -21,10 +21,15 @@ app = FastAPI(
     },
 )
 
+# The CORS spec forbids combining a wildcard origin with credentials. If "*" is ever
+# configured, disable credentials so the policy stays valid instead of reflecting an
+# any-origin-with-credentials response.
+cors_allow_credentials = "*" not in settings.api_cors_origins
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.api_cors_origins,
-    allow_credentials=True,
+    allow_credentials=cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )

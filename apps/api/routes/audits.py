@@ -31,6 +31,13 @@ def _report_available(job: AuditJob) -> bool:
     return bool(job.result and job.result.pdf_path and Path(job.result.pdf_path).exists())
 
 
+def _report_recorded(job: AuditJob) -> bool:
+    # Cheap, DB-only check for list views: avoids a filesystem stat per row (which would
+    # become a network round-trip per row once reports move to object storage). The
+    # download endpoint remains the source of truth and 404s if the file is gone.
+    return bool(job.result and job.result.pdf_path)
+
+
 def _status_response(job: AuditJob) -> AuditStatusResponse:
     return AuditStatusResponse(
         job_id=job.id,
@@ -80,7 +87,7 @@ def _list_item(job: AuditJob) -> AuditListItem:
         seo_score=result.seo_score if result else None,
         uxui_score=result.uxui_score if result else None,
         lead_gen_score=result.lead_gen_score if result else None,
-        report_available=_report_available(job),
+        report_available=_report_recorded(job),
     )
 
 

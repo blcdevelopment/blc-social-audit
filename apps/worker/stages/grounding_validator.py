@@ -9,6 +9,14 @@ from apps.worker.stages.commentary import validate_commentary_content
 JsonDict = dict[str, Any]
 NUMERIC_RE = re.compile(r"(?<![A-Za-z])[-+]?\d[\d,]*(?:\.\d+)?%?")
 SENTENCE_RE = re.compile(r"(?<=[.!?])\s+")
+# Timeframe/duration phrases (e.g. "30 days", "1-3 months", "3 to 12 months") are
+# rhetorical recommendation language, not measured site facts, so the numbers in them
+# must not trigger sentence stripping. They are masked out before grounding the rest.
+TIMEFRAME_RE = re.compile(
+    r"\d[\d,]*\s*(?:[-–]|to)?\s*\d*\s*"
+    r"(?:second|minute|hour|day|week|month|quarter|year)s?\b",
+    re.IGNORECASE,
+)
 
 
 def validate_commentary_grounding(
@@ -88,7 +96,9 @@ def _sanitize_text(
     kept: list[str] = []
     removed: list[JsonDict] = []
     for sentence in sentences:
-        claims = _numeric_claims(sentence)
+        # Mask timeframe phrases first so legitimate prose ("within 30 days",
+        # "1-3 months") is not stripped as an unsupported numeric claim.
+        claims = _numeric_claims(TIMEFRAME_RE.sub(" ", sentence))
         unsupported_values = [claim for claim in claims if claim not in known_values]
         if unsupported_values:
             removed.append(

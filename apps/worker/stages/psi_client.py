@@ -28,9 +28,11 @@ def _utc_now() -> str:
 
 
 def _score_to_percent(value: Any) -> int | None:
-    if isinstance(value, int | float):
-        return round(value * 100)
-    return None
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    # Half-up rounding to match the scoring engine and averages (scoring._round_score,
+    # _average) so the codebase uses one rounding convention.
+    return int(value * 100 + 0.5)
 
 
 def _audit_numeric(audits: MappingLike, audit_id: str) -> float | None:
