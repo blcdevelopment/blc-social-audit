@@ -7,8 +7,8 @@
 Every epic, task, acceptance criterion, and subtask below is written to be **copy-pasted
 straight into Jira**, in the same format as Phase 1 (`Epic P2-E1: …` for epics, `P2-1 …`
 for tasks). The tables in §3 are the "what's done / what's not" tracker.
-**Companion docs:** scope & rationale in [`docs/14_PHASE2_PLAN.md`](14_PHASE2_PLAN.md);
-the build manual in [`docs/16_PHASE2_IMPLEMENTATION.md`](16_PHASE2_IMPLEMENTATION.md).
+**Companion docs:** scope & rationale in [`docs/08_PHASE2_PLAN.md`](08_PHASE2_PLAN.md);
+the build manual in [`docs/10_PHASE2_IMPLEMENTATION.md`](10_PHASE2_IMPLEMENTATION.md).
 
 > **Numbering.** Phase 2 uses **sequential IDs like Phase 1** — epics `P2-E1…P2-E5`,
 > tasks `P2-1…P2-28`. The four *workstreams* from the Plan (A = productionization,
@@ -33,7 +33,7 @@ Use these defaults for all Phase 2 Jira issues.
 | Out-of-scope labels | `no-linkedin-scrape`, `tiktok-deferred`, `v3-enrichment` |
 | Due Dates | Leave blank; set per sprint once Phase 2.0 sign-off lands |
 
-**Decision context to attach to the epic (locked — see [`docs/14_PHASE2_PLAN.md`](14_PHASE2_PLAN.md) §3):**
+**Decision context to attach to the epic (locked — see [`docs/08_PHASE2_PLAN.md`](08_PHASE2_PLAN.md) §3):**
 
 - **Internal tool, not SaaS.** One shared org, shared audit history. No multi-tenancy.
 - **Scraper-first social data.** Bright Data is the *primary* social source; YouTube uses
@@ -149,7 +149,7 @@ rewriting it**.
 **Labels:** `phase-2`, `blc`, `internal-tool`, `scraper-first`
 **Description:** Resolve the architectural forks and gather the accounts, keys, legal
 sign-off, and calibration data needed before the build epics start. The major decisions are
-already drafted in [`docs/14_PHASE2_PLAN.md`](14_PHASE2_PLAN.md) §3; this epic confirms them
+already drafted in [`docs/08_PHASE2_PLAN.md`](08_PHASE2_PLAN.md) §3; this epic confirms them
 and turns them into provisioned resources.
 
 ### P2-1 Lock the Social-Data Path, Budget & Legal Sign-Off
@@ -258,7 +258,7 @@ hosting, object storage) and the expected audits/month so P2-6/P2-7/P2-9 build a
 **Epic name:** `Epic P2-E2: Productionization & Platform`
 **Labels:** `phase-2`, `blc`, `productionization`, `internal-tool`, `no-multitenancy`
 **Description:** Take the proven website tool from "internal/local" to "hosted and safe
-for the BLC team." Closes the items in [`docs/11_KNOWN_LIMITATIONS.md`](11_KNOWN_LIMITATIONS.md).
+for the BLC team." Closes the items in [`docs/06_KNOWN_LIMITATIONS.md`](06_KNOWN_LIMITATIONS.md).
 **Internal-tool scope:** lightweight team auth, **no** multi-tenancy, no public sign-up.
 
 > **Note:** An org/tenant data-model & isolation task was considered and **dropped** — the
@@ -417,7 +417,7 @@ branding. The PDF stays; the dashboard is the on-screen complement.
 the architecture**. Every task is **new extractor signals + new YAML rubric rules** that
 reuse the existing crawler, rubric engine (`apps/worker/stages/scoring.py`), commentary,
 grounding validator, and report. **Bump the rubric version** per
-[`docs/09_RUBRIC_GUIDE.md`](09_RUBRIC_GUIDE.md) and re-run the strong/weak calibration gate
+[`docs/04_RUBRIC_GUIDE.md`](04_RUBRIC_GUIDE.md) and re-run the strong/weak calibration gate
 (`make qa`) after tuning.
 
 > **Composite note.** If any signal here becomes its *own scored category* (e.g. an "AI
@@ -804,8 +804,8 @@ Enrichment (P2-E5) is **explicitly out of Phase 2 core** and remains v3 unless p
 
 ## 6. Alignment Note
 
-This Jira plan is the operational twin of [`docs/14_PHASE2_PLAN.md`](14_PHASE2_PLAN.md)
-(scope/rationale) and [`docs/16_PHASE2_IMPLEMENTATION.md`](16_PHASE2_IMPLEMENTATION.md)
+This Jira plan is the operational twin of [`docs/08_PHASE2_PLAN.md`](08_PHASE2_PLAN.md)
+(scope/rationale) and [`docs/10_PHASE2_IMPLEMENTATION.md`](10_PHASE2_IMPLEMENTATION.md)
 (build manual). Numbering is sequential like Phase 1: **5 epics (P2-E1…P2-E5), 28 tasks
 (P2-1…P2-28)**. Workstreams map to epics A→P2-E2, D→P2-E3, B→P2-E4, C→P2-E5, with P2-E1 as
 discovery. Internal-tool scope, scraper-first social data, no multi-tenancy, LinkedIn

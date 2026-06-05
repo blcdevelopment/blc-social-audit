@@ -8,7 +8,7 @@ deliberately deferred to later phases or to production hardening.
 
 ## 1. Scope (intentionally out)
 
-These are out of scope for Phase 1 by design (see `docs/03_PHASE1_JIRA_PLAN.md`):
+These are out of scope for Phase 1 by design (see [`docs/01_REQUIREMENTS.md`](01_REQUIREMENTS.md)):
 
 - **Social media audits** (Instagram/Facebook/LinkedIn/YouTube).
 - **User accounts, authentication, multi-tenancy.** The UI/API is an internal,
@@ -71,8 +71,8 @@ These are out of scope for Phase 1 by design (see `docs/03_PHASE1_JIRA_PLAN.md`)
 
 ## 6. Reproducibility — the precise guarantee
 
-- **Scores are reproducible given identical extracted facts** (verified in
-  `docs/12_QA_REPORT.md`). The rubric engine is pure and deterministic.
+- **Scores are reproducible given identical extracted facts** (verified by the
+  hermetic QA harness — `make qa-repro`). The rubric engine is pure and deterministic.
 - **Live sites change over time** and **PSI varies run-to-run**, so re-auditing a
   real site later can produce different facts and therefore different scores. The
   reproducibility guarantee is about the scoring engine, not about the external

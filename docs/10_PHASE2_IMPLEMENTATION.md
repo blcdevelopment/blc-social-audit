@@ -3,8 +3,8 @@
 **Project:** Social Media & Website Auditing Automation — Phase 2
 **Client:** Builder Lead Converter (BLC)
 **Execution model:** Extend the proven Phase 1 spine; do not rewrite it.
-**Companion docs:** scope & rationale → [`docs/14_PHASE2_PLAN.md`](14_PHASE2_PLAN.md);
-Jira epics/tasks + tracking board → [`docs/15_PHASE2_JIRA_PLAN.md`](15_PHASE2_JIRA_PLAN.md).
+**Companion docs:** scope & rationale → [`docs/08_PHASE2_PLAN.md`](08_PHASE2_PLAN.md);
+Jira epics/tasks + tracking board → [`docs/09_PHASE2_JIRA_PLAN.md`](09_PHASE2_JIRA_PLAN.md).
 
 > **Numbering.** Phase 2 uses sequential IDs like Phase 1 — epics `P2-E1…P2-E5`, tasks
 > `P2-1…P2-28`. Epic map: **P2-E1** discovery · **P2-E2** productionization · **P2-E3** deepen
@@ -176,7 +176,7 @@ resolves it.
   target**, and sub-resources. Reuse the existing private-host check; add DNS-rebinding mitigation
   (validate the resolved IP, not just the hostname). Blocked requests are logged + skipped, never crash.
 - Add tests: public→internal redirect, internal sub-resource, `169.254.169.254`.
-- Update [`docs/11_KNOWN_LIMITATIONS.md`](11_KNOWN_LIMITATIONS.md) §2 once closed.
+- Update [`docs/06_KNOWN_LIMITATIONS.md`](06_KNOWN_LIMITATIONS.md) §2 once closed.
 
 ### 4.4 Hosting + CI/CD (P2-9)
 
@@ -205,7 +205,7 @@ resolves it.
 ## 5. P2-E3 — Deepen the website audit
 
 **Pattern for every P2-E3 task:** add facts to the existing bundle → add YAML rubric rules →
-**bump the rubric `version`** (per [`docs/09_RUBRIC_GUIDE.md`](09_RUBRIC_GUIDE.md)) → re-run the
+**bump the rubric `version`** (per [`docs/04_RUBRIC_GUIDE.md`](04_RUBRIC_GUIDE.md)) → re-run the
 strong/weak calibration gate (`make qa`). The fact bundle passed to scoring is
 `{"seo": seo_facts, "uxui": uxui_facts, "psi": psi_facts}` (see `score_audit`), and rules
 reference facts by `fact_path` (e.g. `seo.summary.pages_with_schema`).
@@ -281,7 +281,7 @@ This is the one genuinely-not-just-YAML change. In
 4. `score_audit`: load `rubrics/social.yaml`, score the social category, include it in
    `scores`/`categories`, and extend `compose_lead_generation_score` to take three inputs.
 5. `rubrics/composite.yaml`: rebalance to three weights summing to 1.0 — the Plan's proposed
-   default is **0.35 SEO / 0.40 UX/UI / 0.25 social** (`docs/14_PHASE2_PLAN.md` / `02_IMPLEMENTATION.md` §3.1.7).
+   default is **0.35 SEO / 0.40 UX/UI / 0.25 social** (`docs/08_PHASE2_PLAN.md` / `docs/03_ARCHITECTURE.md` §6).
 6. Calibrate `social.yaml` against the strong/weak accounts from P2-4; the gate must still hold.
 
 > Keep `compose_lead_generation_score` backward-compatible for website-only audits (social
@@ -327,7 +327,7 @@ Phase 2 core.
 3. **P2-E4** — start once P2-3 + legal sign-off (P2-1) are green; YouTube first, then Bright Data.
 4. **P2-E5** — v3 only.
 
-(Matches the week-by-week in [`docs/14_PHASE2_PLAN.md`](14_PHASE2_PLAN.md) §9.1.)
+(Matches the week-by-week in [`docs/08_PHASE2_PLAN.md`](08_PHASE2_PLAN.md) §9.1.)
 
 ### 8.2 Quality gates (extend Phase 1's)
 
@@ -346,13 +346,13 @@ Phase 2 core.
 ### 8.3 Acceptance
 
 Phase 2 core acceptance = the Done Criteria in
-[`docs/15_PHASE2_JIRA_PLAN.md`](15_PHASE2_JIRA_PLAN.md) §5 and the acceptance criteria in
-[`docs/14_PHASE2_PLAN.md`](14_PHASE2_PLAN.md) §12 — auth-gated, S3-stored, SSRF-hardened, hosted,
+[`docs/09_PHASE2_JIRA_PLAN.md`](09_PHASE2_JIRA_PLAN.md) §5 and the acceptance criteria in
+[`docs/08_PHASE2_PLAN.md`](08_PHASE2_PLAN.md) §12 — auth-gated, S3-stored, SSRF-hardened, hosted,
 observable; deeper website signals scored with the calibration gate holding; and a deterministic
 Social Score folded into Lead-Gen Readiness, validated on real builder sites **and** their social
 accounts.
 
 ---
 
-**End of Phase 2 implementation plan.** Keep this in lockstep with `14_PHASE2_PLAN.md` (scope)
-and `15_PHASE2_JIRA_PLAN.md` (tickets). If a code path named here moves, update it here too.
+**End of Phase 2 implementation plan.** Keep this in lockstep with `08_PHASE2_PLAN.md` (scope)
+and `09_PHASE2_JIRA_PLAN.md` (tickets). If a code path named here moves, update it here too.
