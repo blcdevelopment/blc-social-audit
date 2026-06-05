@@ -172,7 +172,10 @@ def run_collection_audit(
                     "seo_facts": seo_facts,
                     "uxui_facts": uxui_facts,
                     "psi_facts": psi_facts,
-                    "score_breakdown": score_breakdown,
+                    # Only the headline scores are citable numbers. The full score
+                    # breakdown's rule weights, params, and ratios are internal scoring
+                    # mechanics and must not count as "grounding" for LLM numeric claims.
+                    "scores": score_breakdown.get("scores", {}),
                 },
             )
 

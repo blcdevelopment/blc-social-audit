@@ -82,6 +82,14 @@ def _has_ancestor_signal(tag: Tag, tokens: set[str]) -> bool:
     return False
 
 
+def _is_required_field(field: Tag) -> bool:
+    if field.has_attr("required"):
+        return True
+    # `aria-required` is a string attribute: only "true" marks the field required.
+    # A bare truthiness check would wrongly count `aria-required="false"`.
+    return str(field.get("aria-required", "")).strip().lower() == "true"
+
+
 def _candidate_text(tag: Tag) -> str | None:
     if tag.name == "input":
         return _clean_text(str(tag.get("value") or tag.get("aria-label") or ""))
@@ -143,9 +151,7 @@ def _extract_forms(soup: BeautifulSoup) -> list[JsonDict]:
             continue
         fields = form.find_all(["input", "textarea", "select"])
         required_fields = [
-            field
-            for field in fields
-            if isinstance(field, Tag) and (field.has_attr("required") or field.get("aria-required"))
+            field for field in fields if isinstance(field, Tag) and _is_required_field(field)
         ]
         submit = form.find(["button", "input"], attrs={"type": re.compile("submit", re.I)})
         forms.append(
