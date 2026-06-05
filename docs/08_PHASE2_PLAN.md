@@ -3,18 +3,18 @@
 **Project:** BLC Website Audit Automation → Social Media & Website Auditing Automation
 **Client:** Builder Lead Converter (BLC)
 **Document purpose:** A detailed Phase 2 implementation plan: what to build, the decisions to lock first, architecture, week-by-week timeline, costs, risks, and acceptance criteria.
-**Status:** Draft for review — the deliverable for Epic **P1-E7 / ticket P1-32** (see [`docs/13_INTERNAL_DEPLOYMENT_GUIDE.md`](13_INTERNAL_DEPLOYMENT_GUIDE.md) §6).
+**Status:** Draft for review — the deliverable for Epic **P1-E7 / ticket P1-32** (see [`docs/07_DEPLOYMENT_GUIDE.md`](07_DEPLOYMENT_GUIDE.md) §6).
 
 > **Companion docs (keep all three in lockstep):**
 > - **This doc** — Phase 2 scope, rationale, decisions, timeline, costs, risks.
-> - [`docs/15_PHASE2_JIRA_PLAN.md`](15_PHASE2_JIRA_PLAN.md) — the Jira epics/tasks + the
+> - [`docs/09_PHASE2_JIRA_PLAN.md`](09_PHASE2_JIRA_PLAN.md) — the Jira epics/tasks + the
 >   live **tracking board** (what's done / what's not), with copy-paste-ready ticket text.
-> - [`docs/16_PHASE2_IMPLEMENTATION.md`](16_PHASE2_IMPLEMENTATION.md) — the **build manual**:
+> - [`docs/10_PHASE2_IMPLEMENTATION.md`](10_PHASE2_IMPLEMENTATION.md) — the **build manual**:
 >   exact code touch-points (verified against the repo) and sequencing.
 > The workstreams here (A/B/C/D) are a **planning concept**; in Jira they become epics
 > **A → P2-E2**, **D → P2-E3**, **B → P2-E4**, **C → P2-E5**, with discovery as **P2-E1**.
 > Jira tasks use **sequential IDs (P2-1…P2-28)** like Phase 1 — the full per-task mapping is in
-> [`docs/15_PHASE2_JIRA_PLAN.md`](15_PHASE2_JIRA_PLAN.md).
+> [`docs/09_PHASE2_JIRA_PLAN.md`](09_PHASE2_JIRA_PLAN.md).
 
 > **Sources.** This plan is grounded in the original scope documents in
 > `docx/starting docx/`:
@@ -241,7 +241,7 @@ risk low.
 ## 4. Workstream A — Productionization & Platform (Epic P2-E2, do first)
 
 Take the proven website tool from "internal/local" to "hosted and safe for more
-users." Closes the items in [`docs/11_KNOWN_LIMITATIONS.md`](11_KNOWN_LIMITATIONS.md).
+users." Closes the items in [`docs/06_KNOWN_LIMITATIONS.md`](06_KNOWN_LIMITATIONS.md).
 
 ### 4.1 In scope
 - **Lightweight authentication** *(internal-tool scope — §3.1)* — a single login for

@@ -113,7 +113,7 @@ make qa              # P1-23 local end-to-end QA (hermetic, no infra/keys)
 make qa-repro        # P1-24 reproducibility QA
 ```
 
-See `docs/12_QA_REPORT.md` for what these prove.
+See [`docs/03_ARCHITECTURE.md`](03_ARCHITECTURE.md) §8 for what the QA harness proves.
 
 ---
 
@@ -137,7 +137,7 @@ See `docs/12_QA_REPORT.md` for what these prove.
 | `apps/worker/` | Celery app, `tasks.py` orchestrator, `stages/` pipeline modules |
 | `apps/shared/` | Settings, database, models, audit states, report storage |
 | `apps/frontend/` | Next.js operator UI |
-| `rubrics/` | YAML scoring rubrics (see `docs/09_RUBRIC_GUIDE.md`) |
+| `rubrics/` | YAML scoring rubrics (see `docs/04_RUBRIC_GUIDE.md`) |
 | `prompts/` | OpenAI commentary system/user prompts |
 | `templates/`, `brand/`, `assets/` | PDF template, CSS, branding |
 | `migrations/` | Alembic migrations |

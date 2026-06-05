@@ -7,10 +7,10 @@
 
 > Setup and "how to run" are already documented. This guide intentionally does
 > **not** repeat them — it focuses on **deployment for internal use** and links out:
-> - Setup: [`docs/07_SETUP_GUIDE.md`](07_SETUP_GUIDE.md)
-> - Run / operate: [`docs/10_OPERATOR_GUIDE.md`](10_OPERATOR_GUIDE.md)
-> - Architecture: [`docs/08_ARCHITECTURE_OVERVIEW.md`](08_ARCHITECTURE_OVERVIEW.md)
-> - Known limits: [`docs/11_KNOWN_LIMITATIONS.md`](11_KNOWN_LIMITATIONS.md)
+> - Setup: [`docs/02_SETUP_GUIDE.md`](02_SETUP_GUIDE.md)
+> - Run / operate: [`docs/05_OPERATOR_GUIDE.md`](05_OPERATOR_GUIDE.md)
+> - Architecture: [`docs/03_ARCHITECTURE.md`](03_ARCHITECTURE.md)
+> - Known limits: [`docs/06_KNOWN_LIMITATIONS.md`](06_KNOWN_LIMITATIONS.md)
 
 ---
 
@@ -68,7 +68,7 @@ window. Treat **Option D** as Phase 2.
   option must stay on a private network/VPN. That rules out public exposure and
   makes full managed/AWS hosting (Option D) premature until Phase 2 hardening.
 
-**Constraints acknowledged** (see §4 and [`docs/11_KNOWN_LIMITATIONS.md`](11_KNOWN_LIMITATIONS.md)):
+**Constraints acknowledged** (see §4 and [`docs/06_KNOWN_LIMITATIONS.md`](06_KNOWN_LIMITATIONS.md)):
 no auth, partial SSRF, local-filesystem report storage, dev-flavoured Compose.
 All acceptable for a short internal test; none acceptable for public production.
 
@@ -96,7 +96,7 @@ A single internal host that the team reaches over the private network/VPN.
 git clone <repo-url> blc-website-audit
 cd blc-website-audit
 cp .env.template .env
-# Edit .env — see docs/07_SETUP_GUIDE.md §3 for every key.
+# Edit .env — see docs/02_SETUP_GUIDE.md §3 for every key.
 ```
 
 Minimum `.env` review before an internal deployment:
@@ -144,7 +144,7 @@ list (`API_CORS_ORIGINS`) includes the UI URL.
 
 - `GET http://<host>:8000/health` returns OK.
 - Submit one audit from the UI and confirm it reaches `completed` and the PDF
-  downloads. (Full operating steps: [`docs/10_OPERATOR_GUIDE.md`](10_OPERATOR_GUIDE.md).)
+  downloads. (Full operating steps: [`docs/05_OPERATOR_GUIDE.md`](05_OPERATOR_GUIDE.md).)
 
 ### 3.6 VPS specifics (Option C): provision & lock down
 
@@ -248,7 +248,7 @@ sudo apt-get install -y nodejs
 
 ## 4. Security Notes For Internal Use (read before exposing)
 
-The system is internal-only by design (see [`docs/11_KNOWN_LIMITATIONS.md`](11_KNOWN_LIMITATIONS.md)):
+The system is internal-only by design (see [`docs/06_KNOWN_LIMITATIONS.md`](06_KNOWN_LIMITATIONS.md)):
 
 - **No authentication.** Anyone who can reach the API/UI can run audits and read
   results. **Keep it on a private network/VPN. Do not expose it to the public internet.**
@@ -343,7 +343,7 @@ Recommended order: P1-27 → P1-28 → P1-29 → P1-30 → P1-31 → P1-32.
 **Subtasks:**
 
 - Update this guide (§2–§4) with anything that changed during the real deploy.
-- Add deployment/test caveats to [`docs/11_KNOWN_LIMITATIONS.md`](11_KNOWN_LIMITATIONS.md).
+- Add deployment/test caveats to [`docs/06_KNOWN_LIMITATIONS.md`](06_KNOWN_LIMITATIONS.md).
 - Update the README pointer to this guide if needed.
 - Capture the test-site results summary as an appendix or linked note.
 - Note any `.env` / CORS / networking gotchas discovered.
@@ -352,7 +352,7 @@ Recommended order: P1-27 → P1-28 → P1-29 → P1-30 → P1-31 → P1-32.
 
 **Issue type:** Task
 **Goal:** Use the internal test results to scope Phase 2 (productionization + deferred features).
-**Deliverable:** Phase 2 scope / approach / timeline draft in [`docs/14_PHASE2_PLAN.md`](14_PHASE2_PLAN.md) (grounded in `docx/starting docx/`).
+**Deliverable:** Phase 2 scope / approach / timeline draft in [`docs/08_PHASE2_PLAN.md`](08_PHASE2_PLAN.md) (grounded in `docx/starting docx/`).
 **Subtasks:**
 
 - [x] List production-hardening needs: authentication, complete SSRF interception, TLS, object storage, monitoring/backups, data retention.
@@ -371,4 +371,4 @@ Epic P1-E7 is complete when:
 - A team-reachable internal instance is running and passed a smoke audit (P1-29).
 - Real team-provided sites have been audited and results/failures recorded (P1-30).
 - The docs reflect the real deployment and test findings (P1-31).
-- A reviewed Phase 2 scope/readiness outline exists (P1-32) — see [`docs/14_PHASE2_PLAN.md`](14_PHASE2_PLAN.md).
+- A reviewed Phase 2 scope/readiness outline exists (P1-32) — see [`docs/08_PHASE2_PLAN.md`](08_PHASE2_PLAN.md).

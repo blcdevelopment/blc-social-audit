@@ -165,19 +165,13 @@ make docker-up    # build + start the local stack
 
 | Doc | Contents |
 |---|---|
-| [docs/01_REQUIREMENTS.md](docs/01_REQUIREMENTS.md) | Product requirements |
-| [docs/02_IMPLEMENTATION.md](docs/02_IMPLEMENTATION.md) | Implementation plan |
-| [docs/03_PHASE1_JIRA_PLAN.md](docs/03_PHASE1_JIRA_PLAN.md) | Epics, tasks, done criteria |
-| [docs/04_PHASE1_CONFLUENCE_HANDOFF.md](docs/04_PHASE1_CONFLUENCE_HANDOFF.md) | Stakeholder handoff |
-| [docs/05_CODE_WALKTHROUGH.md](docs/05_CODE_WALKTHROUGH.md) | Line-by-line code tour |
-| [docs/06_CURRENT_ARCHITECTURE.mmd](docs/06_CURRENT_ARCHITECTURE.mmd) | Architecture diagram (Mermaid) |
-| [docs/07_SETUP_GUIDE.md](docs/07_SETUP_GUIDE.md) | Developer setup guide |
-| [docs/08_ARCHITECTURE_OVERVIEW.md](docs/08_ARCHITECTURE_OVERVIEW.md) | Architecture overview |
-| [docs/09_RUBRIC_GUIDE.md](docs/09_RUBRIC_GUIDE.md) | Scoring rubric guide & tuning |
-| [docs/10_OPERATOR_GUIDE.md](docs/10_OPERATOR_GUIDE.md) | Operator usage guide |
-| [docs/11_KNOWN_LIMITATIONS.md](docs/11_KNOWN_LIMITATIONS.md) | Known limitations |
-| [docs/12_QA_REPORT.md](docs/12_QA_REPORT.md) | End-to-end & reproducibility QA results |
-| [docs/13_INTERNAL_DEPLOYMENT_GUIDE.md](docs/13_INTERNAL_DEPLOYMENT_GUIDE.md) | Internal deployment guide & Epic P1-E7 plan |
-| [docs/14_PHASE2_PLAN.md](docs/14_PHASE2_PLAN.md) | Phase 2 scope, approach & timeline (P1-32 R&D) |
-| [docs/15_PHASE2_JIRA_PLAN.md](docs/15_PHASE2_JIRA_PLAN.md) | Phase 2 Jira epics, tasks & tracking board (copy-paste ready) |
-| [docs/16_PHASE2_IMPLEMENTATION.md](docs/16_PHASE2_IMPLEMENTATION.md) | Phase 2 build manual — code touch-points & sequencing |
+| [docs/01_REQUIREMENTS.md](docs/01_REQUIREMENTS.md) | Product requirements & scope of record |
+| [docs/02_SETUP_GUIDE.md](docs/02_SETUP_GUIDE.md) | Developer setup guide |
+| [docs/03_ARCHITECTURE.md](docs/03_ARCHITECTURE.md) | Architecture & code guide (components, data model, patterns, code map) |
+| [docs/04_RUBRIC_GUIDE.md](docs/04_RUBRIC_GUIDE.md) | Scoring rubric guide & tuning |
+| [docs/05_OPERATOR_GUIDE.md](docs/05_OPERATOR_GUIDE.md) | Operator usage guide |
+| [docs/06_KNOWN_LIMITATIONS.md](docs/06_KNOWN_LIMITATIONS.md) | Known limitations |
+| [docs/07_DEPLOYMENT_GUIDE.md](docs/07_DEPLOYMENT_GUIDE.md) | Internal deployment guide |
+| [docs/08_PHASE2_PLAN.md](docs/08_PHASE2_PLAN.md) | Phase 2 scope, approach & timeline |
+| [docs/09_PHASE2_JIRA_PLAN.md](docs/09_PHASE2_JIRA_PLAN.md) | Phase 2 Jira epics, tasks & tracking board (copy-paste ready) |
+| [docs/10_PHASE2_IMPLEMENTATION.md](docs/10_PHASE2_IMPLEMENTATION.md) | Phase 2 build manual — code touch-points & sequencing |

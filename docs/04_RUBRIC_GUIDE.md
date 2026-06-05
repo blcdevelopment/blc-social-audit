@@ -112,7 +112,7 @@ exactly `seo` and `uxui` and **sum to 1.0** (validated on load).
 
 4. Confirm the calibration gate: the strong sample site scores meaningfully
    higher than the weak one for explainable, rule-level reasons. Current
-   reference (no PSI, see `docs/12_QA_REPORT.md`):
+   reference (no PSI):
 
    | Site | SEO | UX/UI | Lead Gen |
    |---|---|---|---|
