@@ -179,3 +179,5 @@ make docker-up    # build + start the local stack
 | [docs/12_QA_REPORT.md](docs/12_QA_REPORT.md) | End-to-end & reproducibility QA results |
 | [docs/13_INTERNAL_DEPLOYMENT_GUIDE.md](docs/13_INTERNAL_DEPLOYMENT_GUIDE.md) | Internal deployment guide & Epic P1-E7 plan |
 | [docs/14_PHASE2_PLAN.md](docs/14_PHASE2_PLAN.md) | Phase 2 scope, approach & timeline (P1-32 R&D) |
+| [docs/15_PHASE2_JIRA_PLAN.md](docs/15_PHASE2_JIRA_PLAN.md) | Phase 2 Jira epics, tasks & tracking board (copy-paste ready) |
+| [docs/16_PHASE2_IMPLEMENTATION.md](docs/16_PHASE2_IMPLEMENTATION.md) | Phase 2 build manual — code touch-points & sequencing |

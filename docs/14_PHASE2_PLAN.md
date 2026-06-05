@@ -5,6 +5,17 @@
 **Document purpose:** A detailed Phase 2 implementation plan: what to build, the decisions to lock first, architecture, week-by-week timeline, costs, risks, and acceptance criteria.
 **Status:** Draft for review — the deliverable for Epic **P1-E7 / ticket P1-32** (see [`docs/13_INTERNAL_DEPLOYMENT_GUIDE.md`](13_INTERNAL_DEPLOYMENT_GUIDE.md) §6).
 
+> **Companion docs (keep all three in lockstep):**
+> - **This doc** — Phase 2 scope, rationale, decisions, timeline, costs, risks.
+> - [`docs/15_PHASE2_JIRA_PLAN.md`](15_PHASE2_JIRA_PLAN.md) — the Jira epics/tasks + the
+>   live **tracking board** (what's done / what's not), with copy-paste-ready ticket text.
+> - [`docs/16_PHASE2_IMPLEMENTATION.md`](16_PHASE2_IMPLEMENTATION.md) — the **build manual**:
+>   exact code touch-points (verified against the repo) and sequencing.
+> The workstreams here (A/B/C/D) are a **planning concept**; in Jira they become epics
+> **A → P2-E2**, **D → P2-E3**, **B → P2-E4**, **C → P2-E5**, with discovery as **P2-E1**.
+> Jira tasks use **sequential IDs (P2-1…P2-28)** like Phase 1 — the full per-task mapping is in
+> [`docs/15_PHASE2_JIRA_PLAN.md`](15_PHASE2_JIRA_PLAN.md).
+
 > **Sources.** This plan is grounded in the original scope documents in
 > `docx/starting docx/`:
 > - **Social Media & Website Auditing Automation** — the full product scope (user
@@ -227,7 +238,7 @@ risk low.
 
 ---
 
-## 4. Workstream A — Productionization & Platform (do first)
+## 4. Workstream A — Productionization & Platform (Epic P2-E2, do first)
 
 Take the proven website tool from "internal/local" to "hosted and safe for more
 users." Closes the items in [`docs/11_KNOWN_LIMITATIONS.md`](11_KNOWN_LIMITATIONS.md).
@@ -255,18 +266,18 @@ users." Closes the items in [`docs/11_KNOWN_LIMITATIONS.md`](11_KNOWN_LIMITATION
   existing report payload), improved audit history, re-run, shareable links, and
   white-label branding for prospect-facing reports.
 
-### 4.2 Candidate tickets
-- P2-A1 Add lightweight team authentication to API + UI (single internal org)
-- ~~P2-A2 Tenant/org data model & isolation~~ — **dropped** (internal tool, §3.1)
-- P2-A3 Introduce a storage interface + S3 report/screenshot backend (none exists yet)
-- P2-A4 Complete request-level SSRF interception
-- P2-A5 Managed hosting + CI/CD deploy (DB, workers, API, frontend, TLS)
-- P2-A6 Observability: Sentry, metrics, alerts, backups, retention
-- P2-A7 Web dashboard view + audit history/re-run/share + white-label
+### 4.2 Tickets (Epic P2-E2)
+- P2-6 Add lightweight team authentication to API + UI (single internal org)
+- *(A tenant/org data model & isolation ticket was considered and **dropped** — internal tool, §3.1)*
+- P2-7 Introduce a storage interface + S3 report/screenshot backend (none exists yet)
+- P2-8 Complete request-level SSRF interception
+- P2-9 Managed hosting + CI/CD deploy (DB, workers, API, frontend, TLS)
+- P2-10 Observability: Sentry, metrics, alerts, backups, retention
+- P2-11 Web dashboard view + audit history/re-run/share + white-label
 
 ---
 
-## 5. Workstream B — Social Media Audit (the marquee feature)
+## 5. Workstream B — Social Media Audit (Epic P2-E4, the marquee feature)
 
 Add the third audit type from the original scope. Architecturally it is a **clone of
 the website pipeline** — the same four-step pattern (Technical Assessment §3.2) — so
@@ -319,18 +330,18 @@ website audit.
   weights sum to 1.0, and extending `compose_lead_generation_score`.
 - **Provider adapter** package for social data sources (one interface, swappable backend).
 
-### 5.4 Candidate tickets
-- P2-B1 Social data provider adapter (interface + YouTube backend first)
-- P2-B2 **Bright Data backend (primary)** for IG/FB — any public account, post-level depth (§3.2.5)
-- P2-B2b Instagram Business Discovery as an optional free shortcut for business accounts; LinkedIn excluded, TikTok deferred
-- P2-B3 Social fact extractors + common schema + fixtures
-- P2-B4 `rubrics/social.yaml` + extend `scoring.py` (composite Literal/weights) + Lead-Gen update
-- P2-B5 Social commentary prompts + grounding-validator extension
-- P2-B6 Report/PDF/dashboard social section + updated Lead-Gen score
+### 5.4 Tickets (Epic P2-E4)
+- P2-19 Social data provider adapter (interface + YouTube backend first)
+- P2-20 **Bright Data backend (primary)** for IG/FB — any public account, post-level depth (§3.2.5)
+- P2-21 Instagram Business Discovery as an optional free shortcut for business accounts; LinkedIn excluded, TikTok deferred
+- P2-22 Social fact extractors + common schema + fixtures
+- P2-23 `rubrics/social.yaml` + extend `scoring.py` (composite Literal/weights) + Lead-Gen update
+- P2-24 Social commentary prompts + grounding-validator extension
+- P2-25 Report/PDF/dashboard social section + updated Lead-Gen score
 
 ---
 
-## 6. Workstream C — Enrichment (later / v3)
+## 6. Workstream C — Enrichment (Epic P2-E5, later / v3)
 
 Defer until the core (A + B) is validated. These materially change the architecture
 (anonymous public-data audits → user-authorized data sources), so they are their own
@@ -347,14 +358,14 @@ User-authorized data sources for deeper UX/SEO insight:
 - **Microsoft Clarity** — heatmaps & session-recording references.
 - **SEMrush** — keyword/traffic data.
 
-### 6.3 Candidate tickets
-- P2-C1 Competitor benchmarking provider + benchmarked scoring
-- P2-C2 GA4 + Search Console OAuth integrations & insight extraction
-- P2-C3 Microsoft Clarity + SEMrush integrations
+### 6.3 Tickets (Epic P2-E5, v3)
+- P2-26 Competitor benchmarking provider + benchmarked scoring
+- P2-27 GA4 + Search Console OAuth integrations & insight extraction
+- P2-28 Microsoft Clarity + SEMrush integrations
 
 ---
 
-## 6B. Workstream D — Deepen The Website Audit (high ROI, low risk)
+## 6B. Workstream D — Deepen The Website Audit (Epic P2-E3, high ROI, low risk)
 
 The website audit already works; this workstream makes it **visibly better and more
 modern** without touching the architecture. Every item below is **new
@@ -411,14 +422,14 @@ leads.*
 - Re-run the calibration gate (`make qa` strong vs weak site) after tuning, exactly as
   in the Rubric Guide.
 
-### 6B.3 Candidate tickets
-- P2-D1 Structured-data (JSON-LD) extractor + schema rubric rules
-- P2-D2 AEO/GEO readiness signals (`llms.txt`, AI-crawler access, answer structure)
-- P2-D3 CrUX field Core Web Vitals (LCP/INP/CLS) surfaced + scored
-- P2-D4 axe-core accessibility pass + rubric rules
-- P2-D5 Crawlability/indexability + link-health + redirect checks
-- P2-D6 Local-SEO signals (NAP, GBP, location pages, local schema)
-- P2-D7 Trust/conversion UX signals + security-hygiene checks
+### 6B.3 Tickets (Epic P2-E3)
+- P2-12 Structured-data (JSON-LD) extractor + schema rubric rules
+- P2-13 AEO/GEO readiness signals (`llms.txt`, AI-crawler access, answer structure)
+- P2-14 CrUX field Core Web Vitals (LCP/INP/CLS) surfaced + scored
+- P2-15 axe-core accessibility pass + rubric rules
+- P2-16 Crawlability/indexability + link-health + redirect checks
+- P2-17 Local-SEO signals (NAP, GBP, location pages, local schema)
+- P2-18 Trust/conversion UX signals + security-hygiene checks
 
 ---
 
