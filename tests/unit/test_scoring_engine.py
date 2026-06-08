@@ -45,8 +45,8 @@ def test_phase_1_rubrics_load_and_validate() -> None:
     uxui = load_rubric(settings.rubric_uxui_path)
     composite = load_composite_rubric(settings.rubric_composite_path)
 
-    assert seo.version == "phase1-seo-v1"
-    assert uxui.version == "phase1-uxui-v1"
+    assert seo.version == "phase1-seo-v2"
+    assert uxui.version == "phase1-uxui-v2"
     assert sum(rule.weight for rule in seo.rules) == 100
     assert sum(rule.weight for rule in uxui.rules) == 100
     assert composite.weights == {"seo": 0.45, "uxui": 0.55}

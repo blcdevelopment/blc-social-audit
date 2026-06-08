@@ -27,6 +27,14 @@ class RubricRule(BaseModel):
     evaluator: EvaluatorName
     params: JsonDict = Field(default_factory=dict)
     skip_if_missing: bool = False
+    # Content-plan metadata (consumed by content_plan.build_content_plan). Optional so a
+    # rubric without these fields still validates; the content planner derives safe
+    # defaults when they are absent.
+    impact: Literal["high", "medium", "low"] = "medium"
+    tier: Literal["quick_win", "mid_term", "long_term"] = "quick_win"
+    finding_label: str | None = None
+    remediation: str | None = None
+    surface_as_finding: bool = True
 
 
 class Rubric(BaseModel):
@@ -204,6 +212,11 @@ def _score_rule(facts: JsonDict, rule: RubricRule) -> JsonDict:
         "weight": rule.weight,
         "evaluator": rule.evaluator,
         "fact_path": rule.fact_path,
+        "impact": rule.impact,
+        "tier": rule.tier,
+        "finding_label": rule.finding_label,
+        "remediation": rule.remediation,
+        "surface_as_finding": rule.surface_as_finding,
         "result": evaluation.result,
         "points_awarded": points,
         "points_possible": 0.0 if evaluation.result == "skipped" else rule.weight,

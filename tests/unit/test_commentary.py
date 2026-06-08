@@ -1,41 +1,84 @@
 from apps.shared.config import Settings
 from apps.worker.stages.commentary import (
     CommentaryContent,
-    CommentaryFinding,
-    CommentaryRecommendation,
-    CommentarySection,
     commentary_json_schema,
     generate_commentary,
 )
 
 
+def _rule(
+    rule_id: str,
+    description: str,
+    result: str,
+    *,
+    weight: float,
+    impact: str,
+    tier: str,
+    label: str,
+    fact_path: str,
+    value: object,
+) -> dict:
+    return {
+        "rule_id": rule_id,
+        "description": description,
+        "weight": weight,
+        "evaluator": "threshold",
+        "fact_path": fact_path,
+        "impact": impact,
+        "tier": tier,
+        "finding_label": label,
+        "remediation": f"Resolve: {label}.",
+        "surface_as_finding": True,
+        "result": result,
+        "points_awarded": 0.0,
+        "points_possible": weight,
+        "evidence": {"value": value, "params": {}, "reason": None},
+    }
+
+
 def _score_breakdown() -> dict:
     return {
         "status": "complete",
-        "rubric_version": "phase1-seo-v1+phase1-uxui-v1+phase1-composite-v1",
-        "scores": {"seo": 81, "uxui": 72, "lead_gen": 76},
+        "rubric_version": "phase1-seo-v2+phase1-uxui-v2+phase1-composite-v1",
+        "scores": {"seo": 42, "uxui": 38, "lead_gen": 40},
         "categories": {
             "seo": {
                 "rules": [
-                    {
-                        "rule_id": "seo.meta_description.present_all_pages",
-                        "description": "Meta descriptions are present across crawled pages.",
-                        "result": "fail",
-                    }
+                    _rule(
+                        "seo.meta_description.present_all_pages",
+                        "Meta descriptions are present across crawled pages.",
+                        "fail",
+                        weight=10,
+                        impact="high",
+                        tier="quick_win",
+                        label="Meta descriptions are missing on some pages",
+                        fact_path="seo.summary.meta_descriptions_present_pct",
+                        value=0.0,
+                    ),
                 ]
             },
             "uxui": {
                 "rules": [
-                    {
-                        "rule_id": "uxui.trust.present",
-                        "description": "Trust signals are visible on at least one crawled page.",
-                        "result": "partial",
-                    }
+                    _rule(
+                        "uxui.trust.present",
+                        "Trust signals are visible on at least one crawled page.",
+                        "partial",
+                        weight=9,
+                        impact="high",
+                        tier="mid_term",
+                        label="Trust signals are limited",
+                        fact_path="uxui.summary.pages_with_trust_signals",
+                        value=1,
+                    ),
                 ]
             },
         },
-        "composite": {"score": 76},
+        "composite": {"score": 40},
     }
+
+
+def _context() -> dict:
+    return {"url": "https://example.com/", "niche": "builder", "target_audience": "homeowners"}
 
 
 def test_commentary_schema_is_json_object() -> None:
@@ -45,76 +88,50 @@ def test_commentary_schema_is_json_object() -> None:
     assert "executive_summary" in schema["properties"]
 
 
-def test_generate_commentary_uses_valid_local_fallback_without_api_key() -> None:
+def test_generate_commentary_is_deterministic_without_api_key() -> None:
     commentary = generate_commentary(
-        audit_context={
-            "url": "https://example.com/",
-            "niche": "builder",
-            "target_audience": "homeowners",
-        },
-        seo_facts={},
-        uxui_facts={},
+        audit_context=_context(),
+        seo_facts={"summary": {"meta_descriptions_present_pct": 0.0}},
+        uxui_facts={"summary": {"pages_with_trust_signals": 1}},
         psi_facts={},
         score_breakdown=_score_breakdown(),
         settings=Settings(_env_file=None, openai_api_key=None),
     )
 
-    assert commentary["status"] == "fallback_missing_api_key"
-    assert commentary["provider"] == "local_fallback"
-    CommentaryContent.model_validate(commentary["content"])
-    assert commentary["content"]["seo"]["recommendations"][0]["tier"] == "quick_win"
+    assert commentary["status"] == "deterministic"
+    assert commentary["provider"] == "deterministic"
+    content = CommentaryContent.model_validate(commentary["content"])
+
+    # The failing high-impact SEO rule surfaces as a high-severity quick-win finding,
+    # with no internal rule IDs in the user-facing text.
+    seo = content.seo
+    assert seo.findings, "expected at least one SEO finding"
+    assert seo.findings[0].severity == "high"
+    assert seo.findings[0].title == "Meta descriptions are missing on some pages"
+    assert "seo.meta_description" not in seo.findings[0].title
+    assert seo.recommendations[0].tier == "quick_win"
+
+    # partial + high impact -> medium severity (one notch down).
+    assert content.uxui.findings[0].severity == "medium"
 
 
-def test_generate_commentary_uses_openai_provider_when_api_key_is_set(monkeypatch) -> None:
-    expected = CommentaryContent(
-        executive_summary="SEO score is 81. UX/UI score is 72. Lead score is 76.",
-        seo=_section("SEO score is 81"),
-        uxui=_section("UX/UI score is 72"),
-        lead_generation=_section("Lead score is 76"),
-    )
+def test_generate_commentary_is_deterministic_even_with_api_key() -> None:
+    # Phase 1 does not call OpenAI: the deterministic plan is the report regardless of key.
+    # (Phase 2 will add a structure-locked polish layer behind this key check.)
+    def run() -> dict:
+        return generate_commentary(
+            audit_context=_context(),
+            seo_facts={"summary": {"meta_descriptions_present_pct": 0.0}},
+            uxui_facts={"summary": {"pages_with_trust_signals": 1}},
+            psi_facts={},
+            score_breakdown=_score_breakdown(),
+            settings=Settings(_env_file=None, openai_api_key="test-key"),
+        )
 
-    def fake_call_openai(**kwargs):
-        assert kwargs["settings"].openai_model == "gpt-4o"
-        return expected
+    first = run()
+    second = run()
 
-    monkeypatch.setattr("apps.worker.stages.commentary._call_openai", fake_call_openai)
-
-    commentary = generate_commentary(
-        audit_context={
-            "url": "https://example.com/",
-            "niche": "builder",
-            "target_audience": "homeowners",
-        },
-        seo_facts={},
-        uxui_facts={},
-        psi_facts={},
-        score_breakdown=_score_breakdown(),
-        settings=Settings(_env_file=None, openai_api_key="test-key"),
-    )
-
-    assert commentary["status"] == "complete"
-    assert commentary["provider"] == "openai"
-    assert commentary["model"] == "gpt-4o"
-    assert commentary["content"] == expected.model_dump(mode="json")
-
-
-def _section(headline: str) -> CommentarySection:
-    return CommentarySection(
-        headline=headline,
-        findings=[
-            CommentaryFinding(
-                severity="info",
-                title=headline,
-                explanation=headline,
-                evidence_refs=["score_breakdown"],
-            )
-        ],
-        recommendations=[
-            CommentaryRecommendation(
-                tier="quick_win",
-                title="Review score breakdown",
-                rationale="The score breakdown shows deterministic opportunities.",
-                action_items=["Review failed and partial rules."],
-            )
-        ],
-    )
+    assert first["status"] == "deterministic"
+    assert first["provider"] == "deterministic"
+    # Identical facts -> byte-identical commentary content across runs.
+    assert first["content"] == second["content"]

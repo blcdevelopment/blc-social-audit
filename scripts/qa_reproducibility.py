@@ -41,6 +41,45 @@ def _rule_diff(category: str, s1: qa_common.JsonDict, s2: qa_common.JsonDict) ->
     return False, "; ".join(diffs)
 
 
+def _commentary_signature(snapshot: qa_common.JsonDict) -> qa_common.JsonDict:
+    """Reduce commentary to the structure that must be reproducible across runs.
+
+    Findings and recommendations - their selection, order, severity, tier, and supporting
+    evidence references - must be identical for the same site. Prose wording is allowed to
+    vary (Phase 2 polish); the structure is not.
+    """
+    content = (snapshot.get("commentary", {}) or {}).get("content", {}) or {}
+    signature: qa_common.JsonDict = {}
+    for section in ("seo", "uxui", "lead_generation"):
+        block = content.get(section, {}) or {}
+        signature[section] = {
+            "findings": [
+                (f.get("severity"), f.get("title"), tuple(f.get("evidence_refs") or []))
+                for f in (block.get("findings") or [])
+            ],
+            "recommendations": [
+                (r.get("tier"), r.get("title"), tuple(r.get("action_items") or []))
+                for r in (block.get("recommendations") or [])
+            ],
+        }
+    return signature
+
+
+def _commentary_diff(s1: qa_common.JsonDict, s2: qa_common.JsonDict) -> tuple[bool, str]:
+    a = _commentary_signature(s1)
+    b = _commentary_signature(s2)
+    if a == b:
+        total = sum(len(v["findings"]) + len(v["recommendations"]) for v in a.values())
+        return True, f"{total} findings+recommendations identical"
+    diffs = []
+    for section in a:
+        if a[section]["findings"] != b[section]["findings"]:
+            diffs.append(f"{section} findings differ")
+        if a[section]["recommendations"] != b[section]["recommendations"]:
+            diffs.append(f"{section} recommendations differ")
+    return False, "; ".join(diffs) or "commentary structure differs"
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="blc-qa-repro-") as tmp:
         tmp_dir = Path(tmp)
@@ -67,6 +106,8 @@ def main() -> int:
         uxui_ok, uxui_detail = _rule_diff("uxui", s1, s2)
         checks.append(("SEO rule breakdown", seo_ok, seo_detail))
         checks.append(("UX/UI rule breakdown", uxui_ok, uxui_detail))
+        comm_ok, comm_detail = _commentary_diff(s1, s2)
+        checks.append(("Findings & recommendations", comm_ok, comm_detail))
 
         width = max(len(name) for name, _, _ in checks)
         all_passed = True

@@ -129,7 +129,8 @@ def test_run_collection_audit_persists_epic_4_artifacts(monkeypatch, tmp_path) -
         assert job.result.uxui_score > 0
         assert job.result.lead_gen_score > 0
         assert job.result.score_breakdown["status"] == "complete"
-        assert job.result.commentary["status"] == "fallback_missing_api_key"
+        assert job.result.commentary["status"] == "deterministic"
+        assert job.result.commentary["provider"] == "deterministic"
         assert job.result.validation_log["status"] == "complete"
         assert job.result.pdf_path == str(pdf_path)
         assert job.result.report_metadata["renderer"] == "weasyprint"

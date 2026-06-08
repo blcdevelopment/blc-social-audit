@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     openai_temperature: float = Field(default=0.2, ge=0, le=1)
     openai_timeout_seconds: int = Field(default=60, ge=1)
 
+    # Caps on the deterministic content plan (see content_plan.build_content_plan).
+    commentary_max_findings_per_section: int = Field(default=5, ge=1, le=20)
+    commentary_max_recommendations_per_section: int = Field(default=5, ge=1, le=20)
+
     google_psi_api_key: SecretStr | None = None
     psi_scope: Literal["homepage", "all_crawled_pages"] = "all_crawled_pages"
     psi_max_pages: int = Field(default=10, ge=1, le=50)

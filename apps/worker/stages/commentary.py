@@ -56,37 +56,28 @@ def generate_commentary(
     score_breakdown: JsonDict,
     settings: Settings,
 ) -> JsonDict:
-    api_key = settings.openai_api_key.get_secret_value() if settings.openai_api_key else ""
-    if not api_key:
-        return _fallback_commentary(
-            score_breakdown=score_breakdown,
-            model="not_configured",
-            status="fallback_missing_api_key",
-        )
+    # Imported lazily: content_plan imports the commentary models defined in this module,
+    # so a top-level import here would be circular.
+    from apps.worker.stages.content_plan import build_content_plan
 
-    try:
-        content = _call_openai(
-            api_key=api_key,
-            audit_context=audit_context,
-            seo_facts=seo_facts,
-            uxui_facts=uxui_facts,
-            psi_facts=psi_facts,
-            score_breakdown=score_breakdown,
-            settings=settings,
-        )
-    except Exception as exc:  # pragma: no cover - network/provider failure path
-        return _fallback_commentary(
-            score_breakdown=score_breakdown,
-            model=settings.openai_model,
-            status="fallback_provider_error",
-            error_type=exc.__class__.__name__,
-        )
+    plan = build_content_plan(
+        audit_context=audit_context,
+        seo_facts=seo_facts,
+        uxui_facts=uxui_facts,
+        psi_facts=psi_facts,
+        score_breakdown=score_breakdown,
+        settings=settings,
+    )
 
+    # Phase 1: the deterministic plan IS the report - identical findings, order, severity,
+    # and tier on every run, with or without an OpenAI key. The optional LLM polish layer
+    # (Phase 2) will rewrite the prose strings here when a key is configured, without
+    # changing the structure. See docs/11_COMMENTARY_CONSISTENCY_PLAN.md.
     return {
-        "status": "complete",
-        "provider": "openai",
-        "model": settings.openai_model,
-        "content": content.model_dump(mode="json"),
+        "status": "deterministic",
+        "provider": "deterministic",
+        "model": "deterministic",
+        "content": plan.model_dump(mode="json"),
     }
 
 
@@ -108,6 +99,8 @@ def _call_openai(
     score_breakdown: JsonDict,
     settings: Settings,
 ) -> CommentaryContent:
+    # Retained for Phase 2 (LLM polish): structured-output plumbing that the polish layer
+    # will reuse to rewrite the deterministic plan's prose. Not called in Phase 1.
     from openai import OpenAI
 
     client = OpenAI(api_key=api_key, timeout=settings.openai_timeout_seconds)
@@ -158,158 +151,6 @@ def _render_user_prompt(
 
 def _read_prompt(path: Path) -> str:
     return path.read_text(encoding="utf-8").strip()
-
-
-def _fallback_commentary(
-    *,
-    score_breakdown: JsonDict,
-    model: str,
-    status: Literal["fallback_missing_api_key", "fallback_provider_error"],
-    error_type: str | None = None,
-) -> JsonDict:
-    scores = score_breakdown.get("scores", {})
-    seo_score = int(scores.get("seo") or 0)
-    uxui_score = int(scores.get("uxui") or 0)
-    lead_score = int(scores.get("lead_gen") or 0)
-    content = CommentaryContent(
-        executive_summary=(
-            f"The audited site has an SEO score of {seo_score}, a UX/UI score of {uxui_score}, "
-            f"and a Lead Generation Readiness score of {lead_score}. Review the failed "
-            "and partial rules first because those are the highest-confidence improvement areas."
-        ),
-        seo=_fallback_section(
-            "SEO",
-            seo_score,
-            score_breakdown.get("categories", {}).get("seo", {}),
-            "Improve search visibility with clearer page metadata and crawlable structure.",
-        ),
-        uxui=_fallback_section(
-            "UX/UI",
-            uxui_score,
-            score_breakdown.get("categories", {}).get("uxui", {}),
-            "Improve conversion clarity with stronger calls to action and trust signals.",
-        ),
-        lead_generation=_fallback_lead_section(lead_score),
-    )
-    artifact = {
-        "status": status,
-        "provider": "local_fallback",
-        "model": model,
-        "content": content.model_dump(mode="json"),
-    }
-    if error_type:
-        artifact["error_type"] = error_type
-    return artifact
-
-
-def _fallback_section(
-    category_label: str,
-    score: int,
-    category_breakdown: JsonDict,
-    default_recommendation: str,
-) -> CommentarySection:
-    failed_rules = _rules_with_results(category_breakdown, {"fail", "partial"})
-    primary_rule = failed_rules[0] if failed_rules else None
-    title = (
-        f"{category_label} score is {score}"
-        if primary_rule is None
-        else f"{category_label} opportunity: {primary_rule['description']}"
-    )
-    explanation = (
-        f"The deterministic {category_label} rubric produced a score of {score}."
-        if primary_rule is None
-        else (
-            "The scoring rubric flagged this item from extracted site facts: "
-            f"{primary_rule['description']}"
-        )
-    )
-
-    recommendations = [
-        _recommendation_from_rule("quick_win", failed_rules, default_recommendation, 0),
-        _recommendation_from_rule("mid_term", failed_rules, default_recommendation, 1),
-        _recommendation_from_rule("long_term", failed_rules, default_recommendation, 2),
-    ]
-    return CommentarySection(
-        headline=title,
-        findings=[
-            CommentaryFinding(
-                severity="medium" if score < 70 else "info",
-                title=title,
-                explanation=explanation,
-                evidence_refs=[primary_rule["rule_id"] if primary_rule else "score_breakdown"],
-            )
-        ],
-        recommendations=recommendations,
-    )
-
-
-def _fallback_lead_section(score: int) -> CommentarySection:
-    return CommentarySection(
-        headline=f"Lead Generation Readiness score is {score}",
-        findings=[
-            CommentaryFinding(
-                severity="medium" if score < 70 else "info",
-                title=f"Lead Generation Readiness score is {score}",
-                explanation=(
-                    f"The composite rubric produced a Lead Generation Readiness score of {score} "
-                    "from the deterministic SEO and UX/UI scores."
-                ),
-                evidence_refs=["composite"],
-            )
-        ],
-        recommendations=[
-            CommentaryRecommendation(
-                tier="quick_win",
-                title="Fix the clearest failed rubric items first",
-                rationale="The fastest improvements are the issues already flagged by rules.",
-                action_items=[
-                    "Review failed rules in the score breakdown and resolve visible gaps.",
-                ],
-            ),
-            CommentaryRecommendation(
-                tier="mid_term",
-                title="Improve conversion paths across key pages",
-                rationale="Lead generation improves when visitors can quickly find a next step.",
-                action_items=["Add or refine calls to action on important service pages."],
-            ),
-            CommentaryRecommendation(
-                tier="long_term",
-                title="Re-audit after site improvements",
-                rationale="Reproducible scoring makes before-and-after comparison straightforward.",
-                action_items=["Run the same URL again after changes and compare score breakdowns."],
-            ),
-        ],
-    )
-
-
-def _recommendation_from_rule(
-    tier: Literal["quick_win", "mid_term", "long_term"],
-    failed_rules: list[JsonDict],
-    default_recommendation: str,
-    index: int,
-) -> CommentaryRecommendation:
-    rule = failed_rules[index] if index < len(failed_rules) else None
-    title = f"Address {rule['rule_id']}" if rule else default_recommendation
-    rationale = (
-        f"The rubric flagged this item: {rule['description']}"
-        if rule
-        else "This recommendation follows the current Phase 1 scoring rubric."
-    )
-    return CommentaryRecommendation(
-        tier=tier,
-        title=title[:120],
-        rationale=rationale,
-        action_items=[
-            rule["description"] if rule else default_recommendation,
-        ],
-    )
-
-
-def _rules_with_results(category_breakdown: JsonDict, results: set[str]) -> list[JsonDict]:
-    rules = category_breakdown.get("rules", [])
-    if not isinstance(rules, list):
-        return []
-    return [rule for rule in rules if isinstance(rule, dict) and str(rule.get("result")) in results]
 
 
 def _compact_facts(payload: JsonDict) -> JsonDict:
