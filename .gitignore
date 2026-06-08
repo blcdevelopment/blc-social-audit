@@ -234,3 +234,4 @@ apps/frontend/tsconfig.tsbuildinfo
 !apps/frontend/lib/
 !apps/frontend/lib/**
 .claude/
+Claude.md

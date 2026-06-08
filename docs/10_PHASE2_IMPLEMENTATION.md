@@ -92,8 +92,8 @@ FastAPI API (+ team auth)  ──►  Celery workers + Redis
         |     +------------------------+-----------+----------------------+
         |     |                        |           |                      |
         v  Website (DEEPER, P2-E3)  Social (NEW, P2-E4)            Enrichment (v3, P2-E5)
- PostgreSQL  crawler/PSI/CrUX      Bright Data (primary) ·            SEMrush/Ahrefs,
- (managed)   SEO/UX/schema/a11y    YouTube API · IG Biz Disc (opt)    GA4/GSC/Clarity
+ PostgreSQL  crawler/PSI/CrUX      Bright Data (IG/FB) ·              SEMrush/Ahrefs,
+ (managed)   SEO/UX/schema/a11y    YouTube API (official)             GA4/GSC/Clarity
         |        \                   /        \                          /
         |         v                 v          v                        v
         |   deterministic scoring (YAML rubrics: seo, uxui, social, composite)   ← P2-23 composite code change
@@ -245,12 +245,12 @@ social report section.
   ```
   and a registry that picks a backend per platform.
 - **YouTube backend (P2-19, first):** YouTube Data API v3 — `channels.list` (1 quota unit) for
-  subs/views/video count; recent uploads. Free, stable; build first to prove the pipeline.
-- **Bright Data backend (P2-20, primary for IG/FB):** any public account, post-level depth,
-  pay-per-success (~$0.75/1K). **Gated on the P2-3 smoke test + legal sign-off (P2-1).**
-- **IG Business Discovery (P2-21, optional shortcut):** Graph API + FB Login; free metrics for
-  *business* accounts, no target OAuth. "Prefer shortcut, else Bright Data." **LinkedIn excluded;
-  TikTok deferred** (same adapter supports TikTok later with no rework).
+  subs/views/video count; recent uploads. Free, just an API key; build first to prove the pipeline.
+- **Bright Data backend (P2-20, IG/FB):** any public account (business or personal), post-level
+  depth, pay-per-success (~$0.75/1K). **Gated on the P2-3 smoke test; legal sign-off ✅ given (P2-1).**
+- **No OAuth and no IG Business Discovery** — dropped by BLC decision (both need a Facebook
+  app / account approval Darius declined; Bright Data already covers Instagram). **LinkedIn
+  excluded; TikTok deferred** (same adapter supports TikTok later with no rework).
 - **Graceful degradation:** missing/failed social data is skipped (like missing PSI), never aborts
   the audit — mirror the `psi_client` skip pattern.
 
@@ -322,9 +322,9 @@ Phase 2 core.
 
 ### 8.1 Order
 
-1. **P2-E1** (2–3 days) — discovery, keys, legal sign-off, Bright Data smoke test, draft `social.yaml`.
+1. **P2-E1** (2–3 days) — keys + Bright Data account, draft `social.yaml` (legal ✅ given; no OAuth/Business Discovery).
 2. **P2-E2** + **P2-E3** in parallel — both low-risk, reuse what works.
-3. **P2-E4** — start once P2-3 + legal sign-off (P2-1) are green; YouTube first, then Bright Data.
+3. **P2-E4** — start once P2-3 (Bright Data smoke test) is done; YouTube first, then Bright Data.
 4. **P2-E5** — v3 only.
 
 (Matches the week-by-week in [`docs/08_PHASE2_PLAN.md`](08_PHASE2_PLAN.md) §9.1.)

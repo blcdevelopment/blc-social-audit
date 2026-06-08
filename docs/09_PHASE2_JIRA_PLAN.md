@@ -36,10 +36,10 @@ Use these defaults for all Phase 2 Jira issues.
 **Decision context to attach to the epic (locked — see [`docs/08_PHASE2_PLAN.md`](08_PHASE2_PLAN.md) §3):**
 
 - **Internal tool, not SaaS.** One shared org, shared audit history. No multi-tenancy.
-- **Scraper-first social data.** Bright Data is the *primary* social source; YouTube uses
-  its official API; Instagram Business Discovery is an *optional* free shortcut, not a
-  dependency. **LinkedIn excluded** from scraping; **TikTok deferred**.
-- **Legal sign-off pending** before the paid scraper is switched on (public-data, logged-out, minimal retention).
+- **Bright Data scraping only.** Bright Data is the social source for IG/FB; YouTube uses
+  its free official API. **No OAuth, no IG Business Discovery** (both need account
+  approvals BLC declined). **LinkedIn excluded**; **TikTok deferred**.
+- **Legal sign-off ✅ given** (Darius, 2026-06-05): public-data, logged-out scraping, minimal retention, no LinkedIn.
 
 ---
 
@@ -94,8 +94,8 @@ rewriting it**.
 
 | Task | Title | Type | Epic | Status | Notes |
 |---|---|---|---|---|---|
-| P2-1 | Lock the Social-Data Path, Budget & Legal Sign-Off | Task | P2-E1 | ⬜ | Decisions drafted in Plan §3.2.5; needs owner go-ahead |
-| P2-2 | Provision Accounts & Keys | Task | P2-E1 | ⬜ | YouTube, FB/IG app, Bright Data, hosting, S3, auth |
+| P2-1 | Lock the Social-Data Path, Budget & Legal Sign-Off | Task | P2-E1 | ✅ | DECIDED: Bright Data only, no OAuth/Business Discovery; legal given (Darius 2026-06-05) |
+| P2-2 | Provision Accounts & Keys | Task | P2-E1 | ⬜ | Bright Data + YouTube key only (FB app/auth/hosting dropped or deferred to E2) |
 | P2-3 | Bright Data Paid Smoke Test on Real Builder Accounts | Task | P2-E1 | ⬜ | Gate before P2-20 |
 | P2-4 | Draft `rubrics/social.yaml` & Gather Calibration Accounts | Task | P2-E1 | ⬜ | Feeds P2-23 |
 | P2-5 | Choose Hosting / Auth / Storage Stack & Confirm Volume | Task | P2-E1 | ⬜ | Feeds P2-6/P2-7/P2-9 |
@@ -113,8 +113,8 @@ rewriting it**.
 | P2-17 | Local-SEO Signals (NAP, GBP, Location Pages, Local Schema) | Task | P2-E3 | ⬜ | High value for niche |
 | P2-18 | Trust/Conversion UX Signals + Security-Hygiene Checks | Task | P2-E3 | ⬜ | |
 | P2-19 | Social Data Provider Adapter (Interface + YouTube Backend) | Task | P2-E4 | ⬜ | Build first |
-| P2-20 | Bright Data Backend (Primary) for IG/FB | Task | P2-E4 | ⬜ | Gated on P2-3 + legal |
-| P2-21 | Instagram Business Discovery Optional Shortcut | Task | P2-E4 | ⬜ | Cost-saver only |
+| P2-20 | Bright Data Backend for IG/FB | Task | P2-E4 | ⬜ | Gated on P2-3 (legal ✅ given) |
+| P2-21 | ~~Instagram Business Discovery Shortcut~~ | Task | P2-E4 | ❌ Dropped | No account approvals (BLC); Bright Data covers IG |
 | P2-22 | Social Fact Extractors + Common Schema + Fixtures | Task | P2-E4 | ⬜ | |
 | P2-23 | Social Rubric + Scoring & Lead-Gen Update | Task | P2-E4 | ⬜ | Composite code change |
 | P2-24 | Social Commentary Prompts + Grounding-Validator Extension | Task | P2-E4 | ⬜ | |
@@ -154,46 +154,45 @@ and turns them into provisioned resources.
 
 ### P2-1 Lock the Social-Data Path, Budget & Legal Sign-Off
 
-**Issue type:** Task
+**Issue type:** Task · **Status: ✅ DECIDED (2026-06-05)**
 **Labels:** `phase-2`, `social-audit`, `scraper-first`
-**Description:** Confirm the scraper-first social-data strategy (Bright Data primary +
-YouTube Data API + IG Business Discovery as an optional shortcut), confirm pay-as-you-go
-budget with an optional spend alert, and obtain the BLC owner's written legal go-ahead for
-public-data, logged-out scraping with minimal retention. LinkedIn scraping is excluded;
-TikTok is deferred.
+**Description:** **DECIDED — Bright Data scraping only.** BLC (Darius) chose scraping over
+OAuth: *"we can just scrape the data."* Bright Data is the social source for IG/FB;
+YouTube uses its free official API. **No OAuth and no IG Business Discovery** (both need
+account approvals BLC declined). Pay-as-you-go budget (optional spend alert). LinkedIn
+excluded; TikTok deferred.
 **Acceptance criteria:**
 
-- Social-data strategy is confirmed in writing and matches Plan §3.2.5.
-- A monthly budget posture is agreed (pay-as-you-go; optional Bright Data spend alert, e.g. $25/mo).
-- A one-paragraph legal sign-off from the BLC owner is recorded, explicitly: public data only, never log into target accounts, minimal retention, no LinkedIn scraping.
+- ✅ Social-data strategy recorded and matches Plan §3.2.5: Bright Data only, no OAuth/Business Discovery.
+- ✅ Budget posture agreed (pay-as-you-go; optional Bright Data spend alert, e.g. $25/mo).
+- ✅ Legal go-ahead given by BLC: public data only, never log into target accounts, minimal retention, no LinkedIn.
 
 **Subtasks:**
 
-- Re-verify Plan §3.2 / §10 specifics (Bright Data ~$0.75/1K pay-per-success; YouTube 10k units/day, 1 unit/channel call) — they move quickly.
-- Confirm pay-as-you-go budget + optional spend alert.
-- Obtain and record the written legal sign-off.
-- Confirm LinkedIn excluded and TikTok deferred in the ticket and labels.
+- ✅ Re-verify Plan §3.2 / §10 specifics (Bright Data ~$0.75/1K pay-per-success; YouTube 10k units/day, 1 unit/channel call).
+- ✅ Confirm pay-as-you-go budget + optional spend alert.
+- ✅ Record the legal go-ahead.
+- ✅ Confirm LinkedIn excluded and TikTok deferred.
 
 ### P2-2 Provision Accounts & Keys
 
 **Issue type:** Task
 **Labels:** `phase-2`, `productionization`, `social-audit`
-**Description:** Stand up every external account and credential Phase 2 needs, and store
-them in the chosen secret store (not `.env` long-term — see P2-10).
+**Description:** Stand up the external accounts the social MVP needs — scraping only. No
+Facebook app, no OAuth provider. Hosting/auth/storage are **not** part of the MVP (they
+belong to E2 productionization, deferred until the tool graduates from internal use).
 **Acceptance criteria:**
 
+- A **Bright Data** account is created with the IG/FB social scrapers enabled.
 - A working **YouTube Data API** key (Google Cloud project) is available.
-- A **Facebook Login app** + one **Instagram professional account** exist for Business Discovery (BLC-owned; prospects do nothing).
-- A **Bright Data** account is created with the social scrapers enabled.
-- Auth provider (Clerk / Supabase Auth / Google Workspace SSO), managed Postgres, hosting (Vercel + Railway/Render or AWS), and an **S3 bucket** are provisioned.
+- Secrets are stored safely (interim `.env`; a real secret store comes with E2).
 
 **Subtasks:**
 
-- Create Google Cloud project + enable YouTube Data API v3; issue a key.
-- Create the Facebook Login app + connect one IG professional account.
 - Create the Bright Data account; note dataset/endpoint IDs for IG + FB.
-- Provision auth provider, managed Postgres, hosting accounts, and the S3 bucket.
-- Record where each secret lives (interim `.env`, target secret store).
+- Create Google Cloud project + enable YouTube Data API v3; issue a key.
+- *(No Facebook app, no IG professional account, no auth/hosting/S3 — dropped or deferred to E2.)*
+- Record where each secret lives.
 
 ### P2-3 Bright Data Paid Smoke Test on Real Builder Accounts
 
@@ -572,10 +571,10 @@ enforcement, HSTS, basic security headers, mixed-content) for professional polis
 **Labels:** `phase-2`, `blc`, `social-audit`, `scraper-first`
 **Description:** Add the third audit type from the original scope. Architecturally it is a
 **clone of the website pipeline** — the same Extract → Score → Commentate → Validate pattern
-— so most of the framework is reused. Scraper-first: Bright Data is the primary source for
-IG/FB; YouTube uses its official API; IG Business Discovery is an optional free shortcut.
-**LinkedIn excluded; TikTok deferred.** Do not start P2-20 until **P2-3** (paid smoke test)
-and the legal sign-off (**P2-1**) are green.
+— so most of the framework is reused. Bright Data scraping only: Bright Data for IG/FB,
+YouTube via its free official API. **No OAuth, no IG Business Discovery** (account approvals
+BLC declined). **LinkedIn excluded; TikTok deferred.** Legal sign-off ✅ given — do not start
+P2-20 until **P2-3** (paid smoke test) is done.
 
 ### P2-19 Social Data Provider Adapter (Interface + YouTube Backend)
 
@@ -605,7 +604,7 @@ pipeline end-to-end before any paid scraping.
 **Labels:** `phase-2`, `social-audit`, `scraper-first`
 **Description:** Implement the **primary** social backend: Bright Data for Instagram and
 Facebook — any public account (business **or** personal), competitors, and post-level depth,
-behind the P2-19 adapter. ~$0.75/1K, pay-per-success. **Gated on P2-3 + legal sign-off (P2-1).**
+behind the P2-19 adapter. ~$0.75/1K, pay-per-success. **Gated on P2-3 (Bright Data smoke test); legal sign-off ✅ given (P2-1).**
 **Acceptance criteria:**
 
 - A Bright Data backend returns IG profile + recent-post engagement and FB page public data through the adapter interface.
@@ -619,25 +618,15 @@ behind the P2-19 adapter. ~$0.75/1K, pay-per-success. **Gated on P2-3 + legal si
 - Add graceful-skip + retry handling.
 - Add tests using the P2-3 captured fixtures.
 
-### P2-21 Instagram Business Discovery Optional Shortcut
+### P2-21 ~~Instagram Business Discovery Shortcut~~ — ❌ DROPPED (2026-06-05)
 
-**Issue type:** Task
+**Issue type:** Task · **Status: ❌ DROPPED**
 **Labels:** `phase-2`, `social-audit`
-**Description:** Add Instagram **Business Discovery** (Graph API + FB Login) as an *optional*
-free shortcut for **business** accounts to save Bright Data calls. It is a nice-to-have, not
-a dependency — if Meta restricts it, Bright Data already covers Instagram. **LinkedIn
-excluded; TikTok deferred** (the adapter supports TikTok later with no rework).
-**Acceptance criteria:**
-
-- When a target IG account is a professional/business account, Business Discovery can supply basic metrics (followers, media count, recent media engagement) without the target's OAuth.
-- The pipeline prefers the shortcut when available and falls back to Bright Data otherwise — transparently.
-- LinkedIn is not scraped; TikTok is not implemented (documented as deferred).
-
-**Subtasks:**
-
-- Implement the Business Discovery backend behind the adapter.
-- Add the "prefer shortcut, else Bright Data" selection logic.
-- Add tests + document LinkedIn-excluded / TikTok-deferred.
+**Description:** **Dropped by BLC decision.** Business Discovery would require BLC to stand
+up a Facebook Login app + an IG professional account — an approval Darius explicitly
+declined (*"we can just scrape the data"*). Bright Data (P2-20) already covers Instagram
+for any public account, so this shortcut adds setup for ~no benefit. **Not building it.**
+(LinkedIn remains excluded; TikTok deferred — the adapter supports TikTok later with no rework.)
 
 ### P2-22 Social Fact Extractors + Common Schema + Fixtures
 
@@ -649,7 +638,7 @@ excluded; TikTok deferred** (the adapter supports TikTok later with no rework).
 mix, bio/CTA, link-in-bio/funnel signals). Add fixtures from the P2-3 captures.
 **Acceptance criteria:**
 
-- A common social-facts schema is defined and produced identically regardless of source (YouTube / Bright Data / Business Discovery).
+- A common social-facts schema is defined and produced identically regardless of source (YouTube / Bright Data).
 - `extractor_social.py` computes follower size, posting cadence/consistency, and an engagement-rate estimate deterministically.
 - Strong/weak social fixtures + extractor tests exist (mirroring the website fixtures).
 
@@ -795,7 +784,7 @@ Phase 2 **core** (P2-E1 + P2-E2 + P2-E3 + P2-E4) is complete when:
 - **P2-E1:** Social-data path, budget, and legal sign-off are locked; accounts/keys provisioned; Bright Data paid smoke test passed; `social.yaml` drafted; hosting/auth/storage chosen.
 - **P2-E2:** A team member must authenticate; reports are stored in S3 and served via signed URLs; the crawler blocks internal IPs at request level; the system is deployed to managed hosting with TLS, error tracking, and backups; a dashboard shows results and history.
 - **P2-E3:** The website audit produces and scores the new signals (schema, AEO, field CWV, accessibility, crawlability/link-health, local SEO, trust/security); the strong/weak calibration gate still holds; rubric versions are bumped.
-- **P2-E4:** Submitting website + social handles produces a deterministic **Social Score** per platform **without the audited account logging in** (Bright Data primary; YouTube API; IG Business Discovery optional), grounded social commentary with tiered recommendations, and a combined **Lead-Generation Readiness score that includes social** — reproducible for identical inputs, in both PDF and dashboard.
+- **P2-E4:** Submitting website + social handles produces a deterministic **Social Score** per platform **without the audited account logging in** (Bright Data for IG/FB; YouTube official API), grounded social commentary with tiered recommendations, and a combined **Lead-Generation Readiness score that includes social** — reproducible for identical inputs, in both PDF and dashboard.
 - Validated on real builder/remodeler sites **and** their social accounts.
 
 Enrichment (P2-E5) is **explicitly out of Phase 2 core** and remains v3 unless pulled forward.

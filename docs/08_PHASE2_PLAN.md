@@ -16,8 +16,10 @@
 > Jira tasks use **sequential IDs (P2-1…P2-28)** like Phase 1 — the full per-task mapping is in
 > [`docs/09_PHASE2_JIRA_PLAN.md`](09_PHASE2_JIRA_PLAN.md).
 
-> **Sources.** This plan is grounded in the original scope documents in
-> `docx/starting docx/`:
+> **Sources.** This plan is grounded in the original scope documents (external Word
+> files kept locally in `docx/starting docx/`; they are gitignored via `*.docx` and are
+> **not committed** to the repo — their content is captured in full in
+> [`docs/01_REQUIREMENTS.md`](01_REQUIREMENTS.md)):
 > - **Social Media & Website Auditing Automation** — the full product scope (user
 >   input, website + social data collection, three audit types, scoring &
 >   benchmarking, recommendations, final deliverable, and the "Future Data
@@ -149,8 +151,8 @@ there are three access mechanisms, and the right answer for BLC is a hybrid of t
 | Platform | Open API? | Owner OAuth | Third-party scraper | Verdict for BLC |
 |---|---|---|---|---|
 | **YouTube** | ✅ Data API v3 (free) | n/a | rarely needed | **Build first.** Free, reliable, zero fork risk. |
-| **Instagram** | ⚠️ Business Discovery (public metrics for *business* accounts, no target OAuth) | ✅ full analytics for own clients | ✅ for personal accounts / deeper post data | **Bright Data primary;** Business Discovery as an optional free shortcut for business accounts. Covers any public account either way. |
-| **Facebook** | ⚠️ Page public data is thin; rich Page Insights need owner OAuth | ✅ for own clients | ✅ public page posts/engagement | Scraper or owner-OAuth. Lower priority than IG for this niche. |
+| **Instagram** | ⚠️ Business Discovery (public metrics for *business* accounts, no target OAuth) | ✅ full analytics for own clients | ✅ for personal accounts / deeper post data | **Bright Data** — covers any public account. (Business Discovery dropped: account approvals declined.) |
+| **Facebook** | ⚠️ Page public data is thin; rich Page Insights need owner OAuth | ✅ for own clients | ✅ public page posts/engagement | **Bright Data** scraper. Lower priority than IG for this niche. |
 | **LinkedIn** | ❌ Partner Program only (incorporated cos, opaque pricing, often declined) | limited | ⚠️ works but **highest enforcement risk** — LinkedIn ToS bans scraping and litigates (Proxycurl shut down mid-2025) | **Defer / lowest priority.** Least relevant to residential builders/remodelers anyway. |
 | **TikTok** | ❌ no free public-data API (Business API = ads only; Research API gated) | n/a | ⚠️ works but hardest to maintain (most aggressive anti-bot) | **Optional v2.1.** Rising for home-services video; add only if BLC wants it. |
 
@@ -178,52 +180,51 @@ unsettled but irrelevant here (BLC audits, it does not train models on the data)
 minimum needed for the audit with a retention policy (Workstream A), and get a short
 written legal sign-off before turning on a paid provider.
 
-#### 3.2.4 Recommendation (given the §3.1 internal-tool decision)
+#### 3.2.4 Recommendation — DECIDED: Bright Data scraping only
 
-**Scraper-first.** Bright Data is the **primary** data source for the social audit —
-that is the whole point of choosing scraping. It works on *any* public account
+**Scraping only (Bright Data) — no OAuth, no Facebook app / account approvals.**
+Decided by BLC (Darius, 2026-06-05): *"we can just scrape the data."* Bright Data is
+the social data source for Instagram and Facebook. It works on *any* public account
 (business **or** personal), returns consistent deep data, and does **not** depend on
 Meta's app review or its habit of tightening official endpoints (the Basic Display API
-died Dec 2024). The free official paths are kept only as **opportunistic cost-savers**,
-never as load-bearing dependencies.
+died Dec 2024). YouTube uses its free official API (an API key only — no app review).
 
 Build one provider-adapter; ship backends in this order:
 
-1. **YouTube → YouTube Data API (primary for YouTube).** The one official API that is
-   genuinely open, free, and stable — no reason to scrape it. (Bright Data can also do
-   YouTube if BLC later wants a single provider for everything.) Build first to prove
-   the pipeline end-to-end.
-2. **Instagram / Facebook / (TikTok later) → Bright Data (primary).** Default engine
-   for everything Meta: business *and* personal accounts, competitors, and post-level
-   depth, behind one swappable adapter. $0.75/1K, pay-per-success, ~98% IG success
-   rate. (Apify was the evaluated alternative; not selected — §3.2.5.)
-3. **Instagram Business Discovery → optional free shortcut.** When a target is a
-   *business* account, this free Meta endpoint can supply the basic metrics and save a
-   few scraper calls — but it is a *nice-to-have*, not what the audit relies on. If Meta
-   restricts it, nothing breaks: Bright Data already covers Instagram.
-4. **Owner-OAuth → later, optional.** Only for BLC's onboarded clients who want the
-   richer first-party analytics (saves, reach, demographics) a public scrape can't see.
+1. **YouTube → YouTube Data API.** The one official API that is genuinely open, free,
+   and stable — just needs an API key, no app review. Build first to prove the pipeline
+   end-to-end. (Bright Data can also do YouTube if BLC later wants a single provider.)
+2. **Instagram / Facebook / (TikTok later) → Bright Data.** The engine for everything
+   Meta: business *and* personal accounts, competitors, and post-level depth, behind one
+   swappable adapter. $0.75/1K, pay-per-success, ~98% IG success rate. (Apify was the
+   evaluated alternative; not selected — §3.2.5.)
 
-This keeps the one external dependency (Bright Data) behind a single swappable adapter,
-gives BLC the competitor/prospect audits OAuth can't serve, and keeps cost and legal
-risk low.
+**Dropped (BLC decision — no account approvals, no opt-in dependence):**
 
-> **Bottom line on "OAuth or scrapers like Apify?"** For an *internal prospecting/
-> sales* tool, **a scraper (Bright Data) as the primary engine**, not OAuth — with
-> YouTube's official API and IG Business Discovery as free extras where they happen to
-> work. OAuth only audits people who opt in, which defeats the point of auditing a
-> prospect you're trying to win. Keep OAuth as an optional bonus for existing clients.
+- **Instagram Business Discovery** — *not used.* It would need BLC to stand up a
+  Facebook Login app + an IG professional account (an approval Darius explicitly
+  rejected), and Bright Data already covers Instagram, so it adds setup for ~no benefit.
+- **Owner-authorized OAuth** — *not used.* It only audits accounts whose owner logs in
+  (existing clients), which defeats auditing the prospects/competitors this tool targets.
+
+This keeps the one external dependency (Bright Data) behind a single swappable adapter
+and keeps cost and legal risk low.
+
+> **Bottom line on "OAuth or scrapers?"** For an *internal prospecting/sales* tool,
+> **Bright Data scraping** — full stop. OAuth only audits people who opt in, which
+> defeats the point of auditing a prospect you're trying to win, and it (plus IG
+> Business Discovery) needs account approvals BLC chose to skip.
 
 #### 3.2.5 Decisions locked (June 2026)
 
 | Decision | Choice |
 |---|---|
-| Access strategy | **Scraper-first** — Bright Data is the *primary* social data source; YouTube uses its official API; IG Business Discovery is an *optional* free shortcut, not a dependency (not OAuth) |
+| Access strategy | **Bright Data scraping only** for IG/FB; YouTube uses its free official API. **No OAuth. No IG Business Discovery** (both need account approvals BLC rejected). |
 | Scraper provider | **Bright Data** ($0.75/1K, pay-per-success, no monthly commitment) |
 | Monthly budget | **Pay-as-you-go, no hard cap needed** — internal/low volume keeps this to a few dollars/month (§10). Optionally set a small Bright Data spend alert (e.g. $25/mo) as a safety net. |
 | TikTok | **Deferred** — not required now; revisit later (Bright Data already supports it behind the same adapter, so adding it later is small). |
 | LinkedIn | **Excluded** from scraping (enforcement risk). |
-| Legal sign-off | **Pending** — a quick "go ahead" from the BLC owner before enabling Bright Data (see §3.2.3; public-data-only, no logins, minimal retention). |
+| Legal sign-off | **✅ Given** — BLC (Darius) approved public-data, logged-out scraping via Bright Data on 2026-06-05 (public-data-only, no logins, minimal retention, no LinkedIn). |
 
 ### 3.3 Other decisions
 - **Competitor benchmarking** (scope §4): required in Phase 2 or deferred to v3? If
@@ -302,10 +303,10 @@ website audit.
 
 ### 5.2 Pipeline (reuses Phase 1 pattern)
 1. **Input** — accept social handles/URLs (already in the original input spec) alongside the website URL.
-2. **Collect** — per-platform collectors behind one provider-adapter (§3.2), **scraper-first**:
-   - **YouTube** → YouTube Data API (channel stats, uploads, views, subs, engagement) — official API stays primary here.
-   - **Instagram / Facebook / (TikTok later)** → **Bright Data (primary)**; IG Business Discovery is an optional free shortcut for business accounts, not a dependency. **LinkedIn excluded** (enforcement risk, §3.2.2).
-   - **Owner-OAuth** → optional, only for BLC's onboarded clients.
+2. **Collect** — per-platform collectors behind one provider-adapter (§3.2), **scraping only**:
+   - **YouTube** → YouTube Data API (channel stats, uploads, views, subs, engagement) — free official API, just an API key.
+   - **Instagram / Facebook / (TikTok later)** → **Bright Data**. **LinkedIn excluded** (enforcement risk, §3.2.2).
+   - **No OAuth and no IG Business Discovery** — dropped per the BLC decision (both need account approvals; §3.2.4/§3.2.5).
 3. **Extract** — deterministic parsers normalize each platform's data into a common social-facts schema.
 4. **Score** — a new **YAML social rubric** (same engine as `rubrics/`) produces a deterministic Social Score; weights tunable without code.
 5. **Commentate** — the existing commentary pipeline writes social findings + tiered recommendations from facts + scores.
@@ -332,8 +333,8 @@ website audit.
 
 ### 5.4 Tickets (Epic P2-E4)
 - P2-19 Social data provider adapter (interface + YouTube backend first)
-- P2-20 **Bright Data backend (primary)** for IG/FB — any public account, post-level depth (§3.2.5)
-- P2-21 Instagram Business Discovery as an optional free shortcut for business accounts; LinkedIn excluded, TikTok deferred
+- P2-20 **Bright Data backend** for IG/FB — any public account, post-level depth (§3.2.5)
+- ~~P2-21 Instagram Business Discovery shortcut~~ — **DROPPED** (BLC: no account approvals; Bright Data covers IG). LinkedIn excluded, TikTok deferred.
 - P2-22 Social fact extractors + common schema + fixtures
 - P2-23 `rubrics/social.yaml` + extend `scoring.py` (composite Literal/weights) + Lead-Gen update
 - P2-24 Social commentary prompts + grounding-validator extension
@@ -447,8 +448,8 @@ FastAPI API (+ team auth)  ──►  Celery workers + Redis
         |     +------------------------+-----------+----------------------+
         |     |                        |           |                      |
         v  Website (DEEPER, D)      Social (NEW, B)                  Enrichment (v3, C)
- PostgreSQL  crawler/PSI/CrUX     Bright Data (primary) ·             SEMrush/Ahrefs,
- (managed)   SEO/UX/schema/a11y   YouTube API · IG Biz Disc (opt)     GA4/GSC/Clarity
+ PostgreSQL  crawler/PSI/CrUX     Bright Data (IG/FB) ·               SEMrush/Ahrefs,
+ (managed)   SEO/UX/schema/a11y   YouTube API (official)              GA4/GSC/Clarity
         |        \                   /        \                          /
         |         v                 v          v                        v
         |   deterministic scoring (YAML rubrics: seo, uxui, social, [aeo?], composite)
@@ -473,9 +474,9 @@ Social Score folded into composite, a dashboard view, and (v3) enrichment source
 | Object storage | S3 / S3-compatible | Introduce a storage interface first (none today); signed URLs |
 | Hosting | Vercel (UI) + Railway/Render (API+workers), or AWS ECS/Fargate | Low ops overhead |
 | YouTube data | YouTube Data API v3 | Free; 10k units/day, 1 unit per channel-stats call |
-| Social data — **primary** | **Bright Data** ✅ selected ($0.75/1K, pay-per-success); Apify was the alternative | Primary engine for IG/FB/(TikTok later) — any public account, deep data (§3.2.4) |
-| Instagram — optional free shortcut | Instagram Business Discovery (Graph API + FB Login) | Free metrics for *business* accounts; a cost-saver, **not** a dependency |
-| Owner analytics (own clients) | Meta / LinkedIn OAuth | Optional; richer first-party metrics for onboarded clients only |
+| Social data (IG/FB) | **Bright Data** ✅ selected ($0.75/1K, pay-per-success); Apify was the alternative | The engine for IG/FB/(TikTok later) — any public account, deep data (§3.2.4) |
+| ~~IG Business Discovery~~ | **Dropped** | Needs a Facebook app + IG account approval — BLC declined; Bright Data covers IG (§3.2.4) |
+| ~~Owner OAuth (social)~~ | **Dropped** | Only audits opt-in accounts; defeats the prospecting use case (§3.2.4) |
 | Structured data | JSON-LD parse + schema validation | Workstream D; no external dep |
 | Accessibility | **axe-core** via existing Playwright | Workstream D; reuses the crawler's browser |
 | Field CWV | **CrUX API** (LCP/INP/CLS) | Workstream D; free, real-world ranking signal |
@@ -494,18 +495,18 @@ B and D can overlap once the social-data path (§3.2) is confirmed.
 
 | Phase / Track | Focus | Duration |
 |---|---|---|
-| **Phase 2.0** | Discovery & scope lock — confirm §3.2 social path + budget, draft `social.yaml`, pick hosting/auth/storage, confirm volume, legal sign-off for scraper | **2–3 days** |
+| **Phase 2.0** | Discovery & scope lock — social path locked (Bright Data; legal ✅ given), create Bright Data account, draft `social.yaml`, confirm volume | **2–3 days** |
 | **Track A** | Productionization & platform — *internal scope* (team auth, hosting, S3, SSRF, monitoring, dashboard/history) | **2–3 weeks** (no multi-tenancy) |
 | **Track D** | Deepen website audit (schema, AEO, CrUX, a11y, local SEO, link health) — runs in parallel with A | **1–2 weeks** |
 | **Track B** | Social media audit (collectors, extractors, rubric, commentary, validation, report + Lead-Gen update) | **3–4 weeks** (swings on §3.2) |
 | **Track C** | Enrichment — benchmarking + analytics integrations | **4–5 weeks** (v3) |
 
 ### 9.1 Week-by-week (core: A + D + B)
-- **Wk 0 (2–3 days):** Phase 2.0 — confirm social path (YouTube API + **Bright Data primary** + IG Business Discovery as optional shortcut) + budget + legal sign-off; **run a small paid Bright Data smoke test on real builder accounts**; draft `social.yaml`; choose hosting/auth/storage.
+- **Wk 0 (2–3 days):** Phase 2.0 — social path is **locked** (YouTube API + **Bright Data** for IG/FB; no OAuth/Business Discovery) and **legal is ✅ given**; create the Bright Data account; **run a small paid Bright Data smoke test on real builder accounts**; draft `social.yaml`.
 - **Wk 1:** A — team auth on API+UI; managed DB + hosting skeleton; CI/CD deploy. **D in parallel:** structured-data + crawlability/link-health signals + rubric rules.
 - **Wk 2:** A — S3 storage; complete SSRF interception; Sentry/backups/retention. **D:** CrUX + axe-core accessibility + local-SEO signals; re-calibrate rubric.
 - **Wk 3:** A — dashboard view + audit history/re-run/share. **B starts:** provider adapter + **YouTube** backend end-to-end.
-- **Wk 4:** B — **Bright Data backend (primary)** for IG/FB + optional IG Business Discovery shortcut (per §3.2); social extractors + fixtures.
+- **Wk 4:** B — **Bright Data backend** for IG/FB (per §3.2); social extractors + fixtures.
 - **Wk 5:** B — `social.yaml` + Social Score + composite update; social commentary + grounding extension.
 - **Wk 6:** B — report/PDF/dashboard social section; **fold Social into Lead-Gen score**; QA on real accounts; calibration.
 
@@ -522,8 +523,7 @@ tiers; the only new variable cost is the scraper (Bright Data), and it is small.
 | Item | 2026 cost | Notes |
 |---|---|---|
 | YouTube Data API | **Free** | 10k units/day; an audit is a few units |
-| Instagram Business Discovery | **Free** | Public metrics for business accounts |
-| Paid scraper — **Bright Data** | **$0.75 / 1K results**, pay-per-success, no commitment | e.g. 300 audits × ~3 calls ≈ <$1/mo; covers IG/FB/LinkedIn/TikTok |
+| Paid scraper — **Bright Data** | **$0.75 / 1K results**, pay-per-success, no commitment | e.g. 300 audits × ~3 calls ≈ <$1/mo; covers IG/FB/TikTok |
 | Paid scraper — **Apify** (alt) | **$29/mo** Starter incl. $29 usage; IG profile $1.60/1K, posts $1.00/1K | Simpler to start; per-actor pricing |
 | LLM commentary (OpenAI/Claude) | usage-based | Grounded, short outputs; cents per audit |
 | Google PSI / CrUX API | **Free** | Covers internal scale |
@@ -544,12 +544,11 @@ tiers; the only new variable cost is the scraper (Bright Data), and it is small.
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| **Social data access** (Technical Assessment §2.1) | Could block IG/FB/LinkedIn | Scraper-first (§3.2): Bright Data is the primary engine and works on any public account; YouTube API + IG Business Discovery are free extras, not dependencies — all behind one adapter |
+| **Social data access** (Technical Assessment §2.1) | Could block IG/FB | Bright Data scraping (§3.2) works on any public account; YouTube uses its free official API — all behind one adapter |
 | Scraper breakage | Some audits fail | Provider abstraction + monitoring; graceful skip (like missing PSI) so an audit degrades, never aborts |
 | Legal / ToS exposure | ToS or privacy issues | Scrape **public** data logged-out only (Meta v. Bright Data, hiQ favor this); **avoid LinkedIn scraping**; minimal retention; short legal sign-off before enabling a paid provider (§3.2.3) |
 | Social score miscalibration | BLC distrusts results | Tune `social.yaml` against strong/weak sample accounts (same approach as SEO/UX) |
 | LLM hallucination on social facts | Credibility loss | Reuse grounding validator; all numbers come from extracted facts |
-| IG Business Discovery field limits | Low — it's only an optional shortcut | Bright Data (primary) already covers personal accounts + deep data; Business Discovery is used only where it saves a call |
 | Unpredictable per-audit cost | Cost overrun | Page/handle caps, caching, volume sizing from §3.3; costs are tiny at internal volume (§10) |
 | Productionization distracts from features | Velocity drops | Track A + D first (contained, low-risk), then B |
 
@@ -568,8 +567,8 @@ Phase 2 core (A + D + B) is successful when:
   health), the strong/weak calibration gate still holds, and the rubric version is
   bumped.
 - **B:** Submitting website + social handles produces a deterministic **Social Score**
-  per platform **without requiring the audited account to log in** (Bright Data
-  primary; YouTube API; IG Business Discovery optional), grounded social commentary with tiered
+  per platform **without requiring the audited account to log in** (Bright Data for
+  IG/FB; YouTube official API), grounded social commentary with tiered
   recommendations, and a combined **Lead-Generation Readiness score that includes
   social** — reproducible for identical inputs, presented in the PDF and dashboard.
 - Validated on real builder/remodeler sites **and** their social accounts.
@@ -585,22 +584,19 @@ Phase 2 core (A + D + B) is successful when:
 
 ## 14. What's Needed To Start
 
-1. **§3.2 confirmed (locked — §3.2.5):** scraper-first = **Bright Data primary** +
-   YouTube API + IG Business Discovery (optional shortcut); pay-as-you-go (no hard cap,
-   internal volume); **TikTok deferred**; **LinkedIn excluded**. Remaining item: the
-   legal go-ahead in #4.
-2. **Accounts & keys for the chosen path:**
-   - Google Cloud project + **YouTube Data API** key.
-   - A **Facebook Login app** + one **Instagram professional account** for Business
-     Discovery (BLC owns these; prospects do nothing).
-   - A **Bright Data** account — the primary social-data source (selected — §3.2.5).
-   - Auth provider (Clerk/Supabase/Workspace SSO) + hosting accounts (Vercel,
-     Railway/Render, managed Postgres) + an S3 bucket.
+1. **§3.2 locked (§3.2.5):** **Bright Data scraping only** for IG/FB + YouTube official
+   API; **no OAuth, no IG Business Discovery**; pay-as-you-go (no hard cap, internal
+   volume); **TikTok deferred**; **LinkedIn excluded**. **Legal go-ahead ✅ given**
+   (Darius, 2026-06-05).
+2. **Accounts & keys (lean — scraping only):**
+   - A **Bright Data** account — the social-data source for IG/FB (selected — §3.2.5).
+   - Google Cloud project + **YouTube Data API** key (free; no app review).
+   - *(No Facebook app, no IG professional account, no OAuth provider — dropped.)*
+   - Hosting/auth/storage accounts are **only needed if/when productionizing** (E2);
+     not required for the internal MVP, which runs locally/private like Phase 1.
 3. A handful of **real social accounts** (strong + weak builder/remodeler examples)
    for calibrating `social.yaml`, mirroring the website test sites.
-4. A short **legal sign-off** confirming public-data, logged-out scraping with minimal
-   retention is acceptable (and that LinkedIn scraping is excluded) — §3.2.3.
-5. The **P1-30** internal-test feedback to finalize priority order.
+4. The **P1-30** internal-test feedback to finalize priority order.
 
 ---
 
