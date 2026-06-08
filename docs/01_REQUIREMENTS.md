@@ -227,7 +227,12 @@ Section 2 above is what Darius wrote. Section 3 is what we noticed was missing o
 - **Option A:** OAuth-based — only audit accounts whose owners authenticate. Tool becomes a self-audit service. Loses the competitive-audit use case.
 - **Option B:** Paid scraping provider — can audit any public account. Recurring subscription cost. Reliability risk on platform updates.
 
-**Status:** Deferred to Phase 2. Decision deliberately postponed because it is a product-shape decision, not a feature flag.
+**Status:** ✅ **Resolved (2026-06-05) — Option B (scraping).** BLC (Darius) chose a paid
+scraping provider (**Bright Data**) for Instagram/Facebook so the tool can audit *any*
+public account, including prospects and competitors. **No OAuth** (it only audits opt-in
+accounts) and **no IG Business Discovery** (it needs a Facebook app / account approval BLC
+declined). YouTube uses its free official API. LinkedIn excluded; TikTok deferred. See
+[`docs/08_PHASE2_PLAN.md`](08_PHASE2_PLAN.md) §3.2.
 
 ### 3.2 Scoring methodology — undefined in original scope
 

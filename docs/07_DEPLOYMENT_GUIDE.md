@@ -352,7 +352,7 @@ Recommended order: P1-27 → P1-28 → P1-29 → P1-30 → P1-31 → P1-32.
 
 **Issue type:** Task
 **Goal:** Use the internal test results to scope Phase 2 (productionization + deferred features).
-**Deliverable:** Phase 2 scope / approach / timeline draft in [`docs/08_PHASE2_PLAN.md`](08_PHASE2_PLAN.md) (grounded in `docx/starting docx/`).
+**Deliverable:** Phase 2 scope / approach / timeline draft in [`docs/08_PHASE2_PLAN.md`](08_PHASE2_PLAN.md) (grounded in the original scope docs — external `*.docx` files, gitignored and not committed; their content lives in [`docs/01_REQUIREMENTS.md`](01_REQUIREMENTS.md)).
 **Subtasks:**
 
 - [x] List production-hardening needs: authentication, complete SSRF interception, TLS, object storage, monitoring/backups, data retention.

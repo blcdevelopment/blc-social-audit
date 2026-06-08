@@ -75,6 +75,10 @@ services:
       AUDIT_ENQUEUE_ENABLED: ${AUDIT_ENQUEUE_ENABLED:-true}
       LOCAL_REPORT_STORAGE_DIR: /app/storage/reports
       LOCAL_SCREENSHOT_STORAGE_DIR: /app/storage/screenshots
+      # Pin Playwright's browser directory so it never derives the path from XDG_CACHE_HOME.
+      # The PDF renderer repoints XDG_CACHE_HOME at a font cache at runtime, which otherwise
+      # hides the installed browsers from the crawler on the 2nd+ audit in a worker process.
+      PLAYWRIGHT_BROWSERS_PATH: /root/.cache/ms-playwright
     volumes:
       - .:/app
       - ./storage:/app/storage

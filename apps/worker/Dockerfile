@@ -23,6 +23,9 @@ RUN pip install --no-cache-dir uv
 
 COPY . .
 RUN uv pip install --system -e .
+# Pin Playwright's browser location so it is independent of XDG_CACHE_HOME (which the PDF
+# renderer repoints at a font cache at runtime). Browsers install to and launch from here.
+ENV PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
 RUN python -m playwright install --with-deps chromium chromium-headless-shell
 
 CMD ["celery", "-A", "apps.worker.celery_app.celery_app", "worker", "--loglevel=info"]

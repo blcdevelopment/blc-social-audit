@@ -376,11 +376,19 @@ def _browser_cache_roots() -> list[Path]:
 
 def _find_installed_chromium_executable() -> Path | None:
     patterns = (
+        # Full Chromium (most reliable to launch with an explicit executable_path).
+        # Modern Playwright uses chrome-linux64; chrome-linux is kept for older layouts.
+        "chromium-*/chrome-linux64/chrome",
+        "chromium-*/chrome-linux/chrome",
         "chromium-*/chrome-mac-*/Google Chrome for Testing.app/Contents/MacOS/"
         "Google Chrome for Testing",
         "chromium-*/chrome-mac*/Chromium.app/Contents/MacOS/Chromium",
-        "chromium-*/chrome-linux/chrome",
         "chromium-*/chrome-win/chrome.exe",
+        # Headless shell — what chromium.launch(headless=True) uses by default on
+        # Playwright >= 1.49, so it must be discoverable by the fallback too.
+        "chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell",
+        "chromium_headless_shell-*/chrome-headless-shell-mac*/chrome-headless-shell",
+        "chromium_headless_shell-*/chrome-headless-shell-win*/chrome-headless-shell.exe",
     )
     for root in _browser_cache_roots():
         if not root.exists():
