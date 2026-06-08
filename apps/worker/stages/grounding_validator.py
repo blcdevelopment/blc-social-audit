@@ -9,6 +9,13 @@ from apps.worker.stages.commentary import validate_commentary_content
 JsonDict = dict[str, Any]
 NUMERIC_RE = re.compile(r"(?<![A-Za-z])[-+]?\d[\d,]*(?:\.\d+)?%?")
 SENTENCE_RE = re.compile(r"(?<=[.!?])\s+")
+# Grounding validates factual *claims* about the site. These keys are not claims, so the
+# numbers inside them must not be stripped:
+#   - evidence_refs: machine identifiers / fact paths (e.g. "seo.pages[0]....") - the
+#     bracketed index is not a measurement.
+#   - action_items: prescriptive advice that legitimately carries target numbers (e.g.
+#     "70-160 characters", "1-5 fields") - guidance, not a claim about the site.
+UNGROUNDED_KEYS = frozenset({"evidence_refs", "action_items"})
 # Timeframe/duration phrases (e.g. "30 days", "1-3 months", "3 to 12 months") are
 # rhetorical recommendation language, not measured site facts, so the numbers in them
 # must not trigger sentence stripping. They are masked out before grounding the rest.
@@ -49,8 +56,16 @@ def validate_commentary_grounding(
         + _supported_claim_count(content, known_values),
         "unsupported_claims": unsupported,
         "unsupported_claim_count": sum(item["claim_count"] for item in unsupported),
-        "action": "stripped_unsupported_numeric_sentences" if unsupported else "none",
+        "action": _summary_action(unsupported),
     }
+
+
+def _summary_action(unsupported: list[JsonDict]) -> str:
+    if not unsupported:
+        return "none"
+    if any(item.get("outcome") == "stripped" for item in unsupported):
+        return "stripped_unsupported_numeric_sentences"
+    return "reverted_unsupported_to_baseline"
 
 
 def _sanitize_value(
@@ -62,11 +77,15 @@ def _sanitize_value(
 ) -> Any:
     if isinstance(value, dict):
         return {
-            key: _sanitize_value(
-                child,
-                path=f"{path}.{key}",
-                known_values=known_values,
-                unsupported=unsupported,
+            key: (
+                child
+                if key in UNGROUNDED_KEYS
+                else _sanitize_value(
+                    child,
+                    path=f"{path}.{key}",
+                    known_values=known_values,
+                    unsupported=unsupported,
+                )
             )
             for key, child in value.items()
         }
@@ -110,17 +129,30 @@ def _sanitize_text(
         else:
             kept.append(sentence)
 
-    if removed:
-        unsupported.append(
-            {
-                "path": path,
-                "claim_count": sum(len(item["values"]) for item in removed),
-                "removed_sentences": removed,
-            }
-        )
-
     cleaned = " ".join(sentence.strip() for sentence in kept if sentence.strip()).strip()
-    return cleaned or "Unsupported numeric claim removed by grounding validator."
+
+    if not removed:
+        return cleaned
+
+    if cleaned:
+        outcome, result_text = "stripped", cleaned
+    else:
+        # The whole field is unsupported. Revert to the original text rather than leaking a
+        # placeholder string into the report; the deterministic baseline is grounded by
+        # construction, and the Phase 2 polish layer passes an explicit baseline. The revert
+        # is recorded below so the validation log honestly reflects what was flagged and that
+        # the baseline text was kept rather than removed.
+        outcome, result_text = "reverted_to_baseline", text.strip()
+
+    unsupported.append(
+        {
+            "path": path,
+            "claim_count": sum(len(item["values"]) for item in removed),
+            "removed_sentences": removed,
+            "outcome": outcome,
+        }
+    )
+    return result_text
 
 
 def _known_numeric_values(payload: Any) -> set[float]:
@@ -166,7 +198,11 @@ def _supported_claim_count(payload: Any, known_values: set[float]) -> int:
     if isinstance(payload, str):
         return sum(1 for claim in _numeric_claims(payload) if claim in known_values)
     if isinstance(payload, dict):
-        return sum(_supported_claim_count(value, known_values) for value in payload.values())
+        return sum(
+            _supported_claim_count(value, known_values)
+            for key, value in payload.items()
+            if key not in UNGROUNDED_KEYS
+        )
     if isinstance(payload, list):
         return sum(_supported_claim_count(value, known_values) for value in payload)
     return 0

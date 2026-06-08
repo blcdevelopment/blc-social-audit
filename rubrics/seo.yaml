@@ -1,7 +1,14 @@
-version: "phase1-seo-v1"
+version: "phase1-seo-v2"
 category: seo
 max_score: 100
 normalization: rescale_to_max
+# Each rule carries content-plan metadata used to author findings/recommendations
+# deterministically (see docs/11_COMMENTARY_CONSISTENCY_PLAN.md):
+#   impact              - importance when the rule fails (high|medium|low)
+#   tier                - remediation horizon (quick_win|mid_term|long_term)
+#   finding_label       - user-facing problem statement (no internal rule IDs)
+#   remediation         - imperative action sentence
+#   surface_as_finding  - false for non-actionable meta/health rules
 rules:
   - id: seo.collection.complete
     description: SEO facts were extracted successfully.
@@ -10,6 +17,9 @@ rules:
     evaluator: exact_match
     params:
       full_credit: complete
+    impact: high
+    tier: quick_win
+    surface_as_finding: false
 
   - id: seo.title.present_all_pages
     description: Page titles are present across crawled pages.
@@ -19,12 +29,20 @@ rules:
     params:
       min: 100
       partial_min: 80
+    impact: high
+    tier: quick_win
+    finding_label: Some pages are missing a title tag
+    remediation: Add a unique, descriptive title tag to every page.
 
   - id: seo.homepage_title.reasonable_length
     description: Homepage title length is in a useful search-result range.
     weight: 7
     fact_path: seo.pages[0].title.is_reasonable_length
     evaluator: boolean
+    impact: medium
+    tier: quick_win
+    finding_label: Homepage title length is outside the ideal search-result range
+    remediation: Rewrite the homepage title to roughly 30-65 characters.
 
   - id: seo.meta_description.present_all_pages
     description: Meta descriptions are present across crawled pages.
@@ -34,12 +52,20 @@ rules:
     params:
       min: 100
       partial_min: 70
+    impact: high
+    tier: quick_win
+    finding_label: Meta descriptions are missing on some pages
+    remediation: Add a unique 70-160 character meta description to every page.
 
   - id: seo.homepage_meta_description.reasonable_length
     description: Homepage meta description length is in a useful search-result range.
     weight: 8
     fact_path: seo.pages[0].meta_description.is_reasonable_length
     evaluator: boolean
+    impact: medium
+    tier: quick_win
+    finding_label: Homepage meta description length is outside the ideal range
+    remediation: Rewrite the homepage meta description to roughly 70-160 characters.
 
   - id: seo.h1.present_once
     description: Crawled pages use one clear H1.
@@ -49,12 +75,20 @@ rules:
     params:
       min: 100
       partial_min: 80
+    impact: high
+    tier: quick_win
+    finding_label: Pages do not use a single clear H1 heading
+    remediation: Give each page exactly one descriptive H1 heading.
 
   - id: seo.homepage.canonical
     description: Homepage has a canonical URL.
     weight: 6
     fact_path: seo.pages[0].canonical
     evaluator: presence
+    impact: medium
+    tier: mid_term
+    finding_label: The homepage is missing a canonical URL
+    remediation: Add a canonical link tag to the homepage to prevent duplicate-URL dilution.
 
   - id: seo.schema.present
     description: At least one crawled page includes schema markup.
@@ -63,6 +97,10 @@ rules:
     evaluator: threshold
     params:
       min: 1
+    impact: medium
+    tier: mid_term
+    finding_label: No structured data (schema markup) was found
+    remediation: Add relevant schema.org structured data (for example LocalBusiness) to key pages.
 
   - id: seo.images.alt_coverage
     description: Image alt-text coverage is strong across crawled pages.
@@ -72,6 +110,10 @@ rules:
     params:
       min: 90
       partial_min: 60
+    impact: medium
+    tier: quick_win
+    finding_label: Image alt-text coverage is low
+    remediation: Add descriptive alt text to all meaningful images.
 
   - id: seo.indexability.no_noindex_pages
     description: No crawled pages include a noindex directive.
@@ -80,6 +122,10 @@ rules:
     evaluator: exact_match
     params:
       full_credit: 0
+    impact: high
+    tier: quick_win
+    finding_label: One or more crawled pages block search indexing (noindex)
+    remediation: Remove noindex directives from pages that should appear in search results.
 
   - id: seo.internal_links.depth
     description: Internal linking gives visitors and crawlers useful next steps.
@@ -89,6 +135,10 @@ rules:
     params:
       min: 5
       partial_min: 2
+    impact: low
+    tier: mid_term
+    finding_label: Internal linking is thin
+    remediation: Add internal links between related pages to guide visitors and crawlers.
 
   - id: seo.psi.mobile_performance
     description: Mobile PageSpeed performance contributes to search and user experience.
@@ -98,6 +148,10 @@ rules:
     skip_if_missing: true
     params:
       input_range: [0, 100]
+    impact: high
+    tier: long_term
+    finding_label: Mobile page performance needs improvement
+    remediation: Improve mobile load speed by optimizing images, scripts, and server response time.
 
   - id: seo.psi.desktop_performance
     description: Desktop PageSpeed performance is healthy.
@@ -107,3 +161,7 @@ rules:
     skip_if_missing: true
     params:
       input_range: [0, 100]
+    impact: medium
+    tier: long_term
+    finding_label: Desktop page performance needs improvement
+    remediation: Improve desktop load speed by optimizing images, scripts, and server response time.

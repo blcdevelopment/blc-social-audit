@@ -146,6 +146,7 @@ def snapshot_audit(job_id: str) -> JsonDict:
                     "seo_score": result.seo_score,
                     "uxui_score": result.uxui_score,
                     "lead_gen_score": result.lead_gen_score,
+                    "commentary": result.commentary,
                     "commentary_status": (result.commentary or {}).get("status"),
                     "commentary_provider": (result.commentary or {}).get("provider"),
                     "llm_model": result.llm_model,

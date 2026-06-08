@@ -1,7 +1,14 @@
-version: "phase1-uxui-v1"
+version: "phase1-uxui-v2"
 category: uxui
 max_score: 100
 normalization: rescale_to_max
+# Each rule carries content-plan metadata used to author findings/recommendations
+# deterministically (see docs/11_COMMENTARY_CONSISTENCY_PLAN.md):
+#   impact              - importance when the rule fails (high|medium|low)
+#   tier                - remediation horizon (quick_win|mid_term|long_term)
+#   finding_label       - user-facing problem statement (no internal rule IDs)
+#   remediation         - imperative action sentence
+#   surface_as_finding  - false for non-actionable meta/health rules
 rules:
   - id: uxui.collection.complete
     description: UX/UI facts were extracted successfully.
@@ -10,6 +17,9 @@ rules:
     evaluator: exact_match
     params:
       full_credit: complete
+    impact: high
+    tier: quick_win
+    surface_as_finding: false
 
   - id: uxui.primary_cta.present
     description: At least one crawled page has a primary call to action.
@@ -18,6 +28,10 @@ rules:
     evaluator: threshold
     params:
       min: 1
+    impact: high
+    tier: quick_win
+    finding_label: No clear primary call to action was found
+    remediation: Add a prominent primary call to action (for example "Get a Quote") near the top of the page.
 
   - id: uxui.cta.volume
     description: The site offers multiple clear conversion paths.
@@ -27,6 +41,10 @@ rules:
     params:
       min: 3
       partial_min: 1
+    impact: medium
+    tier: quick_win
+    finding_label: The site offers few conversion paths
+    remediation: Add multiple clear calls to action across key pages.
 
   - id: uxui.cta.above_fold
     description: At least one CTA appears early in the page experience.
@@ -35,6 +53,10 @@ rules:
     evaluator: threshold
     params:
       min: 1
+    impact: medium
+    tier: quick_win
+    finding_label: No call to action appears above the fold
+    remediation: Place at least one call to action early in the page, before the visitor scrolls.
 
   - id: uxui.forms.present
     description: The site includes a lead capture form.
@@ -43,6 +65,10 @@ rules:
     evaluator: threshold
     params:
       min: 1
+    impact: high
+    tier: mid_term
+    finding_label: No lead capture form was found
+    remediation: Add a short lead capture form so visitors can request contact.
 
   - id: uxui.homepage_form.field_count
     description: Homepage form length is practical for lead capture.
@@ -53,6 +79,10 @@ rules:
       full_credit: [1, 5]
       partial_credit:
         - [6, 8]
+    impact: low
+    tier: mid_term
+    finding_label: Homepage form is not sized for practical lead capture
+    remediation: Aim for a short homepage form of about 1-5 essential fields.
 
   - id: uxui.phone.visible
     description: A phone number is available on crawled pages.
@@ -61,6 +91,10 @@ rules:
     evaluator: threshold
     params:
       min: 1
+    impact: high
+    tier: quick_win
+    finding_label: No phone number is visible on the crawled pages
+    remediation: Display a clickable phone number prominently in the header or hero.
 
   - id: uxui.email.visible
     description: An email address is available on crawled pages.
@@ -69,6 +103,10 @@ rules:
     evaluator: threshold
     params:
       min: 1
+    impact: medium
+    tier: quick_win
+    finding_label: No email address is visible on the crawled pages
+    remediation: Show a contact email address (or a clear contact link) on key pages.
 
   - id: uxui.trust.present
     description: Trust signals are visible on at least one crawled page.
@@ -77,6 +115,10 @@ rules:
     evaluator: threshold
     params:
       min: 1
+    impact: high
+    tier: mid_term
+    finding_label: No trust signals are visible
+    remediation: Add trust signals such as reviews, testimonials, badges, or guarantees.
 
   - id: uxui.trust.depth
     description: Trust evidence appears in more than one form.
@@ -86,27 +128,47 @@ rules:
     params:
       min: 2
       partial_min: 1
+    impact: low
+    tier: mid_term
+    finding_label: Trust evidence is limited
+    remediation: Add more than one type of trust signal across the site.
 
   - id: uxui.navigation.present
     description: Primary navigation is present.
     weight: 8
     fact_path: uxui.pages[0].navigation.has_nav
     evaluator: boolean
+    impact: medium
+    tier: mid_term
+    finding_label: Primary navigation is missing
+    remediation: Add clear primary navigation so visitors can find key pages.
 
   - id: uxui.copy.substantial
     description: Page copy is substantial enough to explain the offer.
     weight: 6
     fact_path: uxui.pages[0].content.has_substantial_copy
     evaluator: boolean
+    impact: low
+    tier: long_term
+    finding_label: Page copy is too thin to explain the offer
+    remediation: Expand page copy to clearly explain services, value, and next steps.
 
   - id: uxui.direct_contact.present
     description: Visitors can contact the business directly.
     weight: 7
     fact_path: uxui.pages[0].lead_capture.has_direct_contact
     evaluator: boolean
+    impact: high
+    tier: quick_win
+    finding_label: Visitors have no direct way to contact the business
+    remediation: Add a direct contact method (phone, email, or contact form) to the homepage.
 
   - id: uxui.lead_capture.cta
     description: The homepage has at least one CTA.
     weight: 7
     fact_path: uxui.pages[0].lead_capture.has_cta
     evaluator: boolean
+    impact: medium
+    tier: quick_win
+    finding_label: The homepage has no call to action
+    remediation: Add at least one clear call to action to the homepage.
