@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from apps.api.auth import require_user
 from apps.api.deps import get_db_session
 from apps.api.schemas.audits import (
     AuditCreateRequest,
@@ -21,7 +22,8 @@ from apps.shared.config import get_settings
 from apps.shared.models import AuditJob
 from apps.worker.stages.report_payload import compose_report_payload
 
-router = APIRouter(prefix="/audits", tags=["audits"])
+# Every audit endpoint requires a valid Clerk session (no-op when CLERK_ISSUER is unset).
+router = APIRouter(prefix="/audits", tags=["audits"], dependencies=[Depends(require_user)])
 DbSession = Annotated[Session, Depends(get_db_session)]
 AuditLimit = Annotated[int, Query(ge=1, le=100)]
 AuditOffset = Annotated[int, Query(ge=0)]
