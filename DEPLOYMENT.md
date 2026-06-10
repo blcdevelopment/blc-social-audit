@@ -253,12 +253,123 @@ PDF. **This is the real test** (only the 401 path has been verified so far).
 
 ---
 
+## 5.1 Continuous deployment (CI/CD)
+
+> **Automates the manual deploy in [§6](#6-day-2-operations).** Once set up, **merging a PR to
+> `main` deploys it to the box automatically** — no SSH, no manual `git pull`. It builds on the
+> box exactly as before; CI only changes *what triggers* the deploy, not *how* it is built.
+
+### The flow
+
+```
+ feature branch ──PR──▶  CI: pre-commit.yml (ruff · pytest · typecheck)
+                              │  must be green  ─── enforced by branch protection
+                              ▼
+                         merge to main  ─── protect-main.yml blocks direct pushes
+                              │  (push: main)
+                              ▼
+                      deploy.yml ──SSH──▶ Linode box
+                                            └─ deploy/deploy.sh:
+                                               git reset --hard <merged sha>
+                                               docker compose build api·worker·frontend
+                                               docker compose up -d
+                                               health-check /health  (fails loud if unhealthy)
+```
+
+Three pieces — two already existed, the third is new:
+- **CI gate** — [pre-commit.yml](.github/workflows/pre-commit.yml) runs ruff, pytest and the
+  frontend typecheck on every PR (the job is named **`Run pre-commit hooks`**).
+- **Branch protection** — the *enforcement* that a PR may only merge once that check is green
+  (a GitHub setting, configured once — see step C below; [protect-main.yml](.github/workflows/protect-main.yml)
+  is the after-the-fact backstop).
+- **CD** *(new)* — [deploy.yml](.github/workflows/deploy.yml) fires on `push: main` (i.e. the
+  merge commit) and runs [deploy/deploy.sh](deploy/deploy.sh) on the box over SSH. The script is
+  the exact, pinned-to-commit form of the manual day-2 command, plus a post-deploy `/health`
+  gate that fails the run loudly if the new containers come up unhealthy.
+
+Because CI gates the PR, any commit that reaches `main` has already passed the checks; `deploy.yml`
+does not re-run the tests, it only deploys.
+
+### One-time setup (operator)
+
+> Per the project rule, **you run all of these.** They are infrastructure/secret/GitHub-settings
+> actions; the workflow files themselves are already in the repo.
+
+**A. Create a dedicated CI deploy SSH key** (separate from the box's read-only *git* deploy key —
+this one lets GitHub Actions log in and run the deploy). Generate it on a trusted machine:
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/blc_ci_deploy -N "" -C "github-actions-deploy"
+ssh-copy-id -i ~/.ssh/blc_ci_deploy.pub abdullah@173.255.206.170   # add .pub to the box's authorized_keys
+```
+
+**B. Capture the box's host key** (so CI verifies it's really your box, not a MITM):
+```bash
+ssh-keyscan -t ed25519 173.255.206.170      # copy the whole output line
+```
+
+**C. Add the repository secrets** — GitHub → repo → **Settings → Secrets and variables → Actions
+→ New repository secret**:
+
+| Secret | Value |
+|---|---|
+| `DEPLOY_HOST` | `173.255.206.170` |
+| `DEPLOY_USER` | `abdullah` |
+| `DEPLOY_SSH_KEY` | full contents of `~/.ssh/blc_ci_deploy` (the **private** key, incl. the `-----BEGIN…END-----` lines) |
+| `DEPLOY_KNOWN_HOSTS` | the `ssh-keyscan` output line from step B |
+| `DEPLOY_PORT` | *(optional)* SSH port; omit to default to `22` |
+
+**D. Turn on branch protection** so "checks must pass before merge" is *enforced* (not just
+advisory) — GitHub → repo → **Settings → Branches → Add branch ruleset / rule** for `main`:
+- ✅ **Require a pull request before merging** (this is what stops direct commits to `main`).
+- ✅ **Require status checks to pass before merging** → search and add **`Run pre-commit hooks`**.
+- ✅ *(recommended)* **Require branches to be up to date before merging**.
+- ✅ *(recommended)* **Do not allow bypassing the above settings** / include administrators.
+
+Then, separately, in **Settings → General → Pull Requests**, **disable "Allow squash merging" and
+"Allow rebase merging"** (leave only **"Allow merge commits"**). The
+[protect-main.yml](.github/workflows/protect-main.yml) backstop recognises a legitimate merge by its
+**two parent commits**; a squash/rebase merge lands a *single-parent* commit and would trip that
+workflow red on a valid PR. (It doesn't block the deploy — `deploy.yml` is independent — but it's a
+misleading red ❌ in the Actions tab.) Pinning the merge method keeps the whole scheme consistent.
+
+> Do **not** add the deploy workflow as a required status check — it runs *after* merge (on
+> `push: main`), so it never reports a status on the PR and would deadlock the merge.
+
+Once A–D are done, the next merge to `main` deploys itself.
+
+### Triggering, watching, rolling back
+
+```bash
+# Watch a deploy run live:           GitHub → repo → Actions → "Deploy to production"
+# Re-deploy current main by hand:    Actions → "Deploy to production" → Run workflow
+# Deploy by hand ON the box (fallback if CI/secrets are down):
+cd ~/blc-social-audit && bash deploy/deploy.sh
+# Roll back to a known-good commit:
+cd ~/blc-social-audit && bash deploy/deploy.sh <previous-good-sha>
+```
+A failed build leaves the previous (healthy) containers running — `up -d` is only reached if all
+three images build. A failed post-deploy `/health` check turns the Action **red** so you know the
+new containers are up but unhealthy; investigate with `docker compose logs api`, then roll back
+with the command above.
+
+### Security notes for the CI deploy path
+- The CI key logs in as `abdullah` (a sudo user). For tighter blast-radius later, restrict it with
+  a `command="…"`/`no-pty` forced-command in `authorized_keys`, or add a dedicated unprivileged
+  `deploy` user in the `docker` group. Fine as-is for 2–3 internal users.
+- Host-key pinning (`DEPLOY_KNOWN_HOSTS` + `StrictHostKeyChecking=yes`) is on, so a spoofed host
+  fails the connect rather than silently trusting it.
+- The private key lives only in GitHub Actions secrets (write-only once saved) and is written to
+  the ephemeral runner with `chmod 600`; it is never echoed.
+
+---
+
 ## 6. Day-2 operations
 
 ```bash
 cd ~/blc-social-audit
 
-# Deploy an update (after the PR is merged to main):
+# Deploy an update: normally AUTOMATIC on merge to main (see §5.1). To deploy by hand:
+bash deploy/deploy.sh            # or, the original raw command:
 git pull && docker compose -f docker-compose.prod.yml up -d --build
 
 # Logs / status / restart:
@@ -326,8 +437,9 @@ volume contents periodically.
 6. **Clerk Production instance** on the custom domain (`pk_live`, ~5 Clerk CNAME DNS records);
    removes the dev banner + rate limits and closes the open-sign-up exposure properly.
 7. **Server-side user allowlist** in the API (defense in depth beyond Clerk restrictions).
-8. **CI/CD auto-deploy** — a GitHub Action that builds images and `docker compose up -d` on the
-   box on merge to `main` (replaces the manual `git pull && build`).
+8. ✅ **CI/CD auto-deploy** *(done — see [§5.1](#51-continuous-deployment-cicd))* — [deploy.yml](.github/workflows/deploy.yml)
+   SSHes in and runs [deploy/deploy.sh](deploy/deploy.sh) (`up -d --build`) on merge to `main`.
+   Still builds *on the box*; building off-box is item 9 below.
 9. **Build images off-box** (registry) so the 4 GB box never runs `next build`.
 10. **Observability** — structured logs aggregation, a Celery retry/DLQ, health/metrics endpoints.
 11. **Object storage** for reports (S3-compatible) — removes the local-filesystem limitation and
