@@ -20,6 +20,12 @@ class Settings(BaseSettings):
         default_factory=lambda: ["http://localhost:3000"]
     )
 
+    # Clerk auth. The API verifies session tokens against this issuer's JWKS.
+    # Empty clerk_issuer => API auth is DISABLED (local dev / tests / QA harness);
+    # set it in production to require a valid Clerk session on the audit endpoints.
+    clerk_issuer: str = ""
+    clerk_authorized_parties: Annotated[list[str], NoDecode] = Field(default_factory=list)
+
     database_url: str = "postgresql+psycopg://blc:change-me-local@localhost:5432/blc_website_audit"
 
     redis_url: str = "redis://localhost:6379/0"
@@ -69,11 +75,11 @@ class Settings(BaseSettings):
     report_template_path: Path = Path("./templates/report.html")
     report_css_path: Path = Path("./templates/report.css")
 
-    @field_validator("api_cors_origins", mode="before")
+    @field_validator("api_cors_origins", "clerk_authorized_parties", mode="before")
     @classmethod
-    def parse_origins(cls, value: str | list[str]) -> list[str]:
+    def parse_csv_list(cls, value: str | list[str]) -> list[str]:
         if isinstance(value, str):
-            return [origin.strip() for origin in value.split(",") if origin.strip()]
+            return [item.strip() for item in value.split(",") if item.strip()]
         return value
 
     @field_validator("crawler_chromium_executable_path", mode="before")

@@ -1,3 +1,8 @@
+# --- Local SEO audit artifacts (out of scope, not for version control) ---
+# Folder is literally named "seo_audits " (trailing space); glob handles it.
+seo_audits*/
+*.pptx
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -149,6 +154,8 @@ activemq-data/
 
 # Environments
 .env
+.env.local
+.env.*.local
 .envrc
 .venv
 env/
@@ -236,3 +243,4 @@ apps/frontend/tsconfig.tsbuildinfo
 .claude/
 Claude.md
 https://www.builderleadconverter.com/
+seo_audits/

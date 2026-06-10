@@ -1,3 +1,4 @@
+import { UserButton } from "@clerk/nextjs";
 import Head from "next/head";
 import Link from "next/link";
 import { useRouter } from "next/router";
@@ -46,6 +47,9 @@ export default function Layout({ title, children }: LayoutProps) {
                 );
               })}
             </nav>
+            <div className="topbar-user">
+              <UserButton />
+            </div>
           </div>
         </header>
         <main className="content">{children}</main>
