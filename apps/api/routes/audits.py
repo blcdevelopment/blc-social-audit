@@ -13,6 +13,7 @@ from apps.api.schemas.audits import (
     AuditCreateRequest,
     AuditCreateResponse,
     AuditDetailResponse,
+    AuditEnrichmentResponse,
     AuditListItem,
     AuditListResponse,
     AuditStatusResponse,
@@ -20,6 +21,7 @@ from apps.api.schemas.audits import (
 from apps.shared.audit_states import AuditStatus
 from apps.shared.config import get_settings
 from apps.shared.models import AuditJob
+from apps.worker.stages.docx_renderer import render_audit_docx
 from apps.worker.stages.report_payload import compose_report_payload
 
 # Every audit endpoint requires a valid Clerk session (no-op when CLERK_ISSUER is unset).
@@ -38,6 +40,14 @@ def _report_recorded(job: AuditJob) -> bool:
     # become a network round-trip per row once reports move to object storage). The
     # download endpoint remains the source of truth and 404s if the file is gone.
     return bool(job.result and job.result.pdf_path)
+
+
+def _docx_path(job: AuditJob) -> Path | None:
+    if not job.result:
+        return None
+    metadata = job.result.report_metadata or {}
+    path = metadata.get("docx_path") if isinstance(metadata, dict) else None
+    return Path(path) if isinstance(path, str) and path else None
 
 
 def _status_response(job: AuditJob) -> AuditStatusResponse:
@@ -170,6 +180,59 @@ def get_audit_detail(job_id: UUID, db: DbSession) -> AuditDetailResponse:
     return _detail_response(job)
 
 
+@router.post("/{job_id}/rerun-enrichment", response_model=AuditEnrichmentResponse)
+def rerun_audit_enrichment(job_id: UUID, db: DbSession) -> AuditEnrichmentResponse:
+    job = db.get(AuditJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audit job not found.")
+    if job.result is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Audit enrichment can only be rerun after baseline audit facts exist.",
+        )
+
+    settings = get_settings()
+    if settings.audit_enqueue_enabled:
+        try:
+            from apps.worker.tasks import rerun_external_enrichment
+
+            job.status = AuditStatus.EXTRACTING.value
+            job.current_stage = "Queued external SEO enrichment"
+            job.progress_pct = 70
+            job.error_message = None
+            db.commit()
+            rerun_external_enrichment.delay(str(job.id))
+        except Exception as exc:
+            # The audit already has a complete result and report (enforced by the
+            # 409 above) — a broker hiccup while queueing the OPTIONAL enrichment
+            # must not flip it to FAILED.
+            job.status = AuditStatus.COMPLETE.value
+            job.current_stage = "Enrichment could not be queued; previous report kept"
+            job.progress_pct = 100
+            job.error_message = str(exc)
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "message": "Audit enrichment could not be enqueued.",
+                    "job_id": str(job.id),
+                    "error": str(exc),
+                },
+            ) from exc
+    else:
+        from apps.worker.tasks import rerun_external_enrichment_for_audit
+
+        rerun_external_enrichment_for_audit(str(job.id))
+        db.refresh(job)
+
+    return AuditEnrichmentResponse(
+        job_id=job.id,
+        status=job.status,
+        current_stage=job.current_stage,
+        message="External SEO enrichment has been queued or started.",
+    )
+
+
 @router.get("/{job_id}/report")
 def get_audit_report(job_id: UUID, db: DbSession) -> FileResponse:
     job = db.get(AuditJob, job_id)
@@ -192,4 +255,43 @@ def get_audit_report(job_id: UUID, db: DbSession) -> FileResponse:
         pdf_path,
         media_type="application/pdf",
         filename=f"blc-website-audit-{job.id}.pdf",
+    )
+
+
+@router.get("/{job_id}/docx")
+def get_audit_docx(job_id: UUID, db: DbSession) -> FileResponse:
+    job = db.get(AuditJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audit job not found.")
+    if not job.result:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="DOCX report has not been generated for this audit yet.",
+        )
+
+    docx_path = _docx_path(job)
+    if docx_path is None or not docx_path.exists():
+        try:
+            docx_result = render_audit_docx(job, job.result, get_settings())
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="The DOCX export could not be generated; the PDF report is unaffected.",
+            ) from exc
+        metadata = dict(job.result.report_metadata or {})
+        raw_exports = metadata.get("exports")
+        exports = dict(raw_exports) if isinstance(raw_exports, dict) else {}
+        exports["docx"] = docx_result.report_metadata
+        metadata["exports"] = exports
+        metadata["docx_path"] = docx_result.docx_path
+        metadata["docx_size_bytes"] = docx_result.size_bytes
+        job.result.report_metadata = metadata
+        db.commit()
+        db.refresh(job.result)
+        docx_path = Path(docx_result.docx_path)
+
+    return FileResponse(
+        docx_path,
+        media_type=("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+        filename=f"blc-website-audit-{job.id}.docx",
     )

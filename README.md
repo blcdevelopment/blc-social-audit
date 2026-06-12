@@ -22,6 +22,11 @@ P1-E5 internal operator UI, and the Epic P1-E6 QA, packaging, and handoff work:
 - Local Docker Compose stack for PostgreSQL, Redis, API, worker, and local report storage.
 - Playwright crawler for homepage plus selected same-site internal pages.
 - PageSpeed Insights collection for each selected crawled page, mobile and desktop, with `PSI_SCOPE` / `PSI_MAX_PAGES` controls and graceful skip/failure handling.
+- Optional Screaming Frog SEO Spider CLI enrichment for deeper technical SEO facts
+  (broken URLs, non-indexable pages, missing/duplicate metadata, H1s, canonicals, and
+  image alt issues) when installed/licensed on the worker.
+- Optional Google Search Console enrichment through official Google APIs, including
+  search analytics, property matching, and URL Inspection for priority URLs.
 - Deterministic SEO and UX/UI fact extractors backed by fixture tests.
 - YAML scoring rubrics in `rubrics/` with schema validation and versioning.
 - Rule-based SEO, UX/UI, and Lead Generation Readiness scoring.
@@ -30,7 +35,8 @@ P1-E5 internal operator UI, and the Epic P1-E6 QA, packaging, and handoff work:
 - Report payload composition from audit metadata, scores, findings, recommendations, validation,
   PageSpeed, and crawl QA artifacts.
 - Branded WeasyPrint/Jinja2 PDF rendering with the BLC logo asset and text fallback.
-- Local PDF output in `storage/reports/` and download support through `GET /audits/{job_id}/report`.
+- Local PDF/DOCX output in `storage/reports/` and download support through
+  `GET /audits/{job_id}/report` and `GET /audits/{job_id}/docx`.
 - Operator UI screens: audit submission with validation and error handling, an
   auto-polling progress + result page (stage stepper, percentage, scores, findings,
   PDF download), and an audit history table with status, scores, and report links.
@@ -138,12 +144,39 @@ P1-E5 internal operator UI, and the Epic P1-E6 QA, packaging, and handoff work:
 - `GET /audits/{job_id}` (audit detail with scores and composed report payload)
 - `GET /audits/{job_id}/status`
 - `GET /audits/{job_id}/report`
+- `GET /audits/{job_id}/docx`
+- `POST /audits/{job_id}/rerun-enrichment`
+- `GET /google/search-console/connect`
+- `GET /google/search-console/properties`
 
 The current worker runs collection, scoring, commentary, grounding validation, report payload
-composition, and branded PDF rendering. It crawls pages, collects or skips PageSpeed facts,
-extracts SEO/UX facts, scores the audit through YAML rubrics, generates ChatGPT commentary when
-`OPENAI_API_KEY` is configured, falls back locally when it is not, validates numeric claims,
-renders a PDF into local storage, and stores the final `pdf_path` in `audit_results`.
+composition, and branded PDF/DOCX rendering. It crawls pages, collects or skips PageSpeed facts,
+extracts SEO/UX facts, optionally enriches with Screaming Frog and Google Search Console facts,
+scores the audit through YAML rubrics, generates deterministic grounded commentary, validates
+numeric claims, renders exports into local storage, and stores the final export paths in
+`audit_results`.
+
+## Optional SEO Enrichment
+
+Screaming Frog is disabled by default. To enable it on a worker that has SEO Spider installed
+and licensed, set:
+
+```bash
+SCREAMING_FROG_ENABLED=true
+SCREAMING_FROG_BINARY=/path/to/screamingfrogseospider
+```
+
+Google Search Console enrichment requires OAuth credentials and verified property access:
+
+```bash
+GOOGLE_OAUTH_CLIENT_ID=...
+GOOGLE_OAUTH_CLIENT_SECRET=...
+GOOGLE_OAUTH_REDIRECT_URI=http://localhost:8000/google/search-console/callback
+```
+
+Connect once through `GET /google/search-console/connect`, then run a new audit or use
+`POST /audits/{job_id}/rerun-enrichment` on an existing audit. Missing Screaming Frog or
+Google data is marked as skipped and does not penalize scores.
 
 ## Common Commands
 

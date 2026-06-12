@@ -92,6 +92,10 @@ p {
   margin: 0 0 0.12in;
 }
 
+.muted {
+  color: #667085;
+}
+
 a {
   color: inherit;
   text-decoration: none;
@@ -121,6 +125,11 @@ td {
   border-bottom: 1px solid #e4e7ec;
   padding: 7px 8px;
   vertical-align: top;
+}
+
+td {
+  overflow-wrap: anywhere;
+  word-break: normal;
 }
 
 td strong,
@@ -264,7 +273,7 @@ td span {
 }
 
 .score-strip {
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: 1fr;
   margin-bottom: 0.28in;
 }
 
@@ -293,6 +302,15 @@ td span {
 .score-pill span {
   color: #667085;
   font-size: 10pt;
+}
+
+.score-pill small {
+  color: #475467;
+  display: block;
+  font-size: 9.2pt;
+  line-height: 1.45;
+  margin-top: 0.08in;
+  text-transform: none;
 }
 
 .two-column,
@@ -359,6 +377,35 @@ td span {
   margin-bottom: 0.16in;
 }
 
+.section-guide {
+  display: grid;
+  gap: 0.14in;
+  grid-template-columns: repeat(2, 1fr);
+  margin: 0.08in 0 0.22in;
+}
+
+.section-guide article {
+  background: #f9fafb;
+  border: 1px solid #e4e7ec;
+  break-inside: avoid;
+  padding: 0.14in;
+}
+
+.section-guide h3 {
+  color: #182230;
+  font-size: 10.8pt;
+  margin: 0 0 0.06in;
+}
+
+.section-guide p,
+.helper-copy {
+  color: #475467;
+}
+
+.helper-copy {
+  margin-top: -0.04in;
+}
+
 .finding-list,
 .recommendation-list {
   display: grid;
@@ -417,6 +464,12 @@ td span {
   padding-left: 0.18in;
 }
 
+.action-copy {
+  color: #344054;
+  font-weight: 700;
+  margin: 0.08in 0 0;
+}
+
 .roadmap-tier {
   margin-bottom: 0.14in;
 }
@@ -467,6 +520,83 @@ td span {
 
 .compact-table {
   font-size: 8.4pt;
+  table-layout: fixed;
+}
+
+.compact-table th,
+.compact-table td {
+  overflow-wrap: anywhere;
+}
+
+.url-cell {
+  color: #475467;
+  font-size: 8pt;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.url-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.url-list li {
+  margin: 0 0 0.04in;
+}
+
+.technical-issue-list {
+  display: grid;
+  gap: 0.14in;
+}
+
+.technical-issue {
+  border: 1px solid #d0d5dd;
+  border-left: 5px solid #98a2b3;
+  break-inside: avoid;
+  padding: 0.14in;
+}
+
+.technical-issue h3 {
+  margin-top: 0;
+}
+
+.technical-issue .issue-kicker {
+  color: #667085;
+  font-size: 8pt;
+  font-weight: 800;
+  margin-bottom: 0.04in;
+  text-transform: uppercase;
+}
+
+.explanation-list {
+  display: grid;
+  gap: 0.07in;
+  margin: 0.08in 0 0;
+}
+
+.explanation-list div {
+  border-top: 1px solid #e4e7ec;
+  padding-top: 0.06in;
+}
+
+.explanation-list dt,
+.location-label {
+  color: #344054;
+  font-size: 8.2pt;
+  font-weight: 800;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.explanation-list dd {
+  color: #475467;
+  margin: 0.02in 0 0;
+}
+
+.location-label {
+  margin-top: 0.1in;
+  text-transform: none;
 }
 
 .rules-table {

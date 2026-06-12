@@ -60,8 +60,9 @@
       <h2>Contents</h2>
       <ol>
         <li><a href="#executive">Executive Summary</a></li>
-        <li><a href="#scores">Score Overview</a></li>
         <li><a href="#seo">SEO Findings</a></li>
+        <li><a href="#technical-seo">Technical SEO</a></li>
+        <li><a href="#search-performance">Search Performance</a></li>
         <li><a href="#uxui">UX/UI Findings</a></li>
         <li><a href="#roadmap">Roadmap</a></li>
         <li><a href="#appendix">Appendix</a></li>
@@ -75,25 +76,33 @@
 
       <div class="score-strip">
         {% for score in payload.scores %}
-          <article class="score-pill score-pill-{{ score.id }}">
+          <article class="score-pill score-pill-{{ score.id }} score-band-{{ score.band }}">
             <p>{{ score.label }}</p>
             <strong>{{ score.score }}</strong>
-            <span>/ {{ score.max_score }}</span>
+            <span>/ {{ score.max_score }} · {{ score.band_label }}</span>
+            <small>{{ score.description }}</small>
           </article>
         {% endfor %}
       </div>
+      <p class="muted">
+        How to read the scores: 75 or higher is strong, 50–74 is fair, and below 50 needs
+        work. Every score comes from fixed, repeatable checks on this site's pages — not
+        from opinion — so the same site state always produces the same score.
+      </p>
 
       <div class="two-column">
         <article>
           <h3>Top Findings</h3>
           <ul class="plain-list">
             {% for section in payload.sections %}
-              {% for finding in section.findings[:1] %}
-                <li>
-                  <strong>{{ section.label }}:</strong>
-                  {{ finding.title }}
-                </li>
-              {% endfor %}
+              {% if section.id in ["seo", "uxui"] %}
+                {% for finding in section.findings[:1] %}
+                  <li>
+                    <strong>{{ section.label }}:</strong>
+                    {{ finding.title }}
+                  </li>
+                {% endfor %}
+              {% endif %}
             {% endfor %}
           </ul>
         </article>
@@ -113,74 +122,63 @@
       </div>
     </section>
 
-    <section class="page-section" id="scores">
-      <p class="eyebrow">Score Overview</p>
-      <h2>Lead generation readiness at a glance</h2>
-      <div class="score-overview">
-        {% for score in payload.scores %}
-          <article class="score-row">
-            <div class="score-row-header">
-              <div>
-                <h3>{{ score.label }}</h3>
-                <p>{{ score.description }}</p>
-              </div>
-              <strong>{{ score.score }}/{{ score.max_score }}</strong>
-            </div>
-            <div class="score-bar" aria-hidden="true">
-              <span style="width: {{ score.score }}%"></span>
-            </div>
-          </article>
-        {% endfor %}
-      </div>
-    </section>
-
     {% for section in payload.sections %}
       {% if section.id in ["seo", "uxui"] %}
         <section class="page-section" id="{{ section.id }}">
           <p class="eyebrow">{{ section.label }} Section</p>
           <h2>{{ section.headline }}</h2>
           <p class="section-score">{{ section.label }} score: <strong>{{ section.score }}/100</strong></p>
+          <div class="section-guide">
+            {% if section.id == "seo" %}
+              <article>
+                <h3>How to read this section</h3>
+                <p>
+                  SEO findings explain what may keep the site from being found, understood,
+                  or clicked in search results. Start with high and medium findings first.
+                </p>
+              </article>
+              <article>
+                <h3>How to use it</h3>
+                <p>
+                  Turn each recommendation into a site update, then rerun the audit to confirm
+                  the same issue no longer appears in the evidence trail.
+                </p>
+              </article>
+            {% else %}
+              <article>
+                <h3>How to read this section</h3>
+                <p>
+                  UX/UI findings explain what may make it harder for visitors to trust the page,
+                  understand the offer, or take the next step.
+                </p>
+              </article>
+              <article>
+                <h3>How to use it</h3>
+                <p>
+                  Prioritize changes that make the primary action easier to see, easier to trust,
+                  and easier to complete on key landing pages.
+                </p>
+              </article>
+            {% endif %}
+          </div>
 
           <h3>Findings</h3>
+          <p class="helper-copy">
+            Severity guide: <strong>high</strong> = fix first, it is likely costing visitors
+            or visibility; <strong>medium</strong> = fix soon; <strong>low</strong> = worth
+            improving; <strong>info</strong> = context only, nothing is broken.
+          </p>
           <div class="finding-list">
             {% for finding in section.findings %}
               <article class="finding-card severity-{{ finding.severity }}">
                 <div class="finding-meta">
                   <span>{{ finding.severity }}</span>
-                  {% if finding.evidence_refs %}
-                    <small>{{ finding.evidence_refs | join(", ") }}</small>
-                  {% endif %}
                 </div>
                 <h4>{{ finding.title }}</h4>
                 <p>{{ finding.explanation }}</p>
               </article>
             {% endfor %}
           </div>
-
-          {% if section.opportunities %}
-            <h3>Highest-confidence rubric opportunities</h3>
-            <table class="rules-table compact-table">
-              <thead>
-                <tr>
-                  <th>Rule</th>
-                  <th>Result</th>
-                  <th>Points</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for rule in section.opportunities[:8] %}
-                  <tr>
-                    <td>
-                      <strong>{{ rule.rule_id }}</strong>
-                      <span>{{ rule.description }}</span>
-                    </td>
-                    <td>{{ rule.result }}</td>
-                    <td>{{ "%.1f"|format(rule.points_awarded) }} / {{ "%.1f"|format(rule.points_possible) }}</td>
-                  </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          {% endif %}
 
           <h3>Recommendations</h3>
           <div class="recommendation-list">
@@ -190,11 +188,9 @@
                 <h4>{{ recommendation.title }}</h4>
                 <p>{{ recommendation.rationale }}</p>
                 {% if recommendation.action_items %}
-                  <ul>
-                    {% for item in recommendation.action_items %}
-                      <li>{{ item }}</li>
-                    {% endfor %}
-                  </ul>
+                  {% for item in recommendation.action_items %}
+                    <p class="action-copy">{{ item }}</p>
+                  {% endfor %}
                 {% endif %}
               </article>
             {% endfor %}
@@ -202,6 +198,252 @@
         </section>
       {% endif %}
     {% endfor %}
+
+    <section class="page-section" id="technical-seo">
+      <p class="eyebrow">Technical SEO</p>
+      <h2>Site-wide technical crawl</h2>
+      {% set technical_available = payload.technical_seo_section.status == "complete" %}
+      <dl class="metric-list inline">
+        <div><dt>Status</dt><dd>{{ payload.technical_seo_section.status_label }}</dd></div>
+        <div><dt>Pages analyzed</dt><dd>{{ payload.technical_seo_section.summary.get("urls_crawled", "N/A") if technical_available else "N/A" }}</dd></div>
+        {% if technical_available and payload.technical_seo_section.summary.get("urls_checked") %}
+          <div><dt>Links checked</dt><dd>{{ payload.technical_seo_section.summary.get("urls_checked") }}</dd></div>
+        {% endif %}
+        <div><dt>Issue groups</dt><dd>{{ (payload.technical_seo_section.issues | length) if technical_available else "N/A" }}</dd></div>
+      </dl>
+      {% if payload.technical_seo_section.tool_label %}
+        <p class="muted">Data source: {{ payload.technical_seo_section.tool_label }}.</p>
+      {% endif %}
+      <div class="section-guide">
+        <article>
+          <h3>What this section tells you</h3>
+          <p>
+            This is the site health check for search engines. It flags broken links,
+            blocked pages, missing page labels, duplicate metadata, and image text gaps
+            that can stop Google or visitors from getting the right page. Every count
+            below comes from URLs this audit actually checked, and each issue lists
+            example URLs so the fix can start at an exact address.
+          </p>
+        </article>
+        <article>
+          <h3>How to use it</h3>
+          <p>
+            Fix high-severity crawl issues first, especially errors on important service,
+            location, or lead pages. Use the example URLs as the starting list for the
+            web team or CMS editor.
+          </p>
+        </article>
+      </div>
+      {% for note in payload.technical_seo_section.notes %}
+        <p class="muted">Coverage note: {{ note }}</p>
+      {% endfor %}
+      {% for warning in payload.technical_seo_section.warnings %}
+        <p class="muted">Warning: {{ warning }}</p>
+      {% endfor %}
+
+      {% if technical_available and payload.technical_seo_section.issues %}
+        <div class="technical-issue-list">
+          {% for issue in payload.technical_seo_section.issues %}
+            <article class="technical-issue severity-{{ issue.severity }}">
+              <div class="technical-issue-head">
+                <div>
+                  <p class="issue-kicker">{{ issue.severity }} · {{ issue.count }} affected</p>
+                  <h3>{{ issue.title }}</h3>
+                </div>
+              </div>
+              <dl class="explanation-list">
+                <div>
+                  <dd>{{ issue.summary }} {{ issue.why_it_matters }} {{ issue.recommended_fix }}</dd>
+                </div>
+              </dl>
+              {% if issue.examples %}
+                {% set shown = issue.examples[:4] %}
+                <p class="location-label">
+                  {% if issue.count > shown | length %}
+                    Examples ({{ shown | length }} of {{ issue.count }} affected):
+                  {% else %}
+                    Affected URLs:
+                  {% endif %}
+                </p>
+                <ul class="url-list">
+                  {% for example in shown %}
+                    <li>{{ example }}</li>
+                  {% endfor %}
+                </ul>
+              {% endif %}
+            </article>
+          {% endfor %}
+        </div>
+      {% elif technical_available %}
+        <p class="muted">
+          The technical crawl completed for this audit and did not find issue groups that
+          matched the report thresholds.
+        </p>
+      {% else %}
+        <p class="muted">
+          Technical crawl data was not available for this report, so this section does not
+          make clean-or-broken claims.
+          {% if payload.technical_seo_section.reason_label %}
+            Reason: {{ payload.technical_seo_section.reason_label }}
+          {% endif %}
+        </p>
+      {% endif %}
+    </section>
+
+    <section class="page-section" id="search-performance">
+      <p class="eyebrow">Google Search Performance</p>
+      <h2>Search Console opportunities</h2>
+      {% set search_available = payload.search_performance_section.status == "complete" %}
+      {% set search_has_opportunities = payload.search_performance_section.high_impression_low_ctr_pages or payload.search_performance_section.ranking_opportunities or payload.search_performance_section.declining_pages %}
+      <dl class="metric-list inline">
+        <div><dt>Status</dt><dd>{{ payload.search_performance_section.status_label }}</dd></div>
+        <div><dt>Property</dt><dd>{{ payload.search_performance_section.site_url or "N/A" }}</dd></div>
+        <div><dt>Top queries analyzed</dt><dd>{{ payload.search_performance_section.summary.get("top_query_count", "N/A") if search_available else "N/A" }}</dd></div>
+        <div><dt>Top pages analyzed</dt><dd>{{ payload.search_performance_section.summary.get("top_page_count", "N/A") if search_available else "N/A" }}</dd></div>
+      </dl>
+      {% if search_available and payload.search_performance_section.date_range %}
+        <p class="muted">
+          Data window: {{ payload.search_performance_section.date_range.get("start") }}
+          to {{ payload.search_performance_section.date_range.get("end") }}
+          (Google's own measurements of this site in search results).
+        </p>
+      {% endif %}
+      <div class="section-guide">
+        <article>
+          <h3>What this section tells you</h3>
+          <p>
+            Search Console shows how people already find the site in Google. It highlights
+            pages with visibility but weak clicks, search terms close to stronger rankings,
+            and pages losing traffic. These numbers come directly from Google, not from
+            estimates.
+          </p>
+        </article>
+        <article>
+          <h3>How to read the columns</h3>
+          <p>
+            Impressions = how many times the page appeared in Google results. Clicks = how
+            many times searchers chose it. CTR (click-through rate) = clicks divided by
+            impressions; high impressions with low CTR means the page is seen but not chosen.
+            Position = the average ranking spot in the results (1 is the top).
+          </p>
+        </article>
+      </div>
+
+      {% if search_available and payload.search_performance_section.high_impression_low_ctr_pages %}
+        <h3>High-impression, low-CTR pages</h3>
+        <p class="helper-copy">
+          These pages appear in Google often, but searchers are not clicking enough.
+          Improve the page title, meta description, and offer clarity first.
+        </p>
+        <table class="compact-table">
+          <thead>
+            <tr><th>Page</th><th>Clicks</th><th>Impressions</th><th>CTR</th><th>Position</th></tr>
+          </thead>
+          <tbody>
+            {% for row in payload.search_performance_section.high_impression_low_ctr_pages[:10] %}
+              <tr>
+                <td class="url-cell">{{ row.get("page") }}</td>
+                <td>{{ row.get("clicks", 0) }}</td>
+                <td>{{ row.get("impressions", 0) }}</td>
+                <td>{{ "%.1f"|format((row.get("ctr", 0) or 0) * 100) }}%</td>
+                <td>{{ row.get("position", "N/A") }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% endif %}
+
+      {% if search_available and payload.search_performance_section.ranking_opportunities %}
+        <h3>Queries ranking in positions 4-20</h3>
+        <p class="helper-copy">
+          These search terms are already close enough to compete. Strengthen the matching
+          page with clearer content, internal links, FAQs, and proof around that topic.
+        </p>
+        <table class="compact-table">
+          <thead>
+            <tr><th>Query</th><th>Clicks</th><th>Impressions</th><th>CTR</th><th>Position</th></tr>
+          </thead>
+          <tbody>
+            {% for row in payload.search_performance_section.ranking_opportunities[:10] %}
+              <tr>
+                <td>{{ row.get("query") }}</td>
+                <td>{{ row.get("clicks", 0) }}</td>
+                <td>{{ row.get("impressions", 0) }}</td>
+                <td>{{ "%.1f"|format((row.get("ctr", 0) or 0) * 100) }}%</td>
+                <td>{{ row.get("position", "N/A") }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% endif %}
+
+      {% if search_available and payload.search_performance_section.declining_pages %}
+        <h3>Declining pages</h3>
+        <p class="helper-copy">
+          These pages lost clicks compared with the period immediately before the data
+          window above. Check whether content, rankings, seasonality, or technical changes
+          caused the drop.
+        </p>
+        <table class="compact-table">
+          <thead>
+            <tr><th>Page</th><th>Current clicks</th><th>Previous clicks</th><th>Change</th></tr>
+          </thead>
+          <tbody>
+            {% for row in payload.search_performance_section.declining_pages[:10] %}
+              <tr>
+                <td class="url-cell">{{ row.get("page") }}</td>
+                <td>{{ row.get("current_clicks", 0) }}</td>
+                <td>{{ row.get("previous_clicks", 0) }}</td>
+                <td>{{ row.get("click_delta", 0) }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% endif %}
+
+      {% if payload.search_performance_section.url_inspection_items %}
+        <h3>URL inspection</h3>
+        <p class="helper-copy">
+          This asks Google directly whether each important page is in its index ("On
+          Google"). "Google's status" is Google's own wording for how it handled the page.
+          "Canonical chosen by Google" is the page version Google decided to index — if it
+          differs from the page address, Google is treating another URL as the main copy.
+          If a page is not on Google, fix that before judging its content quality.
+        </p>
+        <table class="compact-table">
+          <thead>
+            <tr><th>URL</th><th>On Google</th><th>Google's status</th><th>Canonical chosen by Google</th></tr>
+          </thead>
+          <tbody>
+            {% for item in payload.search_performance_section.url_inspection_items[:10] %}
+              <tr>
+                <td class="url-cell">{{ item.get("url") }}</td>
+                <td>{{ item.get("on_google_label") or "Unknown" }}</td>
+                <td>{{ item.get("coverage_state") or item.get("status") }}</td>
+                <td class="url-cell">{{ item.get("google_canonical") or "N/A" }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% endif %}
+
+      {% if not search_available %}
+        <p class="muted">
+          Search Console data was not available for this report, so this section makes no
+          claims about the site's Google performance.
+          {% if payload.search_performance_section.reason_label %}
+            Reason: {{ payload.search_performance_section.reason_label }}
+          {% endif %}
+          Connect a verified Google Search Console property and rerun enrichment to
+          populate it.
+        </p>
+      {% elif not search_has_opportunities %}
+        <p class="muted">
+          Search Console completed for this audit and did not return ranking, CTR, or decline
+          opportunities that matched the report thresholds.
+        </p>
+      {% endif %}
+    </section>
 
     <section class="page-section" id="roadmap">
       <p class="eyebrow">Action Roadmap</p>
@@ -216,11 +458,9 @@
                   <strong>{{ recommendation.title }}</strong>
                   <p>{{ recommendation.rationale }}</p>
                   {% if recommendation.action_items %}
-                    <ul>
-                      {% for item in recommendation.action_items %}
-                        <li>{{ item }}</li>
-                      {% endfor %}
-                    </ul>
+                    {% for item in recommendation.action_items %}
+                      <p class="action-copy">{{ item }}</p>
+                    {% endfor %}
                   {% endif %}
                 </li>
               {% endfor %}
@@ -234,38 +474,51 @@
 
     <section class="page-section" id="appendix">
       <p class="eyebrow">Appendix</p>
-      <h2>Methodology, validation, and raw score trail</h2>
+      <h2>Methodology and validation</h2>
       <p>{{ payload.appendix.scoring_note }}</p>
 
       <div class="qa-grid">
         <article>
           <h3>PageSpeed Summary</h3>
+          <p class="helper-copy">
+            PageSpeed measures how fast Google considers the pages, on a 0–100 scale
+            (90+ is good, 50–89 needs improvement, below 50 is poor).
+          </p>
           <dl class="metric-list">
-            <div><dt>Status</dt><dd>{{ payload.pagespeed_summary.status }}</dd></div>
+            <div><dt>Status</dt><dd>{{ payload.pagespeed_summary.status_label }}</dd></div>
             {% if payload.pagespeed_summary.reason %}
               <div><dt>Reason</dt><dd>{{ payload.pagespeed_summary.reason }}</dd></div>
             {% endif %}
             <div><dt>Pages analyzed</dt><dd>{{ payload.pagespeed_summary.pages_analyzed }} / {{ payload.pagespeed_summary.pages_requested }}</dd></div>
-            <div><dt>Mobile avg</dt><dd>{{ payload.pagespeed_summary.avg_mobile_performance or "N/A" }}</dd></div>
-            <div><dt>Desktop avg</dt><dd>{{ payload.pagespeed_summary.avg_desktop_performance or "N/A" }}</dd></div>
+            <div><dt>Mobile avg</dt><dd>{% if payload.pagespeed_summary.avg_mobile_performance is not none %}{{ payload.pagespeed_summary.avg_mobile_performance }} / 100{% else %}N/A{% endif %}</dd></div>
+            <div><dt>Desktop avg</dt><dd>{% if payload.pagespeed_summary.avg_desktop_performance is not none %}{{ payload.pagespeed_summary.avg_desktop_performance }} / 100{% else %}N/A{% endif %}</dd></div>
           </dl>
         </article>
         <article>
-          <h3>Validation Summary</h3>
+          <h3>Fact-Check Summary</h3>
+          <p class="helper-copy">
+            Before this report was generated, every number in the written commentary was
+            checked against the data actually collected from the site. Sentences whose
+            numbers could not be verified were removed, so the counts and percentages you
+            read here are backed by collected evidence.
+          </p>
           <dl class="metric-list">
-            <div><dt>Status</dt><dd>{{ payload.validation_summary.status }}</dd></div>
-            <div><dt>Numeric claims checked</dt><dd>{{ payload.validation_summary.numeric_claims_checked }}</dd></div>
-            <div><dt>Unsupported claims</dt><dd>{{ payload.validation_summary.unsupported_claim_count }}</dd></div>
-            <div><dt>Action</dt><dd>{{ payload.validation_summary.action }}</dd></div>
+            <div><dt>Numbers checked</dt><dd>{{ payload.validation_summary.numeric_claims_checked }}</dd></div>
+            <div><dt>Unverified and removed</dt><dd>{{ payload.validation_summary.unsupported_claim_count }}</dd></div>
           </dl>
         </article>
       </div>
 
       <h3>Crawl QA</h3>
+      <p class="helper-copy">
+        The audit rendered {{ payload.crawl_summary.successful_pages }} pages of the site
+        in a real browser — the homepage plus its most prominent internal pages. On-page
+        findings come from those pages; the site-wide technical crawl additionally checks
+        the links and sitemap URLs it discovered.
+      </p>
       <dl class="metric-list inline">
-        <div><dt>Status</dt><dd>{{ payload.crawl_summary.status }}</dd></div>
-        <div><dt>Successful</dt><dd>{{ payload.crawl_summary.successful_pages }}</dd></div>
-        <div><dt>Failed</dt><dd>{{ payload.crawl_summary.failed_pages }}</dd></div>
+        <div><dt>Pages rendered</dt><dd>{{ payload.crawl_summary.successful_pages }}</dd></div>
+        <div><dt>Failed to load</dt><dd>{{ payload.crawl_summary.failed_pages }}</dd></div>
         <div><dt>Skipped</dt><dd>{{ payload.crawl_summary.skipped_pages }}</dd></div>
       </dl>
 
@@ -283,13 +536,10 @@
         </table>
       {% endif %}
 
-      <h3>SEO rule trail</h3>
-      {% set rules = payload.appendix.seo_rules %}
-      {% include "partials/rule_table.html" %}
-
-      <h3>UX/UI rule trail</h3>
-      {% set rules = payload.appendix.uxui_rules %}
-      {% include "partials/rule_table.html" %}
+      <p class="muted">
+        The internal scoring trail is stored with the audit result for QA, but this client-facing
+        report shows the interpreted findings and fixes instead of raw rule identifiers.
+      </p>
     </section>
   </body>
 </html>

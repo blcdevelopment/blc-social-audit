@@ -1,7 +1,9 @@
+import { useAuth } from "@clerk/nextjs";
 import { useRouter } from "next/router";
 import { FormEvent, useState } from "react";
 
 import Layout from "../components/Layout";
+import SearchConsoleIntegration from "../components/SearchConsoleIntegration";
 import { ApiError, createAudit } from "../lib/api";
 
 function normalizeUrl(raw: string): string {
@@ -26,6 +28,7 @@ function isValidUrl(value: string): boolean {
 
 export default function SubmitAuditPage() {
   const router = useRouter();
+  const { getToken } = useAuth();
   const [url, setUrl] = useState("");
   const [niche, setNiche] = useState("");
   const [targetAudience, setTargetAudience] = useState("");
@@ -50,11 +53,15 @@ export default function SubmitAuditPage() {
     setSubmitting(true);
 
     try {
-      const created = await createAudit({
-        url: candidate,
-        niche: niche.trim() || null,
-        target_audience: targetAudience.trim() || null,
-      });
+      const token = await getToken();
+      const created = await createAudit(
+        {
+          url: candidate,
+          niche: niche.trim() || null,
+          target_audience: targetAudience.trim() || null,
+        },
+        token,
+      );
       router.push(`/audit/${created.job_id}`);
     } catch (error) {
       const message =
@@ -75,6 +82,8 @@ export default function SubmitAuditPage() {
           Enter a website URL to run the full SEO, UX/UI, and lead generation readiness audit.
           Niche and target audience are optional and help tailor the AI commentary.
         </p>
+
+        <SearchConsoleIntegration />
 
         <form className="card form" onSubmit={handleSubmit} noValidate>
           {apiError && (

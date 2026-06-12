@@ -44,16 +44,24 @@ def test_render_report_pdf_qa_variants(
 
     reader = PdfReader(str(output_path))
     text = "\n".join(page.extract_text() or "" for page in reader.pages)
+    normalized_text = " ".join(text.split())
     assert len(reader.pages) == pdf_result.page_count
     assert "Website Audit Report" in text
-    assert "Score Overview" in text
-    assert "SEO rule trail" in text
-    assert "UX/UI rule trail" in text
+    assert "Score Overview" not in text
+    assert "combined business-readiness score" in normalized_text
+    assert "Formula: round((SEO 81 * 45%) + (UX/UI 74 * 55%)) = 77/100" in normalized_text
+    assert "It evaluated 2 checks and earned 81 of 100 available points" in normalized_text
+    assert "It evaluated 2 checks and earned 74 of 100 available points" in normalized_text
+    assert "How to use it" in text
+    assert "CTR (click-through rate)" in text
+    assert "SEO rule trail" not in text
+    assert "UX/UI rule trail" not in text
+    assert "raw rule identifiers" in text
 
     if variant == "long":
         assert len(reader.pages) >= 8
     if missing_psi:
-        assert "missing_google_psi_api_key" in text
+        assert "No Google PageSpeed API key is configured" in normalized_text
     if failed_pages:
         assert "Timed out rendering" in text
 
@@ -169,38 +177,39 @@ def _complete_psi() -> dict:
 
 def _score_breakdown(*, extra_items: int) -> dict:
     seo_rules = [
-        _rule("seo.title.present_all_pages", "Page titles are present.", "pass", 8, 8),
-        _rule("seo.meta_description.present_all_pages", "Add stronger metadata.", "fail", 0, 10),
+        _rule("seo.title.present_all_pages", "Page titles are present.", "pass", 81, 81),
+        _rule("seo.meta_description.present_all_pages", "Add stronger metadata.", "fail", 0, 19),
     ]
     uxui_rules = [
-        _rule("uxui.primary_cta.present", "A primary CTA is present.", "partial", 5, 10),
-        _rule("uxui.forms.present", "The site includes a lead form.", "fail", 0, 8),
+        _rule("uxui.primary_cta.present", "A primary CTA is present.", "pass", 74, 74),
+        _rule("uxui.forms.present", "The site includes a lead form.", "fail", 0, 26),
     ]
     for index in range(extra_items):
         seo_rules.append(
             _rule(
                 f"seo.synthetic.{index}",
                 f"Synthetic SEO pagination rule {index}.",
-                "partial" if index % 2 else "fail",
-                1,
-                3,
+                "skipped",
+                0,
+                0,
             )
         )
         uxui_rules.append(
             _rule(
                 f"uxui.synthetic.{index}",
                 f"Synthetic UX/UI pagination rule {index}.",
-                "partial" if index % 2 else "fail",
-                1,
-                3,
+                "skipped",
+                0,
+                0,
             )
         )
 
     return {
         "scores": {"seo": 81, "uxui": 74, "lead_gen": 77},
+        "composite": {"weights": {"seo": 0.45, "uxui": 0.55}},
         "categories": {
-            "seo": {"rules": seo_rules},
-            "uxui": {"rules": uxui_rules},
+            "seo": {"rules": seo_rules, "weights": {"evaluated": 100, "skipped": 0}},
+            "uxui": {"rules": uxui_rules, "weights": {"evaluated": 100, "skipped": 0}},
         },
     }
 

@@ -100,6 +100,7 @@ def score_audit(
     uxui_facts: JsonDict,
     psi_facts: JsonDict,
     settings: Settings,
+    external_seo_facts: JsonDict | None = None,
 ) -> JsonDict:
     seo_rubric = load_rubric(settings.rubric_seo_path)
     uxui_rubric = load_rubric(settings.rubric_uxui_path)
@@ -108,6 +109,7 @@ def score_audit(
         "seo": seo_facts,
         "uxui": uxui_facts,
         "psi": psi_facts,
+        "external_seo": _trusted_external_seo_facts(external_seo_facts),
     }
 
     seo_breakdown = score_category(fact_bundle, seo_rubric)
@@ -133,6 +135,23 @@ def score_audit(
         },
         "composite": lead_gen,
     }
+
+
+def _trusted_external_seo_facts(external_seo_facts: JsonDict | None) -> JsonDict:
+    if not isinstance(external_seo_facts, dict):
+        return {}
+
+    trusted = dict(external_seo_facts)
+    for source_key in ("technical_crawl", "screaming_frog", "gsc", "url_inspection"):
+        source = trusted.get(source_key)
+        if not isinstance(source, dict):
+            continue
+        if source.get("status") == "complete":
+            continue
+        sanitized_source = dict(source)
+        sanitized_source.pop("summary", None)
+        trusted[source_key] = sanitized_source
+    return trusted
 
 
 def score_category(facts: JsonDict, rubric: Rubric) -> JsonDict:

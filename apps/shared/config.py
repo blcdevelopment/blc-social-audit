@@ -39,6 +39,7 @@ class Settings(BaseSettings):
 
     local_report_storage_dir: Path = Path("./storage/reports")
     local_screenshot_storage_dir: Path = Path("./storage/screenshots")
+    local_tool_export_storage_dir: Path = Path("./storage/tool_exports")
 
     openai_api_key: SecretStr | None = None
     openai_model: str = "gpt-4o"
@@ -56,6 +57,40 @@ class Settings(BaseSettings):
     psi_timeout_seconds: int = Field(default=60, ge=1)
     psi_max_retries: int = Field(default=3, ge=1)
     psi_cache_ttl_seconds: int = Field(default=86400, ge=0)
+
+    screaming_frog_enabled: bool = False
+    screaming_frog_binary: Path | None = None
+    screaming_frog_output_dir: Path = Path("./storage/tool_exports/screaming_frog")
+    # Clamped at runtime under the Celery soft time limit (screaming_frog.py)
+    # so a slow Screaming Frog crawl degrades gracefully instead of killing the
+    # whole audit task.
+    screaming_frog_timeout_seconds: int = Field(default=600, ge=30)
+    screaming_frog_export_tabs: str = "Internal:All,Response Codes:Client Error (4xx)"
+
+    # Built-in site health sweep (httpx status checks over discovered URLs +
+    # sitemap). Runs when Screaming Frog is disabled or unavailable, so the
+    # Technical SEO report section works in Docker/production without a
+    # licensed desktop tool.
+    site_health_enabled: bool = True
+    site_health_max_internal_urls: int = Field(default=150, ge=1, le=1000)
+    site_health_max_external_urls: int = Field(default=50, ge=0, le=500)
+    site_health_check_external_links: bool = True
+    site_health_concurrency: int = Field(default=8, ge=1, le=20)
+    site_health_request_timeout_seconds: int = Field(default=10, ge=1, le=60)
+    site_health_total_budget_seconds: int = Field(default=180, ge=10)
+    site_health_sitemap_max_urls: int = Field(default=500, ge=0, le=5000)
+
+    google_oauth_client_id: str = ""
+    google_oauth_client_secret: SecretStr | None = None
+    # Signs the OAuth `state` parameter (CSRF protection). Optional: when empty,
+    # each API process generates an ephemeral secret at startup, which is fine for
+    # a single-process deployment; set it explicitly if the API runs replicated.
+    google_oauth_state_secret: SecretStr | None = None
+    google_oauth_redirect_uri: str = "http://localhost:8000/google/search-console/callback"
+    google_oauth_success_redirect_url: str = "http://localhost:3000/audits"
+    gsc_default_date_range_days: int = Field(default=90, ge=7, le=540)
+    gsc_row_limit: int = Field(default=25000, ge=1, le=25000)
+    url_inspection_max_urls: int = Field(default=20, ge=0, le=200)
 
     crawler_user_agent: str = "BLC-Audit-Bot/1.0 (+https://builderleadconverter.com/audit-bot)"
     crawler_max_pages: int = Field(default=10, ge=1, le=50)
@@ -82,7 +117,7 @@ class Settings(BaseSettings):
             return [item.strip() for item in value.split(",") if item.strip()]
         return value
 
-    @field_validator("crawler_chromium_executable_path", mode="before")
+    @field_validator("crawler_chromium_executable_path", "screaming_frog_binary", mode="before")
     @classmethod
     def parse_optional_path(cls, value: str | Path | None) -> str | Path | None:
         if value == "":
