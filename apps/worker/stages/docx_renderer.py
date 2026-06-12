@@ -216,9 +216,7 @@ def _external_seo_xml(payload: ReportPayload) -> list[str]:
                 )
             )
             parts.append(
-                _paragraph(
-                    f"{issue.summary} {issue.why_it_matters} {issue.recommended_fix}"
-                )
+                _paragraph(f"{issue.summary} {issue.why_it_matters} {issue.recommended_fix}")
             )
             if issue.examples:
                 parts.append(_paragraph("Examples found by the crawl include:", "Meta"))
@@ -242,8 +240,7 @@ def _external_seo_xml(payload: ReportPayload) -> list[str]:
     parts.append(_heading("Google Search Performance", 1))
     parts.append(
         _paragraph(
-            "Search Console status: "
-            f"{search.status}; property: {search.site_url or 'N/A'}.",
+            f"Search Console status: {search.status}; property: {search.site_url or 'N/A'}.",
             "Meta",
         )
     )

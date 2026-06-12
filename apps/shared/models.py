@@ -97,9 +97,7 @@ class AuditResult(Base):
     seo_facts: Mapped[JsonDict] = mapped_column(json_type(), nullable=False, default=dict)
     uxui_facts: Mapped[JsonDict] = mapped_column(json_type(), nullable=False, default=dict)
     psi_facts: Mapped[JsonDict] = mapped_column(json_type(), nullable=False, default=dict)
-    external_seo_facts: Mapped[JsonDict] = mapped_column(
-        json_type(), nullable=False, default=dict
-    )
+    external_seo_facts: Mapped[JsonDict] = mapped_column(json_type(), nullable=False, default=dict)
     score_breakdown: Mapped[JsonDict] = mapped_column(json_type(), nullable=False, default=dict)
     commentary: Mapped[JsonDict] = mapped_column(json_type(), nullable=False, default=dict)
     validation_log: Mapped[JsonDict] = mapped_column(json_type(), nullable=False, default=dict)

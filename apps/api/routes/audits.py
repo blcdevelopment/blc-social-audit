@@ -283,8 +283,6 @@ def get_audit_docx(job_id: UUID, db: DbSession) -> FileResponse:
 
     return FileResponse(
         docx_path,
-        media_type=(
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        ),
+        media_type=("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
         filename=f"blc-website-audit-{job.id}.docx",
     )

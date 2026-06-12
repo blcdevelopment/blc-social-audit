@@ -469,16 +469,16 @@ def _location_examples(rule_id: str, facts: JsonDict) -> list[str]:
                 return [str(value) for value in _list(payload.get("examples")) if value]
 
     if rule_id == "seo.gsc.low_ctr_pages":
-        rows = _list(_dict(_dict(facts.get("external_seo")).get("gsc")).get("high_impression_low_ctr_pages"))
+        rows = _list(
+            _dict(_dict(facts.get("external_seo")).get("gsc")).get("high_impression_low_ctr_pages")
+        )
         return [str(_dict(row).get("page")) for row in rows if _dict(row).get("page")]
 
     if rule_id == "seo.gsc.ranking_opportunities":
-        rows = _list(_dict(_dict(facts.get("external_seo")).get("gsc")).get("ranking_opportunities"))
-        return [
-            f"the query '{_dict(row).get('query')}'"
-            for row in rows
-            if _dict(row).get("query")
-        ]
+        rows = _list(
+            _dict(_dict(facts.get("external_seo")).get("gsc")).get("ranking_opportunities")
+        )
+        return [f"the query '{_dict(row).get('query')}'" for row in rows if _dict(row).get("query")]
 
     if rule_id == "seo.gsc.url_inspection_indexing":
         rows = _list(_dict(_dict(facts.get("external_seo")).get("url_inspection")).get("items"))
@@ -500,8 +500,7 @@ def _location_examples(rule_id: str, facts: JsonDict) -> list[str]:
         return [
             str(page.get("url"))
             for page in _seo_pages(facts)
-            if _dict(_dict(page.get("headings")).get("counts")).get("h1") != 1
-            and page.get("url")
+            if _dict(_dict(page.get("headings")).get("counts")).get("h1") != 1 and page.get("url")
         ]
 
     if rule_id == "seo.images.alt_coverage":

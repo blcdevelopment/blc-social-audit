@@ -908,9 +908,7 @@ def _search_performance_section(external_seo_facts: JsonDict) -> SearchPerforman
         else []
     )
     ranking_opportunities = (
-        [_dict(row) for row in _list(gsc.get("ranking_opportunities"))]
-        if gsc_complete
-        else []
+        [_dict(row) for row in _list(gsc.get("ranking_opportunities"))] if gsc_complete else []
     )
     declining_pages = (
         [_dict(row) for row in _list(gsc.get("declining_pages"))] if gsc_complete else []

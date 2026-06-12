@@ -385,9 +385,7 @@ def match_search_console_property(url: str, properties: list[JsonDict]) -> JsonD
 def _normalize_search_row(row: JsonDict, dimensions: list[str]) -> JsonDict:
     keys = row.get("keys") if isinstance(row.get("keys"), list) else []
     values = {
-        dimension: keys[index]
-        for index, dimension in enumerate(dimensions)
-        if index < len(keys)
+        dimension: keys[index] for index, dimension in enumerate(dimensions) if index < len(keys)
     }
     return {
         **values,
@@ -402,8 +400,7 @@ def _ranking_opportunities(rows: list[JsonDict]) -> list[JsonDict]:
     return [
         row
         for row in rows
-        if float(row.get("impressions") or 0) >= 50
-        and 4 <= float(row.get("position") or 0) <= 20
+        if float(row.get("impressions") or 0) >= 50 and 4 <= float(row.get("position") or 0) <= 20
     ]
 
 

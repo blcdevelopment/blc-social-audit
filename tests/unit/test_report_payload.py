@@ -11,11 +11,12 @@ def test_compose_report_payload_includes_epic_4_contract() -> None:
     assert payload.metadata.site_domain == "example.com"
     assert [score.id for score in payload.scores] == ["lead_gen", "seo", "uxui"]
     score_descriptions = {score.id: score.description for score in payload.scores}
-    assert "Formula: round((SEO 76 * 45%) + (UX/UI 68 * 55%)) = 72/100" in (
-        score_descriptions["lead_gen"]
+    assert (
+        "Formula: round((SEO 76 * 45%) + (UX/UI 68 * 55%)) = 72/100"
+        in (score_descriptions["lead_gen"])
     )
-    assert "It evaluated 2 checks and earned 76 of 100 available points" in (
-        score_descriptions["seo"]
+    assert (
+        "It evaluated 2 checks and earned 76 of 100 available points" in (score_descriptions["seo"])
     )
     assert "1 check worth 6 points was skipped" in score_descriptions["seo"]
     assert "normalized to 68/100" in score_descriptions["uxui"]
