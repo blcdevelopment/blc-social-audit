@@ -29,7 +29,7 @@ from collections import defaultdict
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urljoin, urlparse, urlunparse
 from xml.etree import ElementTree
 
 import httpx
@@ -50,6 +50,11 @@ JsonDict = dict[str, Any]
 
 SITE_HEALTH_SOURCE = "site_health_sweep"
 _RETRY_GET_STATUSES = {403, 405, 501}
+_MAX_REDIRECTS = 10
+
+
+class _BlockedHost(RuntimeError):
+    """Raised when a request URL or redirect target fails the SSRF host guard."""
 
 
 def collect_site_health_facts(
@@ -113,7 +118,7 @@ async def _collect(
 
     host_allowed_cache: dict[str, bool] = {}
     async with httpx.AsyncClient(
-        follow_redirects=True,
+        follow_redirects=False,
         verify=False,
         headers={"User-Agent": settings.crawler_user_agent},
         timeout=settings.site_health_request_timeout_seconds,
@@ -332,10 +337,12 @@ async def _fetch_sitemap(
     # depth-capped so a self-referencing index cannot loop forever.
     if depth > _SITEMAP_MAX_DEPTH:
         return set(), "max_depth"
-    if not _host_allowed(sitemap_url, settings, host_allowed_cache):
+    if not await asyncio.to_thread(_host_allowed, sitemap_url, settings, host_allowed_cache):
         return set(), "blocked_host"
     try:
-        response = await client.get(sitemap_url)
+        response = await _guarded_request(client, "GET", sitemap_url, settings, host_allowed_cache)
+    except _BlockedHost:
+        return set(), "blocked_host"
     except httpx.HTTPError:
         return set(), "unavailable"
     if response.status_code == 404:
@@ -408,7 +415,14 @@ async def _sweep(
                 async with lock:
                     counters["blocked"] += 1
                 return
-            status_code, x_robots, error = await _check_url(client, url)
+            try:
+                status_code, x_robots, error = await _check_url(
+                    client, url, settings, host_allowed_cache
+                )
+            except _BlockedHost:
+                async with lock:
+                    counters["blocked"] += 1
+                return
 
         async with lock:
             counters["internal_checked" if internal else "external_checked"] += 1
@@ -445,6 +459,8 @@ async def _sweep(
 async def _check_url(
     client: httpx.AsyncClient,
     url: str,
+    settings: Settings,
+    host_allowed_cache: dict[str, bool],
 ) -> tuple[int | None, str | None, str | None]:
     """Return (status_code, x_robots_tag_header, error).
 
@@ -453,18 +469,64 @@ async def _check_url(
     identically, so retrying them would just double the worst-case latency.
     """
     try:
-        response = await client.head(url)
+        response = await _guarded_request(client, "HEAD", url, settings, host_allowed_cache)
         if response.status_code in _RETRY_GET_STATUSES:
-            response = await client.get(url)
+            response = await _guarded_request(client, "GET", url, settings, host_allowed_cache)
         return response.status_code, response.headers.get("x-robots-tag"), None
     except httpx.RemoteProtocolError:
         try:
-            response = await client.get(url)
+            response = await _guarded_request(client, "GET", url, settings, host_allowed_cache)
             return response.status_code, response.headers.get("x-robots-tag"), None
         except httpx.HTTPError as exc:
             return None, None, _trim(str(exc) or exc.__class__.__name__)
     except httpx.HTTPError as exc:
         return None, None, _trim(str(exc) or exc.__class__.__name__)
+
+
+async def _guarded_request(
+    client: httpx.AsyncClient,
+    method: str,
+    url: str,
+    settings: Settings,
+    host_allowed_cache: dict[str, bool],
+) -> httpx.Response:
+    """Follow redirects only after each target passes the SSRF host guard."""
+    current_url = normalize_url(url)
+    if current_url is None:
+        raise _BlockedHost
+
+    for redirect_count in range(_MAX_REDIRECTS + 1):
+        allowed = await asyncio.to_thread(
+            _host_allowed,
+            current_url,
+            settings,
+            host_allowed_cache,
+        )
+        if not allowed:
+            raise _BlockedHost
+
+        response = await client.request(method, current_url)
+        if not response.is_redirect:
+            return response
+
+        location = response.headers.get("location")
+        if not location:
+            return response
+        if redirect_count >= _MAX_REDIRECTS:
+            raise httpx.TooManyRedirects(
+                f"Exceeded {_MAX_REDIRECTS} redirects while requesting {url}",
+                request=response.request,
+            )
+
+        next_url = normalize_url(urljoin(str(response.url), location))
+        if next_url is None:
+            raise _BlockedHost
+        current_url = next_url
+
+    raise httpx.TooManyRedirects(
+        f"Exceeded {_MAX_REDIRECTS} redirects while requesting {url}",
+        request=httpx.Request(method, url),
+    )
 
 
 def _host_allowed(url: str, settings: Settings, cache: dict[str, bool]) -> bool:

@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+import asyncio
 import functools
 import http.server
+import ipaddress
 import socketserver
 import threading
+from collections import defaultdict
 from collections.abc import Iterator
 from contextlib import contextmanager
 from types import SimpleNamespace
 
+import httpx
+
+from apps.worker.stages import site_health
 from apps.worker.stages.external_seo import collect_external_seo_facts
 from apps.worker.stages.site_health import collect_site_health_facts
 
@@ -183,6 +189,82 @@ def test_private_hosts_blocked_without_allowance() -> None:
     assert facts["summary"]["client_error_internal_urls"] == 0
     assert facts["summary"]["unreachable_internal_urls"] == 0
     assert facts["checks"]["blocked_urls"] == 1
+
+
+def test_link_sweep_blocks_redirects_to_private_hosts(monkeypatch) -> None:
+    monkeypatch.setattr(
+        site_health,
+        "_resolve_host_ips",
+        lambda hostname: [ipaddress.ip_address("93.184.216.34")],
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "http://public.example/redirect"
+        return httpx.Response(
+            302,
+            headers={"Location": "http://127.0.0.1/internal"},
+            request=request,
+        )
+
+    async def run() -> tuple[dict, dict]:
+        summary: dict = {"unreachable_internal_urls": 0}
+        examples: dict = defaultdict(list)
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+            follow_redirects=False,
+        ) as client:
+            counters = await site_health._sweep(
+                client,
+                internal_urls=["http://public.example/redirect"],
+                external_urls=[],
+                settings=_settings(crawler_allow_private_hosts=False),
+                summary=summary,
+                examples=examples,
+                notes=[],
+                host_allowed_cache={},
+            )
+        return counters, summary
+
+    counters, summary = asyncio.run(run())
+
+    assert counters["blocked"] == 1
+    assert counters["internal_checked"] == 0
+    assert summary["unreachable_internal_urls"] == 0
+
+
+def test_sitemap_fetch_blocks_redirects_to_private_hosts(monkeypatch) -> None:
+    monkeypatch.setattr(
+        site_health,
+        "_resolve_host_ips",
+        lambda hostname: [ipaddress.ip_address("93.184.216.34")],
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "http://public.example/sitemap.xml"
+        return httpx.Response(
+            302,
+            headers={"Location": "http://127.0.0.1/sitemap.xml"},
+            request=request,
+        )
+
+    async def run() -> tuple[set[str], str]:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+            follow_redirects=False,
+        ) as client:
+            return await site_health._fetch_sitemap(
+                client,
+                "http://public.example/sitemap.xml",
+                "http://public.example/",
+                settings=_settings(crawler_allow_private_hosts=False),
+                host_allowed_cache={},
+                depth=0,
+            )
+
+    urls, status = asyncio.run(run())
+
+    assert urls == set()
+    assert status == "blocked_host"
 
 
 def test_external_seo_uses_site_health_when_screaming_frog_disabled() -> None:
