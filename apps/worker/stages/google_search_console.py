@@ -5,6 +5,7 @@ from typing import Any
 from urllib.parse import quote, urlencode, urlparse
 
 import httpx
+from celery.exceptions import SoftTimeLimitExceeded
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -97,6 +98,9 @@ def ensure_google_access_token(
     db: Session,
 ) -> str:
     expires_at = connection.token_expires_at
+    # SQLite (QA harness/tests) returns naive datetimes; Postgres returns aware ones.
+    if isinstance(expires_at, datetime) and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
     if (
         connection.access_token
         and isinstance(expires_at, datetime)
@@ -219,6 +223,10 @@ def collect_google_search_console_facts(
             started_at=started_at,
         )
         return _external_google_payload(gsc=gsc, url_inspection=inspected)
+    except SoftTimeLimitExceeded:
+        # The whole Celery task is out of budget; fail fast instead of recording
+        # a "failed enrichment" and letting the hard limit kill the job mid-write.
+        raise
     except Exception as exc:  # noqa: BLE001 - enrichment must not fail the audit
         return _external_google_payload(
             gsc=_failed(str(exc), started_at),
@@ -244,7 +252,7 @@ def collect_search_analytics(
         start_date=start_date,
         end_date=end_date,
         dimensions=["query"],
-        row_limit=min(settings.gsc_row_limit, 500),
+        row_limit=min(settings.gsc_row_limit, 25000),
     )
     top_pages = query_search_analytics(
         access_token,
@@ -252,7 +260,7 @@ def collect_search_analytics(
         start_date=start_date,
         end_date=end_date,
         dimensions=["page"],
-        row_limit=min(settings.gsc_row_limit, 500),
+        row_limit=min(settings.gsc_row_limit, 25000),
     )
     previous_pages = query_search_analytics(
         access_token,
@@ -260,7 +268,7 @@ def collect_search_analytics(
         start_date=previous_start,
         end_date=previous_end,
         dimensions=["page"],
-        row_limit=min(settings.gsc_row_limit, 500),
+        row_limit=min(settings.gsc_row_limit, 25000),
     )
 
     opportunities = _ranking_opportunities(top_queries)
@@ -337,19 +345,32 @@ def collect_url_inspection(
                 inspections.append({"url": url, "status": "failed", "error": response.text[:300]})
                 continue
             inspections.append(_normalize_inspection(url, response.json()))
+        except SoftTimeLimitExceeded:
+            raise
         except Exception as exc:  # noqa: BLE001 - per-URL failure is data, not task failure
             inspections.append({"url": url, "status": "failed", "error": str(exc)[:300]})
 
     not_on_google = sum(1 for item in inspections if item.get("on_google") is False)
+    failed = sum(1 for item in inspections if item.get("status") == "failed")
+    succeeded = len(inspections) - failed
+    # Honest status: a run where some/all per-URL inspections errored must not
+    # present itself as a clean "complete" — the not_on_google count would be an
+    # undercount, and the scoring layer only trusts complete sources.
+    if succeeded == 0:
+        status = "failed"
+    elif failed > 0:
+        status = "partial"
+    else:
+        status = "complete"
     return {
-        "status": "complete",
+        "status": status,
         "source": "url_inspection_api",
         "site_url": site_url,
         "summary": {
             "urls_requested": len(urls),
-            "urls_inspected": len(inspections),
+            "urls_inspected": succeeded,
             "not_on_google": not_on_google,
-            "failed": sum(1 for item in inspections if item.get("status") == "failed"),
+            "failed": failed,
         },
         "items": inspections,
         "started_at": started_at,
@@ -371,6 +392,9 @@ def match_search_console_property(url: str, properties: list[JsonDict]) -> JsonD
     if url_prefix_matches:
         return max(url_prefix_matches, key=lambda item: len(str(item["siteUrl"])))
 
+    # Next preference: a domain property. It aggregates every scheme/subdomain,
+    # so it beats a scheme- or www-mismatched url-prefix property that may hold
+    # only a stale slice of the site's data.
     domain_matches = []
     for item in properties:
         site_url = str(item.get("siteUrl") or "")
@@ -379,7 +403,25 @@ def match_search_console_property(url: str, properties: list[JsonDict]) -> JsonD
         domain = site_url.removeprefix("sc-domain:").lower().removeprefix("www.")
         if host == domain or host.endswith(f".{domain}"):
             domain_matches.append(item)
-    return domain_matches[0] if domain_matches else None
+    if domain_matches:
+        return domain_matches[0]
+
+    # Last resort: relaxed url-prefix match tolerating www./scheme variants so
+    # auditing https://www.example.com still finds the https://example.com/
+    # property. Prefer https, then the longest (most specific) path prefix.
+    relaxed_matches = []
+    for item in properties:
+        site_url = str(item.get("siteUrl") or "")
+        if not site_url.startswith(("http://", "https://")):
+            continue
+        site_parsed = urlparse(site_url)
+        site_host = (site_parsed.hostname or "").lower().removeprefix("www.")
+        site_path = site_parsed.path or "/"
+        if site_host == host and (parsed.path or "/").startswith(site_path):
+            relaxed_matches.append((site_parsed.scheme == "https", len(site_path), item))
+    if relaxed_matches:
+        return max(relaxed_matches, key=lambda entry: (entry[0], entry[1]))[2]
+    return None
 
 
 def _normalize_search_row(row: JsonDict, dimensions: list[str]) -> JsonDict:

@@ -203,8 +203,11 @@ def rerun_audit_enrichment(job_id: UUID, db: DbSession) -> AuditEnrichmentRespon
             db.commit()
             rerun_external_enrichment.delay(str(job.id))
         except Exception as exc:
-            job.status = AuditStatus.FAILED.value
-            job.current_stage = "Failed to enqueue enrichment"
+            # The audit already has a complete result and report (enforced by the
+            # 409 above) — a broker hiccup while queueing the OPTIONAL enrichment
+            # must not flip it to FAILED.
+            job.status = AuditStatus.COMPLETE.value
+            job.current_stage = "Enrichment could not be queued; previous report kept"
             job.progress_pct = 100
             job.error_message = str(exc)
             db.commit()
@@ -268,7 +271,13 @@ def get_audit_docx(job_id: UUID, db: DbSession) -> FileResponse:
 
     docx_path = _docx_path(job)
     if docx_path is None or not docx_path.exists():
-        docx_result = render_audit_docx(job, job.result, get_settings())
+        try:
+            docx_result = render_audit_docx(job, job.result, get_settings())
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="The DOCX export could not be generated; the PDF report is unaffected.",
+            ) from exc
         metadata = dict(job.result.report_metadata or {})
         raw_exports = metadata.get("exports")
         exports = dict(raw_exports) if isinstance(raw_exports, dict) else {}

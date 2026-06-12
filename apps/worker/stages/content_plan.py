@@ -252,7 +252,10 @@ def _evidence_sentence(rule: JsonDict, context: JsonDict) -> str | None:
     if fact_path.endswith("_pct"):
         return f"The audit measured this at {number}% across the crawled pages."
     noun = str(context.get("noun") or "item")
-    return f"The audit found {number} {noun}{'' if number == '1' else 's'}."
+    # Multi-word noun phrases pluralize their head word, not the phrase end
+    # ("pages missing a title tag", never "page missing a title tags").
+    plural = str(context.get("noun_plural") or f"{noun}s")
+    return f"The audit found {number} {noun if number == '1' else plural}."
 
 
 def _evidence_refs(rule: JsonDict) -> list[str]:
@@ -272,6 +275,7 @@ _RULE_CONTEXT: dict[str, JsonDict] = {
         "meaning": "A title tag is the page name Google and searchers use to understand a result.",
         "why": "Missing titles make pages harder to identify in search and can lower clicks from people who would otherwise be interested.",
         "noun": "page missing a title tag",
+        "noun_plural": "pages missing a title tag",
     },
     "seo.homepage_title.reasonable_length": {
         "meaning": "The homepage title is the main search-result headline for the most important page on the site.",
@@ -282,6 +286,7 @@ _RULE_CONTEXT: dict[str, JsonDict] = {
         "meaning": "A meta description is the short search-result summary that helps someone decide whether to click.",
         "why": "Missing descriptions leave Google to generate its own snippet, which may be less persuasive than a message written for buyers.",
         "noun": "page missing a meta description",
+        "noun_plural": "pages missing a meta description",
     },
     "seo.homepage_meta_description.reasonable_length": {
         "meaning": "The homepage meta description should summarize the offer in a short, useful search-result snippet.",
@@ -292,6 +297,7 @@ _RULE_CONTEXT: dict[str, JsonDict] = {
         "meaning": "An H1 is the main visible heading that tells visitors and search engines what a page is about.",
         "why": "Pages with no H1 or multiple competing H1s can feel less clear and send weaker topic signals.",
         "noun": "page with one clear H1",
+        "noun_plural": "pages with one clear H1",
     },
     "seo.homepage.canonical": {
         "meaning": "A canonical URL tells Google which version of a page should be treated as the preferred version.",
@@ -302,6 +308,7 @@ _RULE_CONTEXT: dict[str, JsonDict] = {
         "meaning": "Schema markup is structured data that gives search engines extra context about the business, service, or page.",
         "why": "Without it, Google has fewer explicit clues for understanding the business and showing richer search results.",
         "noun": "page with schema markup",
+        "noun_plural": "pages with schema markup",
     },
     "seo.images.alt_coverage": {
         "meaning": "Alt text describes meaningful images for screen readers and gives search engines context about the page.",
@@ -328,70 +335,83 @@ _RULE_CONTEXT: dict[str, JsonDict] = {
         "why": "Even when the design is strong, slow loading can reduce trust and make forms or calls to action feel harder to reach.",
         "noun": "desktop performance point",
     },
-    "seo.screaming_frog.no_broken_internal_urls": {
+    "seo.technical_crawl.no_broken_internal_urls": {
         "meaning": "A broken internal URL is a link found during the crawl that returned an error instead of a usable page.",
         "why": "Visitors and search engines can hit a dead end, which hurts trust, crawl quality, and the path to conversion.",
         "noun": "broken internal URL",
+        "noun_plural": "broken internal URLs",
     },
-    "seo.screaming_frog.indexable_urls": {
+    "seo.technical_crawl.indexable_urls": {
         "meaning": "A non-indexable internal URL is a page the crawler found but Google may not be able to include in search results.",
         "why": "If these are important service, blog, or landing pages, they may not bring organic traffic.",
         "noun": "non-indexable internal URL",
+        "noun_plural": "non-indexable internal URLs",
     },
-    "seo.screaming_frog.missing_titles": {
+    "seo.technical_crawl.missing_titles": {
         "meaning": "A missing title tag means the page does not provide a clear search-result headline.",
         "why": "That makes the page harder for Google and buyers to understand before they click.",
         "noun": "page missing a title tag",
+        "noun_plural": "pages missing a title tag",
     },
-    "seo.screaming_frog.duplicate_titles": {
+    "seo.technical_crawl.duplicate_titles": {
         "meaning": "Duplicate title tags mean multiple pages are using the same search-result headline.",
         "why": "Google may treat those pages as interchangeable and the wrong page can rank or receive clicks.",
         "noun": "page with a duplicate title tag",
+        "noun_plural": "pages with a duplicate title tag",
     },
-    "seo.screaming_frog.missing_meta_descriptions": {
+    "seo.technical_crawl.missing_meta_descriptions": {
         "meaning": "A missing meta description means the page does not provide a written search-result summary.",
         "why": "Google may invent a less persuasive snippet, which can reduce clicks from searchers.",
         "noun": "page missing a meta description",
+        "noun_plural": "pages missing a meta description",
     },
-    "seo.screaming_frog.missing_h1": {
+    "seo.technical_crawl.missing_h1": {
         "meaning": "A missing H1 means the page lacks a clear main visible heading.",
         "why": "Visitors may need more effort to understand the page, and search engines get a weaker topic signal.",
         "noun": "page missing an H1 heading",
+        "noun_plural": "pages missing an H1 heading",
     },
-    "seo.screaming_frog.missing_image_alt": {
+    "seo.technical_crawl.missing_image_alt": {
         "meaning": "Missing image alt text means meaningful images do not have a text description.",
         "why": "That weakens accessibility and removes context that can help search engines understand the page.",
         "noun": "image missing alt text",
+        "noun_plural": "images missing alt text",
     },
     "seo.gsc.low_ctr_pages": {
         "meaning": "Search Console shows pages that appear often in Google but are not earning enough clicks.",
         "why": "Those pages already have visibility, so better titles, descriptions, and offer framing can turn existing impressions into more visits.",
         "noun": "high-impression low-click page",
+        "noun_plural": "high-impression low-click pages",
     },
     "seo.gsc.ranking_opportunities": {
         "meaning": "Search Console shows queries where the site is close enough to compete but not yet in the strongest positions.",
         "why": "Improving the matching page can lift traffic without starting from zero because Google already associates the site with the topic.",
         "noun": "ranking opportunity",
+        "noun_plural": "ranking opportunities",
     },
     "seo.gsc.url_inspection_indexing": {
         "meaning": "URL Inspection checks whether priority pages are actually available in Google.",
         "why": "If an important page is not indexed, content and design improvements will not help that page earn search traffic.",
         "noun": "priority URL not on Google",
+        "noun_plural": "priority URLs not on Google",
     },
     "uxui.primary_cta.present": {
         "meaning": "A primary call to action is the main next step you want a visitor to take.",
         "why": "Without a clear primary action, interested visitors can hesitate or leave instead of contacting the business.",
         "noun": "page with a primary call to action",
+        "noun_plural": "pages with a primary call to action",
     },
     "uxui.cta.volume": {
         "meaning": "Conversion paths are the buttons, links, and contact prompts that move a visitor toward becoming a lead.",
         "why": "Too few paths can make the site feel informational instead of action-oriented.",
         "noun": "call to action",
+        "noun_plural": "calls to action",
     },
     "uxui.cta.above_fold": {
         "meaning": "Above-the-fold calls to action are visible early, before a visitor scrolls.",
         "why": "If the first screen does not show a next step, motivated buyers may miss the fastest way to contact the business.",
         "noun": "early call to action",
+        "noun_plural": "early calls to action",
     },
     "uxui.forms.present": {
         "meaning": "A lead capture form gives visitors a direct way to request contact or start a conversation.",
@@ -407,16 +427,19 @@ _RULE_CONTEXT: dict[str, JsonDict] = {
         "meaning": "A visible phone number gives ready-to-talk visitors a direct contact path.",
         "why": "If phone contact is hard to find, high-intent visitors may delay or choose a competitor.",
         "noun": "page with a visible phone number",
+        "noun_plural": "pages with a visible phone number",
     },
     "uxui.email.visible": {
         "meaning": "A visible email or clear contact link gives visitors a lower-pressure way to reach out.",
         "why": "Some prospects are not ready to call, so hiding email contact can reduce inquiries.",
         "noun": "page with a visible email",
+        "noun_plural": "pages with a visible email",
     },
     "uxui.trust.present": {
         "meaning": "Trust signals are proof points such as reviews, testimonials, certifications, awards, or credible case studies.",
         "why": "Without proof, visitors must take the offer on faith, which makes lead conversion harder.",
         "noun": "page with trust evidence",
+        "noun_plural": "pages with trust evidence",
     },
     "uxui.trust.depth": {
         "meaning": "Trust depth means the site uses more than one type of proof.",
@@ -460,9 +483,11 @@ def _where_sentence(rule: JsonDict, facts: JsonDict) -> str | None:
 
 
 def _location_examples(rule_id: str, facts: JsonDict) -> list[str]:
-    if rule_id.startswith("seo.screaming_frog."):
-        issue_id = _SCREAMING_FROG_RULE_TO_ISSUE.get(rule_id)
-        issues = _list(_dict(_dict(facts.get("external_seo")).get("screaming_frog")).get("issues"))
+    if rule_id.startswith("seo.technical_crawl."):
+        issue_id = _TECHNICAL_CRAWL_RULE_TO_ISSUE.get(rule_id)
+        external = _dict(facts.get("external_seo"))
+        technical = _dict(external.get("technical_crawl") or external.get("screaming_frog"))
+        issues = _list(technical.get("issues"))
         for issue in issues:
             payload = _dict(issue)
             if payload.get("id") == issue_id:
@@ -531,14 +556,14 @@ def _location_examples(rule_id: str, facts: JsonDict) -> list[str]:
     return []
 
 
-_SCREAMING_FROG_RULE_TO_ISSUE = {
-    "seo.screaming_frog.no_broken_internal_urls": "client_error_internal_urls",
-    "seo.screaming_frog.indexable_urls": "non_indexable_internal_urls",
-    "seo.screaming_frog.missing_titles": "missing_titles",
-    "seo.screaming_frog.duplicate_titles": "duplicate_titles",
-    "seo.screaming_frog.missing_meta_descriptions": "missing_meta_descriptions",
-    "seo.screaming_frog.missing_h1": "missing_h1",
-    "seo.screaming_frog.missing_image_alt": "images_missing_alt",
+_TECHNICAL_CRAWL_RULE_TO_ISSUE = {
+    "seo.technical_crawl.no_broken_internal_urls": "client_error_internal_urls",
+    "seo.technical_crawl.indexable_urls": "non_indexable_internal_urls",
+    "seo.technical_crawl.missing_titles": "missing_titles",
+    "seo.technical_crawl.duplicate_titles": "duplicate_titles",
+    "seo.technical_crawl.missing_meta_descriptions": "missing_meta_descriptions",
+    "seo.technical_crawl.missing_h1": "missing_h1",
+    "seo.technical_crawl.missing_image_alt": "images_missing_alt",
 }
 
 

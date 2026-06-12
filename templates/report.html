@@ -76,14 +76,19 @@
 
       <div class="score-strip">
         {% for score in payload.scores %}
-          <article class="score-pill score-pill-{{ score.id }}">
+          <article class="score-pill score-pill-{{ score.id }} score-band-{{ score.band }}">
             <p>{{ score.label }}</p>
             <strong>{{ score.score }}</strong>
-            <span>/ {{ score.max_score }}</span>
+            <span>/ {{ score.max_score }} · {{ score.band_label }}</span>
             <small>{{ score.description }}</small>
           </article>
         {% endfor %}
       </div>
+      <p class="muted">
+        How to read the scores: 75 or higher is strong, 50–74 is fair, and below 50 needs
+        work. Every score comes from fixed, repeatable checks on this site's pages — not
+        from opinion — so the same site state always produces the same score.
+      </p>
 
       <div class="two-column">
         <article>
@@ -158,6 +163,11 @@
           </div>
 
           <h3>Findings</h3>
+          <p class="helper-copy">
+            Severity guide: <strong>high</strong> = fix first, it is likely costing visitors
+            or visibility; <strong>medium</strong> = fix soon; <strong>low</strong> = worth
+            improving; <strong>info</strong> = context only, nothing is broken.
+          </p>
           <div class="finding-list">
             {% for finding in section.findings %}
               <article class="finding-card severity-{{ finding.severity }}">
@@ -191,21 +201,28 @@
 
     <section class="page-section" id="technical-seo">
       <p class="eyebrow">Technical SEO</p>
-      <h2>Screaming Frog crawl intelligence</h2>
+      <h2>Site-wide technical crawl</h2>
       {% set technical_available = payload.technical_seo_section.status == "complete" %}
       <dl class="metric-list inline">
-        <div><dt>Status</dt><dd>{{ payload.technical_seo_section.status }}</dd></div>
-        <div><dt>URLs crawled</dt><dd>{{ payload.technical_seo_section.summary.get("urls_crawled", "N/A") if technical_available else "N/A" }}</dd></div>
-        <div><dt>Issues</dt><dd>{{ (payload.technical_seo_section.issues | length) if technical_available else "N/A" }}</dd></div>
-        <div><dt>Non-indexable</dt><dd>{{ payload.technical_seo_section.summary.get("non_indexable_internal_urls", "N/A") if technical_available else "N/A" }}</dd></div>
+        <div><dt>Status</dt><dd>{{ payload.technical_seo_section.status_label }}</dd></div>
+        <div><dt>Pages analyzed</dt><dd>{{ payload.technical_seo_section.summary.get("urls_crawled", "N/A") if technical_available else "N/A" }}</dd></div>
+        {% if technical_available and payload.technical_seo_section.summary.get("urls_checked") %}
+          <div><dt>Links checked</dt><dd>{{ payload.technical_seo_section.summary.get("urls_checked") }}</dd></div>
+        {% endif %}
+        <div><dt>Issue groups</dt><dd>{{ (payload.technical_seo_section.issues | length) if technical_available else "N/A" }}</dd></div>
       </dl>
+      {% if payload.technical_seo_section.tool_label %}
+        <p class="muted">Data source: {{ payload.technical_seo_section.tool_label }}.</p>
+      {% endif %}
       <div class="section-guide">
         <article>
           <h3>What this section tells you</h3>
           <p>
             This is the site health check for search engines. It flags broken links,
             blocked pages, missing page labels, duplicate metadata, and image text gaps
-            that can stop Google or visitors from getting the right page.
+            that can stop Google or visitors from getting the right page. Every count
+            below comes from URLs this audit actually checked, and each issue lists
+            example URLs so the fix can start at an exact address.
           </p>
         </article>
         <article>
@@ -217,6 +234,12 @@
           </p>
         </article>
       </div>
+      {% for note in payload.technical_seo_section.notes %}
+        <p class="muted">Coverage note: {{ note }}</p>
+      {% endfor %}
+      {% for warning in payload.technical_seo_section.warnings %}
+        <p class="muted">Warning: {{ warning }}</p>
+      {% endfor %}
 
       {% if technical_available and payload.technical_seo_section.issues %}
         <div class="technical-issue-list">
@@ -234,9 +257,16 @@
                 </div>
               </dl>
               {% if issue.examples %}
-                <p class="location-label">Examples found by the crawl include:</p>
+                {% set shown = issue.examples[:4] %}
+                <p class="location-label">
+                  {% if issue.count > shown | length %}
+                    Examples ({{ shown | length }} of {{ issue.count }} affected):
+                  {% else %}
+                    Affected URLs:
+                  {% endif %}
+                </p>
                 <ul class="url-list">
-                  {% for example in issue.examples[:4] %}
+                  {% for example in shown %}
                     <li>{{ example }}</li>
                   {% endfor %}
                 </ul>
@@ -246,14 +276,16 @@
         </div>
       {% elif technical_available %}
         <p class="muted">
-          Screaming Frog completed for this audit and did not report technical SEO issue groups
-          that matched the report thresholds.
+          The technical crawl completed for this audit and did not find issue groups that
+          matched the report thresholds.
         </p>
       {% else %}
         <p class="muted">
-          Screaming Frog data was not available for this report, so this section does not make
-          clean-or-broken claims. Confirm the local Screaming Frog installation/license and rerun
-          enrichment to populate it.
+          Technical crawl data was not available for this report, so this section does not
+          make clean-or-broken claims.
+          {% if payload.technical_seo_section.reason_label %}
+            Reason: {{ payload.technical_seo_section.reason_label }}
+          {% endif %}
         </p>
       {% endif %}
     </section>
@@ -264,25 +296,35 @@
       {% set search_available = payload.search_performance_section.status == "complete" %}
       {% set search_has_opportunities = payload.search_performance_section.high_impression_low_ctr_pages or payload.search_performance_section.ranking_opportunities or payload.search_performance_section.declining_pages %}
       <dl class="metric-list inline">
-        <div><dt>Status</dt><dd>{{ payload.search_performance_section.status }}</dd></div>
+        <div><dt>Status</dt><dd>{{ payload.search_performance_section.status_label }}</dd></div>
         <div><dt>Property</dt><dd>{{ payload.search_performance_section.site_url or "N/A" }}</dd></div>
-        <div><dt>Top queries</dt><dd>{{ payload.search_performance_section.summary.get("top_query_count", "N/A") if search_available else "N/A" }}</dd></div>
-        <div><dt>Top pages</dt><dd>{{ payload.search_performance_section.summary.get("top_page_count", "N/A") if search_available else "N/A" }}</dd></div>
+        <div><dt>Top queries analyzed</dt><dd>{{ payload.search_performance_section.summary.get("top_query_count", "N/A") if search_available else "N/A" }}</dd></div>
+        <div><dt>Top pages analyzed</dt><dd>{{ payload.search_performance_section.summary.get("top_page_count", "N/A") if search_available else "N/A" }}</dd></div>
       </dl>
+      {% if search_available and payload.search_performance_section.date_range %}
+        <p class="muted">
+          Data window: {{ payload.search_performance_section.date_range.get("start") }}
+          to {{ payload.search_performance_section.date_range.get("end") }}
+          (Google's own measurements of this site in search results).
+        </p>
+      {% endif %}
       <div class="section-guide">
         <article>
           <h3>What this section tells you</h3>
           <p>
             Search Console shows how people already find the site in Google. It highlights
             pages with visibility but weak clicks, search terms close to stronger rankings,
-            and pages losing traffic.
+            and pages losing traffic. These numbers come directly from Google, not from
+            estimates.
           </p>
         </article>
         <article>
-          <h3>How to use it</h3>
+          <h3>How to read the columns</h3>
           <p>
-            Use these rows to choose content and title updates. CTR means click-through rate:
-            when impressions are high but CTR is low, the page is being seen but not chosen.
+            Impressions = how many times the page appeared in Google results. Clicks = how
+            many times searchers chose it. CTR (click-through rate) = clicks divided by
+            impressions; high impressions with low CTR means the page is seen but not chosen.
+            Position = the average ranking spot in the results (1 is the top).
           </p>
         </article>
       </div>
@@ -338,12 +380,13 @@
       {% if search_available and payload.search_performance_section.declining_pages %}
         <h3>Declining pages</h3>
         <p class="helper-copy">
-          These pages lost clicks compared with the previous period. Check whether content,
-          rankings, seasonality, or technical changes caused the drop.
+          These pages lost clicks compared with the period immediately before the data
+          window above. Check whether content, rankings, seasonality, or technical changes
+          caused the drop.
         </p>
         <table class="compact-table">
           <thead>
-            <tr><th>Page</th><th>Current clicks</th><th>Previous clicks</th><th>Delta</th></tr>
+            <tr><th>Page</th><th>Current clicks</th><th>Previous clicks</th><th>Change</th></tr>
           </thead>
           <tbody>
             {% for row in payload.search_performance_section.declining_pages[:10] %}
@@ -361,18 +404,21 @@
       {% if payload.search_performance_section.url_inspection_items %}
         <h3>URL inspection</h3>
         <p class="helper-copy">
-          Use this as an indexability spot check for important URLs. If a page is not on
-          Google or has an unexpected canonical, review it before judging content quality.
+          This asks Google directly whether each important page is in its index ("On
+          Google"). "Google's status" is Google's own wording for how it handled the page.
+          "Canonical chosen by Google" is the page version Google decided to index — if it
+          differs from the page address, Google is treating another URL as the main copy.
+          If a page is not on Google, fix that before judging its content quality.
         </p>
         <table class="compact-table">
           <thead>
-            <tr><th>URL</th><th>On Google</th><th>Coverage</th><th>Canonical</th></tr>
+            <tr><th>URL</th><th>On Google</th><th>Google's status</th><th>Canonical chosen by Google</th></tr>
           </thead>
           <tbody>
             {% for item in payload.search_performance_section.url_inspection_items[:10] %}
               <tr>
                 <td class="url-cell">{{ item.get("url") }}</td>
-                <td>{{ item.get("on_google") }}</td>
+                <td>{{ item.get("on_google_label") or "Unknown" }}</td>
                 <td>{{ item.get("coverage_state") or item.get("status") }}</td>
                 <td class="url-cell">{{ item.get("google_canonical") or "N/A" }}</td>
               </tr>
@@ -383,8 +429,13 @@
 
       {% if not search_available %}
         <p class="muted">
-          Search Console data was not available for this report. Connect a verified Google
-          Search Console property and rerun enrichment to populate this section.
+          Search Console data was not available for this report, so this section makes no
+          claims about the site's Google performance.
+          {% if payload.search_performance_section.reason_label %}
+            Reason: {{ payload.search_performance_section.reason_label }}
+          {% endif %}
+          Connect a verified Google Search Console property and rerun enrichment to
+          populate it.
         </p>
       {% elif not search_has_opportunities %}
         <p class="muted">
@@ -429,32 +480,45 @@
       <div class="qa-grid">
         <article>
           <h3>PageSpeed Summary</h3>
+          <p class="helper-copy">
+            PageSpeed measures how fast Google considers the pages, on a 0–100 scale
+            (90+ is good, 50–89 needs improvement, below 50 is poor).
+          </p>
           <dl class="metric-list">
-            <div><dt>Status</dt><dd>{{ payload.pagespeed_summary.status }}</dd></div>
+            <div><dt>Status</dt><dd>{{ payload.pagespeed_summary.status_label }}</dd></div>
             {% if payload.pagespeed_summary.reason %}
               <div><dt>Reason</dt><dd>{{ payload.pagespeed_summary.reason }}</dd></div>
             {% endif %}
             <div><dt>Pages analyzed</dt><dd>{{ payload.pagespeed_summary.pages_analyzed }} / {{ payload.pagespeed_summary.pages_requested }}</dd></div>
-            <div><dt>Mobile avg</dt><dd>{{ payload.pagespeed_summary.avg_mobile_performance or "N/A" }}</dd></div>
-            <div><dt>Desktop avg</dt><dd>{{ payload.pagespeed_summary.avg_desktop_performance or "N/A" }}</dd></div>
+            <div><dt>Mobile avg</dt><dd>{% if payload.pagespeed_summary.avg_mobile_performance is not none %}{{ payload.pagespeed_summary.avg_mobile_performance }} / 100{% else %}N/A{% endif %}</dd></div>
+            <div><dt>Desktop avg</dt><dd>{% if payload.pagespeed_summary.avg_desktop_performance is not none %}{{ payload.pagespeed_summary.avg_desktop_performance }} / 100{% else %}N/A{% endif %}</dd></div>
           </dl>
         </article>
         <article>
-          <h3>Validation Summary</h3>
+          <h3>Fact-Check Summary</h3>
+          <p class="helper-copy">
+            Before this report was generated, every number in the written commentary was
+            checked against the data actually collected from the site. Sentences whose
+            numbers could not be verified were removed, so the counts and percentages you
+            read here are backed by collected evidence.
+          </p>
           <dl class="metric-list">
-            <div><dt>Status</dt><dd>{{ payload.validation_summary.status }}</dd></div>
-            <div><dt>Numeric claims checked</dt><dd>{{ payload.validation_summary.numeric_claims_checked }}</dd></div>
-            <div><dt>Unsupported claims</dt><dd>{{ payload.validation_summary.unsupported_claim_count }}</dd></div>
-            <div><dt>Action</dt><dd>{{ payload.validation_summary.action }}</dd></div>
+            <div><dt>Numbers checked</dt><dd>{{ payload.validation_summary.numeric_claims_checked }}</dd></div>
+            <div><dt>Unverified and removed</dt><dd>{{ payload.validation_summary.unsupported_claim_count }}</dd></div>
           </dl>
         </article>
       </div>
 
       <h3>Crawl QA</h3>
+      <p class="helper-copy">
+        The audit rendered {{ payload.crawl_summary.successful_pages }} pages of the site
+        in a real browser — the homepage plus its most prominent internal pages. On-page
+        findings come from those pages; the site-wide technical crawl additionally checks
+        the links and sitemap URLs it discovered.
+      </p>
       <dl class="metric-list inline">
-        <div><dt>Status</dt><dd>{{ payload.crawl_summary.status }}</dd></div>
-        <div><dt>Successful</dt><dd>{{ payload.crawl_summary.successful_pages }}</dd></div>
-        <div><dt>Failed</dt><dd>{{ payload.crawl_summary.failed_pages }}</dd></div>
+        <div><dt>Pages rendered</dt><dd>{{ payload.crawl_summary.successful_pages }}</dd></div>
+        <div><dt>Failed to load</dt><dd>{{ payload.crawl_summary.failed_pages }}</dd></div>
         <div><dt>Skipped</dt><dd>{{ payload.crawl_summary.skipped_pages }}</dd></div>
       </dl>
 

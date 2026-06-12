@@ -25,10 +25,12 @@ def test_compose_report_payload_includes_epic_4_contract() -> None:
     assert payload.roadmap[0].tier == "quick_win"
     assert payload.validation_summary.unsupported_claim_count == 1
     assert payload.pagespeed_summary.status == "skipped"
-    assert payload.pagespeed_summary.reason == "missing_google_psi_api_key"
+    assert payload.pagespeed_summary.reason == (
+        "No Google PageSpeed API key is configured, so page speed was not measured."
+    )
     assert payload.external_seo_summary.status == "partial"
     assert payload.technical_seo_section.issues[0].id == "client_error_internal_urls"
-    assert payload.technical_seo_section.issues[0].summary.startswith("A URL found")
+    assert payload.technical_seo_section.issues[0].summary.startswith("These URLs on the site")
     assert "Visitors" in payload.technical_seo_section.issues[0].why_it_matters
     assert "Update the link" in payload.technical_seo_section.issues[0].recommended_fix
     assert payload.technical_seo_section.issues[0].location_label == (

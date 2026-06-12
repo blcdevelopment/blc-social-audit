@@ -55,6 +55,14 @@ def configure_local_env(tmp_dir: Path) -> None:
             "CRAWLER_ALLOW_PRIVATE_HOSTS": "true",
             "CRAWLER_RESPECT_ROBOTS_TXT": "false",
             "CRAWLER_SCREENSHOTS_ENABLED": "true",
+            # Pin the external SEO stage to its real skip paths regardless of the
+            # operator's gitignored .env: no Screaming Frog subprocess, no site
+            # health link sweep (fixture root-relative links would 404 against the
+            # fixture server and change scores), no Google OAuth.
+            "SCREAMING_FROG_ENABLED": "false",
+            "SITE_HEALTH_ENABLED": "false",
+            "GOOGLE_OAUTH_CLIENT_ID": "",
+            "GOOGLE_OAUTH_CLIENT_SECRET": "",
         }
     )
 

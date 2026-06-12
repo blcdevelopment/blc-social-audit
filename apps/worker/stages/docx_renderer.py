@@ -152,8 +152,8 @@ def _document_xml(payload: ReportPayload) -> str:
     parts.append(_paragraph(payload.appendix.scoring_note))
     parts.append(
         _paragraph(
-            "PageSpeed: "
-            f"{payload.pagespeed_summary.status}; analyzed "
+            "PageSpeed (how fast Google considers the pages, 0-100): "
+            f"{payload.pagespeed_summary.status_label}; analyzed "
             f"{payload.pagespeed_summary.pages_analyzed}/"
             f"{payload.pagespeed_summary.pages_requested} pages.",
             "Meta",
@@ -161,9 +161,10 @@ def _document_xml(payload: ReportPayload) -> str:
     )
     parts.append(
         _paragraph(
-            "Validation: "
-            f"{payload.validation_summary.status}; "
-            f"{payload.validation_summary.numeric_claims_checked} numeric claims checked.",
+            "Fact check: every number in the written commentary was checked against the "
+            "data collected from the site before this report was generated "
+            f"({payload.validation_summary.numeric_claims_checked} numbers checked, "
+            f"{payload.validation_summary.unsupported_claim_count} unverified and removed).",
             "Meta",
         )
     )
@@ -187,12 +188,15 @@ def _external_seo_xml(payload: ReportPayload) -> list[str]:
     parts.append(_heading("Technical SEO", 1))
     parts.append(
         _paragraph(
-            "Screaming Frog status: "
-            f"{technical.status}; URLs crawled: "
+            f"Status: {technical.status_label}"
+            + (f" (source: {technical.tool_label})" if technical.tool_label else "")
+            + "; pages analyzed: "
             f"{technical.summary.get('urls_crawled', 'N/A') if technical_available else 'N/A'}.",
             "Meta",
         )
     )
+    for note in technical.notes:
+        parts.append(_paragraph(f"Coverage note: {note}", "Meta"))
     parts.append(
         _paragraph(
             "What this section tells you: This is the site health check for search engines. "
@@ -219,31 +223,47 @@ def _external_seo_xml(payload: ReportPayload) -> list[str]:
                 _paragraph(f"{issue.summary} {issue.why_it_matters} {issue.recommended_fix}")
             )
             if issue.examples:
-                parts.append(_paragraph("Examples found by the crawl include:", "Meta"))
-                for example in issue.examples[:4]:
+                shown = issue.examples[:4]
+                if issue.count > len(shown):
+                    parts.append(
+                        _paragraph(f"Examples ({len(shown)} of {issue.count} affected):", "Meta")
+                    )
+                else:
+                    parts.append(_paragraph("Affected URLs:", "Meta"))
+                for example in shown:
                     parts.append(_bullet(example))
     elif technical_available:
         parts.append(
             _paragraph(
-                "Screaming Frog completed for this audit and did not report technical SEO "
-                "issue groups that matched the report thresholds."
+                "The technical crawl completed for this audit and did not find issue "
+                "groups that matched the report thresholds."
             )
         )
     else:
+        reason = f" Reason: {technical.reason_label}" if technical.reason_label else ""
         parts.append(
             _paragraph(
-                "Screaming Frog data was not available for this report, so this section "
-                "does not make clean-or-broken technical SEO claims."
+                "Technical crawl data was not available for this report, so this section "
+                f"does not make clean-or-broken technical SEO claims.{reason}"
             )
         )
 
     parts.append(_heading("Google Search Performance", 1))
     parts.append(
         _paragraph(
-            f"Search Console status: {search.status}; property: {search.site_url or 'N/A'}.",
+            f"Status: {search.status_label}; property: {search.site_url or 'N/A'}.",
             "Meta",
         )
     )
+    if search_available and search.date_range:
+        parts.append(
+            _paragraph(
+                "Data window: "
+                f"{search.date_range.get('start')} to {search.date_range.get('end')} "
+                "(Google's own measurements of this site in search results).",
+                "Meta",
+            )
+        )
     parts.append(
         _paragraph(
             "What this section tells you: Search Console shows how people already find the "
@@ -253,9 +273,10 @@ def _external_seo_xml(payload: ReportPayload) -> list[str]:
     )
     parts.append(
         _paragraph(
-            "How to use it: Use these rows to choose content and title updates. CTR means "
-            "click-through rate: when impressions are high but CTR is low, the page is being "
-            "seen but not chosen."
+            "How to read the numbers: Impressions = how many times the page appeared in "
+            "Google results. Clicks = how many times searchers chose it. CTR (click-through "
+            "rate) = clicks divided by impressions. Position = the average ranking spot in "
+            "the results (1 is the top)."
         )
     )
     if search_available:
@@ -275,11 +296,19 @@ def _external_seo_xml(payload: ReportPayload) -> list[str]:
 
     if search.url_inspection_items:
         parts.append(_heading("URL Inspection", 2))
+        parts.append(
+            _paragraph(
+                "This asks Google directly whether each important page is in its index. "
+                "'On Google' is Google's answer; the status text is Google's own wording "
+                "for how it handled the page.",
+                "Meta",
+            )
+        )
         for item in search.url_inspection_items[:8]:
             parts.append(
                 _bullet(
-                    f"{item.get('url')}: on_google={item.get('on_google')}; "
-                    f"coverage={item.get('coverage_state') or item.get('status')}"
+                    f"{item.get('url')}: On Google: {item.get('on_google_label') or 'Unknown'}; "
+                    f"Google's status: {item.get('coverage_state') or item.get('status')}"
                 )
             )
     elif not search_available:

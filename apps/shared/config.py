@@ -61,11 +61,31 @@ class Settings(BaseSettings):
     screaming_frog_enabled: bool = False
     screaming_frog_binary: Path | None = None
     screaming_frog_output_dir: Path = Path("./storage/tool_exports/screaming_frog")
-    screaming_frog_timeout_seconds: int = Field(default=1800, ge=30)
+    # Clamped at runtime under the Celery soft time limit (screaming_frog.py)
+    # so a slow Screaming Frog crawl degrades gracefully instead of killing the
+    # whole audit task.
+    screaming_frog_timeout_seconds: int = Field(default=600, ge=30)
     screaming_frog_export_tabs: str = "Internal:All,Response Codes:Client Error (4xx)"
+
+    # Built-in site health sweep (httpx status checks over discovered URLs +
+    # sitemap). Runs when Screaming Frog is disabled or unavailable, so the
+    # Technical SEO report section works in Docker/production without a
+    # licensed desktop tool.
+    site_health_enabled: bool = True
+    site_health_max_internal_urls: int = Field(default=150, ge=1, le=1000)
+    site_health_max_external_urls: int = Field(default=50, ge=0, le=500)
+    site_health_check_external_links: bool = True
+    site_health_concurrency: int = Field(default=8, ge=1, le=20)
+    site_health_request_timeout_seconds: int = Field(default=10, ge=1, le=60)
+    site_health_total_budget_seconds: int = Field(default=180, ge=10)
+    site_health_sitemap_max_urls: int = Field(default=500, ge=0, le=5000)
 
     google_oauth_client_id: str = ""
     google_oauth_client_secret: SecretStr | None = None
+    # Signs the OAuth `state` parameter (CSRF protection). Optional: when empty,
+    # each API process generates an ephemeral secret at startup, which is fine for
+    # a single-process deployment; set it explicitly if the API runs replicated.
+    google_oauth_state_secret: SecretStr | None = None
     google_oauth_redirect_uri: str = "http://localhost:8000/google/search-console/callback"
     google_oauth_success_redirect_url: str = "http://localhost:3000/audits"
     gsc_default_date_range_days: int = Field(default=90, ge=7, le=540)

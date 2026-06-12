@@ -163,7 +163,7 @@ function ExternalSeoBlock({
         <div>
           <h3>External SEO intelligence</h3>
           <p className="section-headline">
-            Screaming Frog crawl facts and Google Search Console opportunities.
+            Site-wide technical crawl facts and Google Search Console opportunities.
           </p>
         </div>
         <span className="pill">{summary.status}</span>
@@ -171,8 +171,8 @@ function ExternalSeoBlock({
 
       <div className="external-status-grid">
         <div>
-          <span>Screaming Frog</span>
-          <strong>{summary.screaming_frog_status}</strong>
+          <span>{summary.technical_crawl_tool || "Technical crawl"}</span>
+          <strong>{summary.technical_crawl_status}</strong>
         </div>
         <div>
           <span>Search Console</span>
@@ -199,8 +199,15 @@ function ExternalSeoBlock({
                   technical.summary,
                   "non_indexable_internal_urls",
                 )} non-indexable`
-              : `Status: ${technical.status}`}
+              : `Status: ${technical.status_label}${
+                  technical.reason_label ? ` — ${technical.reason_label}` : ""
+                }`}
           </p>
+          {technical.notes.map((note) => (
+            <p className="muted" key={note}>
+              Coverage note: {note}
+            </p>
+          ))}
           {technicalAvailable && technical.issues.length > 0 ? (
             <table className="insight-table">
               <thead>
@@ -244,12 +251,12 @@ function ExternalSeoBlock({
             </table>
           ) : technicalAvailable ? (
             <p className="muted">
-              Screaming Frog completed and did not report technical SEO issue groups that
-              matched the report thresholds.
+              The technical crawl completed and did not find issue groups that matched the
+              report thresholds.
             </p>
           ) : (
             <p className="muted">
-              Screaming Frog data is not available for this audit, so no clean-or-broken
+              Technical crawl data is not available for this audit, so no clean-or-broken
               technical SEO claims are shown.
             </p>
           )}
@@ -263,7 +270,9 @@ function ExternalSeoBlock({
                   search.summary,
                   "top_query_count",
                 )} queries · ${recordNumberText(search.summary, "top_page_count")} pages`
-              : `Status: ${search.status}`}
+              : `Status: ${search.status_label}${
+                  search.reason_label ? ` — ${search.reason_label}` : ""
+                }`}
           </p>
           {searchAvailable && search.ranking_opportunities.length > 0 ? (
             <table className="insight-table">

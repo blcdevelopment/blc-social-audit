@@ -1,4 +1,4 @@
-version: "phase1-seo-v3"
+version: "phase1-seo-v4"
 category: seo
 max_score: 100
 normalization: rescale_to_max
@@ -166,10 +166,10 @@ rules:
     finding_label: Desktop page performance needs improvement
     remediation: Improve desktop load speed by optimizing images, scripts, and server response time.
 
-  - id: seo.screaming_frog.no_broken_internal_urls
-    description: Screaming Frog found no internal URLs returning 4xx errors.
+  - id: seo.technical_crawl.no_broken_internal_urls
+    description: The technical crawl found no site URLs returning errors (for example 404 not found).
     weight: 8
-    fact_path: external_seo.screaming_frog.summary.client_error_internal_urls
+    fact_path: external_seo.technical_crawl.summary.client_error_internal_urls
     evaluator: threshold
     skip_if_missing: true
     params:
@@ -177,13 +177,13 @@ rules:
       partial_max: 5
     impact: high
     tier: quick_win
-    finding_label: Internal broken URLs were found
-    remediation: Fix or redirect internal URLs returning 4xx errors.
+    finding_label: Some pages or links on the site lead to error pages
+    remediation: Fix the broken page or redirect the old address to the correct live page.
 
-  - id: seo.screaming_frog.indexable_urls
-    description: Screaming Frog found few or no unexpected non-indexable internal URLs.
+  - id: seo.technical_crawl.indexable_urls
+    description: The technical crawl found few or no pages that block Google from indexing them.
     weight: 6
-    fact_path: external_seo.screaming_frog.summary.non_indexable_internal_urls
+    fact_path: external_seo.technical_crawl.summary.non_indexable_internal_urls
     evaluator: threshold
     skip_if_missing: true
     params:
@@ -191,13 +191,13 @@ rules:
       partial_max: 5
     impact: high
     tier: quick_win
-    finding_label: Internal URLs are marked non-indexable
+    finding_label: Some pages block Google from showing them in search results
     remediation: Review non-indexable URLs and remove blocking directives from pages that should rank.
 
-  - id: seo.screaming_frog.missing_titles
-    description: Screaming Frog found no pages missing title tags.
+  - id: seo.technical_crawl.missing_titles
+    description: The technical crawl found no pages missing title tags.
     weight: 6
-    fact_path: external_seo.screaming_frog.summary.missing_titles
+    fact_path: external_seo.technical_crawl.summary.missing_titles
     evaluator: threshold
     skip_if_missing: true
     params:
@@ -208,10 +208,10 @@ rules:
     finding_label: Pages are missing title tags
     remediation: Add unique, descriptive title tags to every indexable page.
 
-  - id: seo.screaming_frog.duplicate_titles
-    description: Screaming Frog found few or no duplicate title tags.
+  - id: seo.technical_crawl.duplicate_titles
+    description: The technical crawl found few or no pages sharing the same title tag.
     weight: 5
-    fact_path: external_seo.screaming_frog.summary.duplicate_titles
+    fact_path: external_seo.technical_crawl.summary.duplicate_titles
     evaluator: threshold
     skip_if_missing: true
     params:
@@ -222,10 +222,10 @@ rules:
     finding_label: Duplicate title tags were found
     remediation: Rewrite duplicate titles so every important page has a distinct search result angle.
 
-  - id: seo.screaming_frog.missing_meta_descriptions
-    description: Screaming Frog found no pages missing meta descriptions.
+  - id: seo.technical_crawl.missing_meta_descriptions
+    description: The technical crawl found no pages missing meta descriptions.
     weight: 6
-    fact_path: external_seo.screaming_frog.summary.missing_meta_descriptions
+    fact_path: external_seo.technical_crawl.summary.missing_meta_descriptions
     evaluator: threshold
     skip_if_missing: true
     params:
@@ -236,10 +236,10 @@ rules:
     finding_label: Pages are missing meta descriptions
     remediation: Add unique, click-focused meta descriptions to key pages.
 
-  - id: seo.screaming_frog.missing_h1
-    description: Screaming Frog found no pages missing H1 headings.
+  - id: seo.technical_crawl.missing_h1
+    description: The technical crawl found no pages missing H1 headings.
     weight: 5
-    fact_path: external_seo.screaming_frog.summary.missing_h1
+    fact_path: external_seo.technical_crawl.summary.missing_h1
     evaluator: threshold
     skip_if_missing: true
     params:
@@ -250,10 +250,10 @@ rules:
     finding_label: Pages are missing H1 headings
     remediation: Add one clear, descriptive H1 heading to each important page.
 
-  - id: seo.screaming_frog.missing_image_alt
-    description: Screaming Frog found few or no images missing alt text.
+  - id: seo.technical_crawl.missing_image_alt
+    description: The technical crawl found few or no images missing alt text.
     weight: 5
-    fact_path: external_seo.screaming_frog.summary.images_missing_alt
+    fact_path: external_seo.technical_crawl.summary.images_missing_alt
     evaluator: threshold
     skip_if_missing: true
     params:

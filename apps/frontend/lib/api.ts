@@ -100,7 +100,8 @@ export interface PageSpeedSummary {
 
 export interface ExternalSeoSummary {
   status: string;
-  screaming_frog_status: string;
+  technical_crawl_status: string;
+  technical_crawl_tool: string | null;
   gsc_status: string;
   url_inspection_status: string;
   technical_issue_count: number;
@@ -121,13 +122,20 @@ export interface TechnicalSeoIssue {
 
 export interface TechnicalSeoSection {
   status: string;
+  status_label: string;
+  reason_label: string | null;
   source: string | null;
+  tool_label: string | null;
   summary: Record<string, unknown>;
   issues: TechnicalSeoIssue[];
+  notes: string[];
+  warnings: string[];
 }
 
 export interface SearchPerformanceSection {
   status: string;
+  status_label: string;
+  reason_label: string | null;
   site_url: string | null;
   date_range: Record<string, unknown>;
   summary: Record<string, unknown>;

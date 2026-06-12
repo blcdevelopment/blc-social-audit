@@ -142,7 +142,7 @@ def _trusted_external_seo_facts(external_seo_facts: JsonDict | None) -> JsonDict
         return {}
 
     trusted = dict(external_seo_facts)
-    for source_key in ("screaming_frog", "gsc", "url_inspection"):
+    for source_key in ("technical_crawl", "screaming_frog", "gsc", "url_inspection"):
         source = trusted.get(source_key)
         if not isinstance(source, dict):
             continue

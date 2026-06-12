@@ -53,7 +53,7 @@ def test_render_report_pdf_qa_variants(
     assert "It evaluated 2 checks and earned 81 of 100 available points" in normalized_text
     assert "It evaluated 2 checks and earned 74 of 100 available points" in normalized_text
     assert "How to use it" in text
-    assert "CTR means click-through rate" in text
+    assert "CTR (click-through rate)" in text
     assert "SEO rule trail" not in text
     assert "UX/UI rule trail" not in text
     assert "raw rule identifiers" in text
@@ -61,7 +61,7 @@ def test_render_report_pdf_qa_variants(
     if variant == "long":
         assert len(reader.pages) >= 8
     if missing_psi:
-        assert "missing_google_psi_api_key" in text
+        assert "No Google PageSpeed API key is configured" in normalized_text
     if failed_pages:
         assert "Timed out rendering" in text
 

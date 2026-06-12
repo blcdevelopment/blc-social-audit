@@ -168,13 +168,13 @@ def test_no_internal_rule_ids_leak_into_prose() -> None:
 
 def test_external_seo_findings_include_real_locations() -> None:
     rule = _rule(
-        "seo.screaming_frog.no_broken_internal_urls",
+        "seo.technical_crawl.no_broken_internal_urls",
         "fail",
         weight=8,
         impact="high",
         tier="quick_win",
         label="Internal broken URLs were found",
-        fact_path="external_seo.screaming_frog.summary.client_error_internal_urls",
+        fact_path="external_seo.technical_crawl.summary.client_error_internal_urls",
         value=2,
     )
     plan = build_content_plan(
@@ -183,7 +183,7 @@ def test_external_seo_findings_include_real_locations() -> None:
         uxui_facts={},
         psi_facts={},
         external_seo_facts={
-            "screaming_frog": {
+            "technical_crawl": {
                 "status": "complete",
                 "issues": [
                     {

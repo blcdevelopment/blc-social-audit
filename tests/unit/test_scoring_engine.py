@@ -45,7 +45,7 @@ def test_phase_1_rubrics_load_and_validate() -> None:
     uxui = load_rubric(settings.rubric_uxui_path)
     composite = load_composite_rubric(settings.rubric_composite_path)
 
-    assert seo.version == "phase1-seo-v3"
+    assert seo.version == "phase1-seo-v4"
     assert uxui.version == "phase1-uxui-v2"
     assert sum(rule.weight for rule in seo.rules) == 158
     assert sum(rule.weight for rule in uxui.rules) == 100
@@ -80,13 +80,13 @@ def test_scoring_is_reproducible_for_same_facts() -> None:
     assert first["categories"]["seo"]["score"] >= 85
 
 
-def test_scoring_does_not_treat_failed_screaming_frog_zero_summary_as_clean() -> None:
+def test_scoring_does_not_treat_failed_technical_crawl_zero_summary_as_clean() -> None:
     settings = Settings(_env_file=None)
     seo, uxui = _facts_for_fixture("strong_site.html")
     legacy_failed_external = {
-        "screaming_frog": {
+        "technical_crawl": {
             "status": "failed",
-            "summary": _screaming_frog_zero_summary(),
+            "summary": _technical_crawl_zero_summary(),
             "issues": [],
         },
         "gsc": {"status": "skipped", "summary": {}},
@@ -104,20 +104,20 @@ def test_scoring_does_not_treat_failed_screaming_frog_zero_summary_as_clean() ->
     rules = {
         rule["rule_id"]: rule
         for rule in scored["categories"]["seo"]["rules"]
-        if rule["rule_id"].startswith("seo.screaming_frog.")
+        if rule["rule_id"].startswith("seo.technical_crawl.")
     }
-    assert rules["seo.screaming_frog.no_broken_internal_urls"]["result"] == "skipped"
-    assert rules["seo.screaming_frog.missing_titles"]["result"] == "skipped"
-    assert rules["seo.screaming_frog.missing_meta_descriptions"]["result"] == "skipped"
+    assert rules["seo.technical_crawl.no_broken_internal_urls"]["result"] == "skipped"
+    assert rules["seo.technical_crawl.missing_titles"]["result"] == "skipped"
+    assert rules["seo.technical_crawl.missing_meta_descriptions"]["result"] == "skipped"
 
 
-def test_scoring_uses_complete_screaming_frog_zero_summary() -> None:
+def test_scoring_uses_complete_technical_crawl_zero_summary() -> None:
     settings = Settings(_env_file=None)
     seo, uxui = _facts_for_fixture("strong_site.html")
     complete_external = {
-        "screaming_frog": {
+        "technical_crawl": {
             "status": "complete",
-            "summary": _screaming_frog_zero_summary(),
+            "summary": _technical_crawl_zero_summary(),
             "issues": [],
         },
         "gsc": {"status": "skipped", "summary": {}},
@@ -135,14 +135,14 @@ def test_scoring_uses_complete_screaming_frog_zero_summary() -> None:
     rules = {
         rule["rule_id"]: rule
         for rule in scored["categories"]["seo"]["rules"]
-        if rule["rule_id"].startswith("seo.screaming_frog.")
+        if rule["rule_id"].startswith("seo.technical_crawl.")
     }
-    assert rules["seo.screaming_frog.no_broken_internal_urls"]["result"] == "pass"
-    assert rules["seo.screaming_frog.missing_titles"]["result"] == "pass"
-    assert rules["seo.screaming_frog.missing_meta_descriptions"]["result"] == "pass"
+    assert rules["seo.technical_crawl.no_broken_internal_urls"]["result"] == "pass"
+    assert rules["seo.technical_crawl.missing_titles"]["result"] == "pass"
+    assert rules["seo.technical_crawl.missing_meta_descriptions"]["result"] == "pass"
 
 
-def _screaming_frog_zero_summary() -> dict:
+def _technical_crawl_zero_summary() -> dict:
     return {
         "urls_crawled": 0,
         "html_urls_crawled": 0,

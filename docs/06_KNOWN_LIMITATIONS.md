@@ -61,16 +61,29 @@ These are out of scope for Phase 1 by design (see [`docs/01_REQUIREMENTS.md`](01
 
 ## 5. External SEO Enrichment
 
-- Screaming Frog enrichment requires SEO Spider to be installed and licensed on the worker.
-  If it is disabled, missing, times out, or fails, the audit continues and its external
-  facts are marked skipped/failed.
-- Screaming Frog is invoked only through a controlled argument list against the submitted
-  audit URL, but production workers still need OS-level resource limits and a dedicated
-  output volume for large crawls.
+- The **technical crawl** slot is filled by the built-in **site health sweep** by default
+  (plain-HTTP status checks over discovered internal/outbound links + sitemap.xml, plus
+  duplicate/missing-metadata checks over the rendered pages). It is deterministic given the
+  site's state, runs in Docker, and needs no licence. Coverage limits (`SITE_HEALTH_MAX_*`,
+  time budget) are recorded as coverage notes in the report rather than silently truncated.
+- The sweep's URL discovery is bounded by what the rendered pages link to plus the sitemap;
+  it does not do a full-site BFS crawl, so deep orphaned sections may not be checked.
+- On an **enrichment rerun**, page HTML is no longer in memory, so outbound links are not
+  rechecked (noted in the report); run a fresh audit for full outbound coverage.
+- **Screaming Frog is optional and deliberately NOT installed in the Docker images**: its
+  CLI/headless mode is licence-gated, licences are per-individual-user (a shared server key
+  for several operators violates Screaming Frog's terms and risks the key being blocked),
+  and the JVM wants 2–4 GB RAM — more than the production box can spare. It remains
+  supported for a licensed operator machine via `SCREAMING_FROG_ENABLED` + binary path;
+  when it completes, its data fills the technical crawl slot instead of the sweep, and its
+  subprocess timeout is clamped under the Celery soft time limit.
 - Search Console data is available only for Google properties the connected account can
   access. No matching property means GSC and URL Inspection facts are skipped.
 - The app uses official Google APIs. It does not scrape the Search Console Insights UI.
-- URL Inspection is quota-limited and only runs for a small priority URL set.
+- URL Inspection is quota-limited and only runs for a small priority URL set; runs with
+  per-URL failures are reported as `partial` and never count toward the score.
+- Google OAuth/refresh tokens are stored **unencrypted** in the `google_search_console_connections`
+  table (single-tenant internal DB). Encrypting them at rest is open productionization work.
 
 ---
 

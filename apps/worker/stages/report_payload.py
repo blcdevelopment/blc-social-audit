@@ -31,8 +31,8 @@ def _sentence(*parts: str) -> str:
 TECHNICAL_ISSUE_GUIDANCE: dict[str, dict[str, str]] = {
     "client_error_internal_urls": {
         "summary": _sentence(
-            "A URL found during the crawl returned a 4xx error, which usually means",
-            "the page is blocked, removed, or unavailable.",
+            "These URLs on the site returned a 4xx error (for example '404 not found'),",
+            "which usually means the page is blocked, removed, or unavailable.",
         ),
         "why_it_matters": _sentence(
             "Visitors and search engines can hit a dead end.",
@@ -47,7 +47,7 @@ TECHNICAL_ISSUE_GUIDANCE: dict[str, dict[str, str]] = {
         "location_label": "Affected URL found during crawl",
     },
     "server_error_internal_urls": {
-        "summary": "A crawled URL returned a server error instead of a usable page.",
+        "summary": "These URLs on the site returned a server error instead of a usable page.",
         "why_it_matters": _sentence(
             "Server errors can prevent users and Google from accessing",
             "important content.",
@@ -61,7 +61,7 @@ TECHNICAL_ISSUE_GUIDANCE: dict[str, dict[str, str]] = {
     },
     "client_error_external_urls": {
         "summary": _sentence(
-            "An external URL linked from the site returned a 4xx error,",
+            "These outside websites that this site links to returned a 4xx error,",
             "which usually means the destination blocked the request, moved,",
             "or is no longer available.",
         ),
@@ -77,7 +77,7 @@ TECHNICAL_ISSUE_GUIDANCE: dict[str, dict[str, str]] = {
         "location_label": "External URL returning a 4xx response",
     },
     "server_error_external_urls": {
-        "summary": "An external URL linked from the site returned a server error.",
+        "summary": "These outside websites that this site links to returned a server error.",
         "why_it_matters": _sentence(
             "Visitors may not be able to access the third-party resource",
             "the page is pointing them toward.",
@@ -204,9 +204,25 @@ TECHNICAL_ISSUE_GUIDANCE: dict[str, dict[str, str]] = {
         ),
         "location_label": "Page missing a canonical URL",
     },
+    "unreachable_internal_urls": {
+        "summary": _sentence(
+            "These URLs on the site did not respond when checked - the request",
+            "timed out or the connection failed, so no page came back at all.",
+        ),
+        "why_it_matters": _sentence(
+            "A link that never loads is a dead end for visitors and search",
+            "engines, and can hide a hosting or configuration problem.",
+        ),
+        "recommended_fix": _sentence(
+            "Open each URL in a browser. If it loads for you, the server may be",
+            "blocking automated checks (usually safe to ignore). If it does not",
+            "load, fix or remove the link and check the hosting setup.",
+        ),
+        "location_label": "URL that did not respond",
+    },
 }
 GENERIC_TECHNICAL_ISSUE_GUIDANCE = {
-    "summary": "Screaming Frog found a technical SEO issue that should be reviewed.",
+    "summary": "The technical crawl found an issue that should be reviewed.",
     "why_it_matters": _sentence(
         "Technical issues can make pages harder for users or search engines",
         "to access, understand, or prioritize.",
@@ -217,6 +233,50 @@ GENERIC_TECHNICAL_ISSUE_GUIDANCE = {
     ),
     "location_label": "Affected URL",
 }
+
+# Friendly labels for internal pipeline statuses; the PDF/DOCX must never show
+# raw machine tokens like "skipped" or "oauth_not_configured" to a client.
+STATUS_LABELS: dict[str, str] = {
+    "complete": "Collected",
+    "partial": "Partially collected",
+    "failed": "Not available (collection failed)",
+    "skipped": "Not collected",
+    "empty": "No data returned",
+    "disabled": "Not enabled",
+    "unknown": "Unknown",
+}
+SKIP_REASON_LABELS: dict[str, str] = {
+    "disabled": "This data source is not enabled for this audit.",
+    "not_collected": "This data source was not collected for this audit.",
+    "collector_error": "The data collection step hit an unexpected error.",
+    "oauth_not_configured": "Google Search Console is not connected for this workspace.",
+    "no_google_connection": "No Google account has been connected yet.",
+    "no_matching_search_console_property": (
+        "The connected Google account does not have a verified Search Console "
+        "property for this site."
+    ),
+    "screaming_frog_binary_not_found": ("Screaming Frog is not installed on the audit worker."),
+    "screaming_frog_timeout": "The Screaming Frog crawl ran out of time.",
+    "missing_google_psi_api_key": (
+        "No Google PageSpeed API key is configured, so page speed was not measured."
+    ),
+    "no_pages_to_analyze": "No crawled pages were available to measure.",
+}
+TECHNICAL_CRAWL_TOOL_LABELS: dict[str, str] = {
+    "screaming_frog_csv": "Screaming Frog SEO Spider",
+    "screaming_frog_cli": "Screaming Frog SEO Spider",
+    "site_health_sweep": "BLC site health sweep (built-in)",
+}
+
+
+def status_label(status: Any) -> str:
+    return STATUS_LABELS.get(str(status or "unknown"), str(status or "unknown"))
+
+
+def _reason_label(reason: Any) -> str | None:
+    if not reason:
+        return None
+    return SKIP_REASON_LABELS.get(str(reason), str(reason))
 
 
 class ReportMetadata(BaseModel):
@@ -245,6 +305,10 @@ class ScoreCard(BaseModel):
     score: int = Field(ge=0, le=100)
     max_score: int = 100
     description: str
+    # Same banding the operator UI uses (lib/format.ts): >=75 strong / >=50 fair / <50 weak,
+    # so a non-technical reader gets context for the number.
+    band: Literal["strong", "fair", "weak"] = "fair"
+    band_label: str = ""
 
 
 class ReportFinding(BaseModel):
@@ -313,6 +377,7 @@ class PageSpeedSummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     status: str
+    status_label: str = "Unknown"
     reason: str | None = None
     scope: str | None = None
     pages_requested: int = 0
@@ -328,7 +393,8 @@ class ExternalSeoSummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     status: str
-    screaming_frog_status: str = "skipped"
+    technical_crawl_status: str = "skipped"
+    technical_crawl_tool: str | None = None
     gsc_status: str = "skipped"
     url_inspection_status: str = "skipped"
     technical_issue_count: int = 0
@@ -353,15 +419,23 @@ class TechnicalSeoSection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     status: str
+    status_label: str = "Not collected"
+    reason_label: str | None = None
     source: str | None = None
+    tool_label: str | None = None
     summary: JsonDict = Field(default_factory=dict)
     issues: list[TechnicalSeoIssue] = Field(default_factory=list)
+    # Honest-coverage notes from the collector (e.g. "checked first 150 of 312 URLs").
+    notes: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 
 
 class SearchPerformanceSection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     status: str
+    status_label: str = "Not collected"
+    reason_label: str | None = None
     site_url: str | None = None
     date_range: JsonDict = Field(default_factory=dict)
     summary: JsonDict = Field(default_factory=dict)
@@ -470,6 +544,10 @@ def _compose_section(
     findings = _commentary_findings(section_id, section_content)
     if not findings:
         findings = _fallback_findings(section_id, score, opportunities)
+    # The section guide tells readers to start with high/medium findings, so render
+    # them in that order (stable sort keeps the within-severity authoring order).
+    severity_rank = {"high": 0, "medium": 1, "low": 2, "info": 3}
+    findings = sorted(findings, key=lambda finding: severity_rank[finding.severity])
 
     return ReportSection(
         id=section_id,
@@ -493,8 +571,10 @@ def _score_cards(result: Any, score_breakdown: JsonDict) -> list[ScoreCard]:
     seo_score = int(scores.get("seo") or result.seo_score)
     uxui_score = int(scores.get("uxui") or result.uxui_score)
     lead_gen_score = int(result.lead_gen_score)
+    # Half-up rounding, matching the scoring engine's project-wide convention
+    # (scoring._round_score) so the printed formula never contradicts the stored score.
     calculated_lead_gen = int(
-        round((seo_score * seo_weight_value) + (uxui_score * uxui_weight_value))
+        (seo_score * seo_weight_value) + (uxui_score * uxui_weight_value) + 0.5
     )
     lead_gen_formula_result = (
         f"{calculated_lead_gen}/100, which is the audit score."
@@ -506,6 +586,8 @@ def _score_cards(result: Any, score_breakdown: JsonDict) -> list[ScoreCard]:
             id="lead_gen",
             label="Lead Generation Readiness",
             score=lead_gen_score,
+            band=_score_band(lead_gen_score),
+            band_label=_score_band_label(lead_gen_score),
             description=(
                 "This is the combined business-readiness score, not a separate crawl. "
                 f"Formula: round((SEO {seo_score} * {seo_weight}) + "
@@ -517,6 +599,8 @@ def _score_cards(result: Any, score_breakdown: JsonDict) -> list[ScoreCard]:
             id="seo",
             label="SEO",
             score=int(result.seo_score),
+            band=_score_band(int(result.seo_score)),
+            band_label=_score_band_label(int(result.seo_score)),
             description=(
                 "This score comes from checks for search visibility, metadata, crawl health, "
                 "indexability, Search Console opportunity, PageSpeed, links, and schema. "
@@ -527,6 +611,8 @@ def _score_cards(result: Any, score_breakdown: JsonDict) -> list[ScoreCard]:
             id="uxui",
             label="UX/UI",
             score=int(result.uxui_score),
+            band=_score_band(int(result.uxui_score)),
+            band_label=_score_band_label(int(result.uxui_score)),
             description=(
                 "This score comes from checks for conversion clarity, calls to action, lead "
                 "forms, contact paths, trust proof, navigation, and homepage clarity. "
@@ -534,6 +620,18 @@ def _score_cards(result: Any, score_breakdown: JsonDict) -> list[ScoreCard]:
             ).strip(),
         ),
     ]
+
+
+def _score_band(score: int) -> Literal["strong", "fair", "weak"]:
+    if score >= 75:
+        return "strong"
+    if score >= 50:
+        return "fair"
+    return "weak"
+
+
+def _score_band_label(score: int) -> str:
+    return {"strong": "Strong", "fair": "Fair", "weak": "Needs work"}[_score_band(score)]
 
 
 def _percent_weight(value: Any, fallback: str) -> str:
@@ -829,9 +927,11 @@ def _validation_summary(validation_log: JsonDict) -> ValidationSummary:
 
 def _pagespeed_summary(psi_facts: JsonDict) -> PageSpeedSummary:
     summary = _dict(psi_facts.get("summary"))
+    psi_status = str(psi_facts.get("status") or "unknown")
     return PageSpeedSummary(
-        status=str(psi_facts.get("status") or "unknown"),
-        reason=str(psi_facts.get("reason")) if psi_facts.get("reason") else None,
+        status=psi_status,
+        status_label=status_label(psi_status),
+        reason=_reason_label(psi_facts.get("reason")),
         scope=str(psi_facts.get("scope")) if psi_facts.get("scope") else None,
         pages_requested=int(psi_facts.get("pages_requested") or 0),
         pages_analyzed=int(psi_facts.get("pages_analyzed") or 0),
@@ -843,20 +943,32 @@ def _pagespeed_summary(psi_facts: JsonDict) -> PageSpeedSummary:
     )
 
 
+def _technical_crawl_facts(external_seo_facts: JsonDict) -> JsonDict:
+    """The technical crawl slot; falls back to the legacy ``screaming_frog`` key so
+    audits stored before the tool-neutral rename still render."""
+    technical = external_seo_facts.get("technical_crawl")
+    if isinstance(technical, dict) and technical:
+        return technical
+    return _dict(external_seo_facts.get("screaming_frog"))
+
+
 def _external_seo_summary(external_seo_facts: JsonDict) -> ExternalSeoSummary:
-    screaming_frog = _dict(external_seo_facts.get("screaming_frog"))
+    technical = _technical_crawl_facts(external_seo_facts)
     gsc = _dict(external_seo_facts.get("gsc"))
     url_inspection = _dict(external_seo_facts.get("url_inspection"))
-    screaming_frog_complete = screaming_frog.get("status") == "complete"
+    technical_complete = technical.get("status") == "complete"
     gsc_complete = gsc.get("status") == "complete"
     return ExternalSeoSummary(
         status=str(external_seo_facts.get("status") or "skipped"),
-        screaming_frog_status=str(screaming_frog.get("status") or "skipped"),
+        technical_crawl_status=str(technical.get("status") or "skipped"),
+        technical_crawl_tool=(
+            TECHNICAL_CRAWL_TOOL_LABELS.get(str(technical.get("source")))
+            if technical.get("source")
+            else None
+        ),
         gsc_status=str(gsc.get("status") or "skipped"),
         url_inspection_status=str(url_inspection.get("status") or "skipped"),
-        technical_issue_count=(
-            len(_list(screaming_frog.get("issues"))) if screaming_frog_complete else 0
-        ),
+        technical_issue_count=(len(_list(technical.get("issues"))) if technical_complete else 0),
         search_opportunity_count=(
             len(_list(gsc.get("high_impression_low_ctr_pages")))
             + len(_list(gsc.get("ranking_opportunities")))
@@ -868,14 +980,21 @@ def _external_seo_summary(external_seo_facts: JsonDict) -> ExternalSeoSummary:
 
 
 def _technical_seo_section(external_seo_facts: JsonDict) -> TechnicalSeoSection:
-    screaming_frog = _dict(external_seo_facts.get("screaming_frog"))
-    source_complete = screaming_frog.get("status") == "complete"
-    raw_issues = _list(screaming_frog.get("issues")) if source_complete else []
+    technical = _technical_crawl_facts(external_seo_facts)
+    status = str(technical.get("status") or "skipped")
+    source_complete = status == "complete"
+    raw_issues = _list(technical.get("issues")) if source_complete else []
+    source = str(technical.get("source")) if technical.get("source") else None
     return TechnicalSeoSection(
-        status=str(screaming_frog.get("status") or "skipped"),
-        source=str(screaming_frog.get("source")) if screaming_frog.get("source") else None,
-        summary=_dict(screaming_frog.get("summary")) if source_complete else {},
+        status=status,
+        status_label=status_label(status),
+        reason_label=_reason_label(technical.get("reason") or technical.get("error")),
+        source=source,
+        tool_label=TECHNICAL_CRAWL_TOOL_LABELS.get(source or "", source),
+        summary=_dict(technical.get("summary")) if source_complete else {},
         issues=[_technical_issue(_dict(item)) for item in raw_issues],
+        notes=[str(note) for note in _list(technical.get("notes")) if note],
+        warnings=[str(warning) for warning in _list(technical.get("warnings")) if warning],
     )
 
 
@@ -899,7 +1018,10 @@ def _search_performance_section(external_seo_facts: JsonDict) -> SearchPerforman
     gsc = _dict(external_seo_facts.get("gsc"))
     url_inspection = _dict(external_seo_facts.get("url_inspection"))
     gsc_complete = gsc.get("status") == "complete"
-    url_inspection_complete = url_inspection.get("status") == "complete"
+    # "partial" means some per-URL inspections errored; the rows that DID succeed
+    # are real Google answers and are still worth showing (scoring stays
+    # complete-only, so partial data never affects the score).
+    url_inspection_complete = url_inspection.get("status") in {"complete", "partial"}
     top_queries = [_dict(row) for row in _list(gsc.get("top_queries"))] if gsc_complete else []
     top_pages = [_dict(row) for row in _list(gsc.get("top_pages"))] if gsc_complete else []
     low_ctr_pages = (
@@ -914,12 +1036,15 @@ def _search_performance_section(external_seo_facts: JsonDict) -> SearchPerforman
         [_dict(row) for row in _list(gsc.get("declining_pages"))] if gsc_complete else []
     )
     inspection_items = (
-        [_dict(item) for item in _list(url_inspection.get("items"))]
+        [_inspection_item(_dict(item)) for item in _list(url_inspection.get("items"))]
         if url_inspection_complete
         else []
     )
+    gsc_status = str(gsc.get("status") or "skipped")
     return SearchPerformanceSection(
-        status=str(gsc.get("status") or "skipped"),
+        status=gsc_status,
+        status_label=status_label(gsc_status),
+        reason_label=_reason_label(gsc.get("reason") or gsc.get("error")),
         site_url=str(gsc.get("site_url")) if gsc.get("site_url") else None,
         date_range=_dict(gsc.get("date_range")) if gsc_complete else {},
         summary=_dict(gsc.get("summary")) if gsc_complete else {},
@@ -933,6 +1058,18 @@ def _search_performance_section(external_seo_facts: JsonDict) -> SearchPerforman
         else {},
         url_inspection_items=inspection_items,
     )
+
+
+def _inspection_item(item: JsonDict) -> JsonDict:
+    """Add plain-language fields next to Google's raw URL Inspection values."""
+    on_google = item.get("on_google")
+    if on_google is True:
+        on_google_label = "Yes"
+    elif on_google is False:
+        on_google_label = "No"
+    else:
+        on_google_label = "Unknown"
+    return {**item, "on_google_label": on_google_label}
 
 
 def _crawl_summary(crawled_pages: JsonDict) -> CrawlSummary:

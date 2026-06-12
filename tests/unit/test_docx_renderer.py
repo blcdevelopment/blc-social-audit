@@ -24,7 +24,7 @@ def test_render_report_docx_writes_valid_package(tmp_path) -> None:
     assert "Executive Summary" in document
     assert "How to use it" in document
     assert "Technical SEO" in document
-    assert "CTR means click-through rate" in document
+    assert "CTR (click-through rate)" in document
     assert "Google Search Performance" in document
     assert "Lead Generation Roadmap" in document
 

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import secrets
+import time
 from typing import Annotated, Any
 from urllib.parse import urlencode
 
@@ -11,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from apps.api.auth import require_user
 from apps.api.deps import get_db_session
-from apps.shared.config import get_settings
+from apps.shared.config import Settings, get_settings
 from apps.worker.stages.google_search_console import (
     build_google_oauth_url,
     ensure_google_access_token,
@@ -25,6 +28,48 @@ from apps.worker.stages.google_search_console import (
 
 DbSession = Annotated[Session, Depends(get_db_session)]
 router = APIRouter(prefix="/google/search-console", tags=["google-search-console"])
+
+# CSRF protection for the OAuth flow: `state` is an HMAC-signed, time-limited
+# token issued only to an authenticated operator, and the (necessarily
+# unauthenticated) callback refuses to store a Google connection without a valid
+# one. Without this, anyone who could reach the callback could plant their own
+# Google account as the workspace's Search Console connection.
+_STATE_TTL_SECONDS = 600
+_EPHEMERAL_STATE_SECRET = secrets.token_bytes(32)
+
+
+def _state_secret(settings: Settings) -> bytes:
+    configured = getattr(settings, "google_oauth_state_secret", None)
+    if configured and configured.get_secret_value():
+        return hashlib.sha256(configured.get_secret_value().encode("utf-8")).digest()
+    return _EPHEMERAL_STATE_SECRET
+
+
+def _issue_oauth_state(settings: Settings) -> str:
+    payload = f"{int(time.time())}.{secrets.token_urlsafe(16)}"
+    signature = hmac.new(
+        _state_secret(settings), payload.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+    return f"{payload}.{signature}"
+
+
+def _oauth_state_valid(settings: Settings, state: str | None) -> bool:
+    parts = (state or "").split(".")
+    if len(parts) != 3:
+        return False
+    issued_at_raw, nonce, signature = parts
+    expected = hmac.new(
+        _state_secret(settings),
+        f"{issued_at_raw}.{nonce}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(signature, expected):
+        return False
+    try:
+        issued_at = int(issued_at_raw)
+    except ValueError:
+        return False
+    return 0 <= time.time() - issued_at <= _STATE_TTL_SECONDS
 
 
 class SearchConsoleProperty(BaseModel):
@@ -56,7 +101,7 @@ def connect_search_console() -> RedirectResponse:
             detail="Google OAuth is not configured.",
         )
     return RedirectResponse(
-        build_google_oauth_url(settings, state=secrets.token_urlsafe(24)),
+        build_google_oauth_url(settings, state=_issue_oauth_state(settings)),
         status_code=status.HTTP_307_TEMPORARY_REDIRECT,
     )
 
@@ -81,7 +126,7 @@ def get_search_console_connect_url() -> SearchConsoleConnectUrlResponse:
         )
     return SearchConsoleConnectUrlResponse(
         status="ready",
-        connect_url=build_google_oauth_url(settings, state=secrets.token_urlsafe(24)),
+        connect_url=build_google_oauth_url(settings, state=_issue_oauth_state(settings)),
     )
 
 
@@ -90,6 +135,7 @@ def search_console_callback(
     db: DbSession,
     code: str | None = Query(default=None),
     error: str | None = Query(default=None),
+    state: str | None = Query(default=None),
 ) -> RedirectResponse:
     settings = get_settings()
     if error:
@@ -105,6 +151,12 @@ def search_console_callback(
             settings.google_oauth_success_redirect_url,
             "error",
             "oauth_not_configured",
+        )
+    if not _oauth_state_valid(settings, state):
+        return _redirect_with_status(
+            settings.google_oauth_success_redirect_url,
+            "error",
+            "invalid_state_restart_connect",
         )
 
     try:

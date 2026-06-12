@@ -10,8 +10,11 @@ from typing import Any
 from urllib.parse import urlparse
 
 from apps.shared.config import Settings
+from apps.worker.stages.technical_crawl_common import empty_summary, issues_from_summary
 
 JsonDict = dict[str, Any]
+
+SCREAMING_FROG_SOURCE = "screaming_frog_csv"
 
 
 def collect_screaming_frog_facts(url: str, audit_id: str, settings: Settings) -> JsonDict:
@@ -27,7 +30,10 @@ def collect_screaming_frog_facts(url: str, audit_id: str, settings: Settings) ->
         return _failed("invalid_crawl_url", started_at)
 
     output_dir = (settings.screaming_frog_output_dir / audit_id).resolve()
-    output_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return _failed(str(exc), started_at, output_dir=output_dir)
     command = [
         binary,
         "--crawl",
@@ -48,7 +54,7 @@ def collect_screaming_frog_facts(url: str, audit_id: str, settings: Settings) ->
             check=False,
             capture_output=True,
             text=True,
-            timeout=settings.screaming_frog_timeout_seconds,
+            timeout=_effective_timeout_seconds(settings),
         )
     except subprocess.TimeoutExpired:
         return _failed("screaming_frog_timeout", started_at, output_dir=output_dir)
@@ -57,7 +63,10 @@ def collect_screaming_frog_facts(url: str, audit_id: str, settings: Settings) ->
 
     command_output = "\n".join(part for part in (completed.stderr, completed.stdout) if part)
     fatal_error = _fatal_error_from_output(command_output)
-    parsed = parse_screaming_frog_exports(output_dir, site_url=url)
+    try:
+        parsed = parse_screaming_frog_exports(output_dir, site_url=url)
+    except Exception as exc:
+        return _failed(_trim_error(str(exc)), started_at, output_dir=output_dir)
     parsed["started_at"] = started_at
     parsed["completed_at"] = _utc_now()
     parsed["output_dir"] = str(output_dir)
@@ -78,7 +87,7 @@ def parse_screaming_frog_exports(export_dir: Path, site_url: str | None = None) 
     if not csv_files:
         return {
             "status": "empty",
-            "source": "screaming_frog_csv",
+            "source": SCREAMING_FROG_SOURCE,
             "summary": {},
             "issues": [],
             "files": [],
@@ -124,10 +133,10 @@ def parse_screaming_frog_exports(export_dir: Path, site_url: str | None = None) 
         issue_examples,
         site_url=site_url,
     )
-    issues = _issues_from_summary(summary, issue_examples)
+    issues = issues_from_summary(summary, issue_examples, source="screaming_frog")
     return {
         "status": "complete",
-        "source": "screaming_frog_csv",
+        "source": SCREAMING_FROG_SOURCE,
         "summary": summary,
         "issues": issues,
         "files": files,
@@ -143,7 +152,7 @@ def _summarize_pages(
 ) -> JsonDict:
     title_counter: Counter[str] = Counter()
     meta_counter: Counter[str] = Counter()
-    summary = _empty_summary()
+    summary = empty_summary()
     summary["urls_crawled"] = len(pages)
     summary["images_missing_alt"] = images_missing_alt
 
@@ -239,65 +248,6 @@ def _summarize_pages(
     return summary
 
 
-def _issues_from_summary(summary: JsonDict, examples: dict[str, list[str]]) -> list[JsonDict]:
-    labels = {
-        "client_error_internal_urls": "Crawled URLs returning 4xx errors",
-        "server_error_internal_urls": "Crawled URLs returning 5xx errors",
-        "client_error_external_urls": "External URLs returning 4xx errors",
-        "server_error_external_urls": "External URLs returning 5xx errors",
-        "non_indexable_internal_urls": "Internal URLs marked non-indexable",
-        "missing_titles": "Pages missing title tags",
-        "duplicate_titles": "Pages with duplicate title tags",
-        "missing_meta_descriptions": "Pages missing meta descriptions",
-        "duplicate_meta_descriptions": "Pages with duplicate meta descriptions",
-        "missing_h1": "Pages missing H1 headings",
-        "images_missing_alt": "Images missing alt text",
-        "missing_canonicals": "Pages missing canonical URLs",
-    }
-    issues = []
-    for key, label in labels.items():
-        count = int(summary.get(key) or 0)
-        if count <= 0:
-            continue
-        severity = (
-            "high"
-            if key in {"client_error_internal_urls", "server_error_internal_urls"}
-            else "medium"
-            if key in {"client_error_external_urls", "server_error_external_urls"}
-            else "medium"
-        )
-        issues.append(
-            {
-                "id": key,
-                "source": "screaming_frog",
-                "severity": severity,
-                "title": label,
-                "count": count,
-                "examples": examples.get(key, [])[:10],
-            }
-        )
-    return sorted(issues, key=lambda issue: (-int(issue["count"]), issue["id"]))
-
-
-def _empty_summary() -> JsonDict:
-    return {
-        "urls_crawled": 0,
-        "html_urls_crawled": 0,
-        "client_error_internal_urls": 0,
-        "server_error_internal_urls": 0,
-        "client_error_external_urls": 0,
-        "server_error_external_urls": 0,
-        "non_indexable_internal_urls": 0,
-        "missing_titles": 0,
-        "duplicate_titles": 0,
-        "missing_meta_descriptions": 0,
-        "duplicate_meta_descriptions": 0,
-        "missing_h1": 0,
-        "images_missing_alt": 0,
-        "missing_canonicals": 0,
-    }
-
-
 def _read_csv(path: Path) -> list[dict[str, str]]:
     for encoding in ("utf-8-sig", "utf-8", "latin-1"):
         try:
@@ -349,6 +299,20 @@ def _int(value: Any) -> int | None:
         return int(float(str(value).strip()))
     except (TypeError, ValueError):
         return None
+
+
+def _effective_timeout_seconds(settings: Settings) -> int:
+    """Clamp the subprocess timeout under the Celery soft time limit.
+
+    The audit task must outlive the Screaming Frog subprocess so this stage can
+    record a 'failed' payload and the rest of the audit can continue; two minutes
+    of the soft-limit budget are reserved for the remaining stages.
+    """
+    configured = int(settings.screaming_frog_timeout_seconds)
+    soft_limit = getattr(settings, "celery_task_soft_time_limit_seconds", None)
+    if isinstance(soft_limit, int | float):
+        return max(30, min(configured, int(soft_limit) - 120))
+    return configured
 
 
 def _resolve_binary(configured: Path | None) -> str | None:
