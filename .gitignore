@@ -2,6 +2,7 @@
 # Folder is literally named "seo_audits " (trailing space); glob handles it.
 seo_audits*/
 *.pptx
+storage/tool_exports/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

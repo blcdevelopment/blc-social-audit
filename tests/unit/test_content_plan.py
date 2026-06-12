@@ -166,6 +166,42 @@ def test_no_internal_rule_ids_leak_into_prose() -> None:
     assert "seo.meta_description" not in finding.explanation
 
 
+def test_external_seo_findings_include_real_locations() -> None:
+    rule = _rule(
+        "seo.screaming_frog.no_broken_internal_urls",
+        "fail",
+        weight=8,
+        impact="high",
+        tier="quick_win",
+        label="Internal broken URLs were found",
+        fact_path="external_seo.screaming_frog.summary.client_error_internal_urls",
+        value=2,
+    )
+    plan = build_content_plan(
+        audit_context={"url": "https://x.test", "niche": None, "target_audience": None},
+        seo_facts={},
+        uxui_facts={},
+        psi_facts={},
+        external_seo_facts={
+            "screaming_frog": {
+                "status": "complete",
+                "issues": [
+                    {
+                        "id": "client_error_internal_urls",
+                        "examples": ["https://example.com/broken"],
+                    }
+                ],
+            }
+        },
+        score_breakdown=_breakdown([rule]),
+        settings=_settings(),
+    )
+
+    explanation = plan.seo.findings[0].explanation
+    assert "https://example.com/broken" in explanation
+    assert "external_seo" not in explanation
+
+
 def test_plan_is_grounding_safe_on_real_fixture() -> None:
     settings = _settings()
     html = (FIXTURE_DIR / "weak_site.html").read_text(encoding="utf-8")

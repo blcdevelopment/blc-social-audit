@@ -18,6 +18,13 @@ class AuditCreateResponse(BaseModel):
     status_url: str
 
 
+class AuditEnrichmentResponse(BaseModel):
+    job_id: UUID
+    status: str
+    current_stage: str | None
+    message: str
+
+
 class AuditStatusResponse(BaseModel):
     job_id: UUID
     url: str

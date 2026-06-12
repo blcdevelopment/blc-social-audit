@@ -1,4 +1,4 @@
-version: "phase1-seo-v2"
+version: "phase1-seo-v3"
 category: seo
 max_score: 100
 normalization: rescale_to_max
@@ -165,3 +165,143 @@ rules:
     tier: long_term
     finding_label: Desktop page performance needs improvement
     remediation: Improve desktop load speed by optimizing images, scripts, and server response time.
+
+  - id: seo.screaming_frog.no_broken_internal_urls
+    description: Screaming Frog found no internal URLs returning 4xx errors.
+    weight: 8
+    fact_path: external_seo.screaming_frog.summary.client_error_internal_urls
+    evaluator: threshold
+    skip_if_missing: true
+    params:
+      max: 0
+      partial_max: 5
+    impact: high
+    tier: quick_win
+    finding_label: Internal broken URLs were found
+    remediation: Fix or redirect internal URLs returning 4xx errors.
+
+  - id: seo.screaming_frog.indexable_urls
+    description: Screaming Frog found few or no unexpected non-indexable internal URLs.
+    weight: 6
+    fact_path: external_seo.screaming_frog.summary.non_indexable_internal_urls
+    evaluator: threshold
+    skip_if_missing: true
+    params:
+      max: 0
+      partial_max: 5
+    impact: high
+    tier: quick_win
+    finding_label: Internal URLs are marked non-indexable
+    remediation: Review non-indexable URLs and remove blocking directives from pages that should rank.
+
+  - id: seo.screaming_frog.missing_titles
+    description: Screaming Frog found no pages missing title tags.
+    weight: 6
+    fact_path: external_seo.screaming_frog.summary.missing_titles
+    evaluator: threshold
+    skip_if_missing: true
+    params:
+      max: 0
+      partial_max: 5
+    impact: high
+    tier: quick_win
+    finding_label: Pages are missing title tags
+    remediation: Add unique, descriptive title tags to every indexable page.
+
+  - id: seo.screaming_frog.duplicate_titles
+    description: Screaming Frog found few or no duplicate title tags.
+    weight: 5
+    fact_path: external_seo.screaming_frog.summary.duplicate_titles
+    evaluator: threshold
+    skip_if_missing: true
+    params:
+      max: 0
+      partial_max: 5
+    impact: medium
+    tier: quick_win
+    finding_label: Duplicate title tags were found
+    remediation: Rewrite duplicate titles so every important page has a distinct search result angle.
+
+  - id: seo.screaming_frog.missing_meta_descriptions
+    description: Screaming Frog found no pages missing meta descriptions.
+    weight: 6
+    fact_path: external_seo.screaming_frog.summary.missing_meta_descriptions
+    evaluator: threshold
+    skip_if_missing: true
+    params:
+      max: 0
+      partial_max: 10
+    impact: medium
+    tier: quick_win
+    finding_label: Pages are missing meta descriptions
+    remediation: Add unique, click-focused meta descriptions to key pages.
+
+  - id: seo.screaming_frog.missing_h1
+    description: Screaming Frog found no pages missing H1 headings.
+    weight: 5
+    fact_path: external_seo.screaming_frog.summary.missing_h1
+    evaluator: threshold
+    skip_if_missing: true
+    params:
+      max: 0
+      partial_max: 5
+    impact: medium
+    tier: quick_win
+    finding_label: Pages are missing H1 headings
+    remediation: Add one clear, descriptive H1 heading to each important page.
+
+  - id: seo.screaming_frog.missing_image_alt
+    description: Screaming Frog found few or no images missing alt text.
+    weight: 5
+    fact_path: external_seo.screaming_frog.summary.images_missing_alt
+    evaluator: threshold
+    skip_if_missing: true
+    params:
+      max: 0
+      partial_max: 20
+    impact: medium
+    tier: quick_win
+    finding_label: Images are missing alt text
+    remediation: Add descriptive alt text to meaningful images.
+
+  - id: seo.gsc.low_ctr_pages
+    description: Search Console shows few high-impression pages with weak CTR.
+    weight: 6
+    fact_path: external_seo.gsc.summary.high_impression_low_ctr_pages
+    evaluator: threshold
+    skip_if_missing: true
+    params:
+      max: 0
+      partial_max: 5
+    impact: high
+    tier: mid_term
+    finding_label: High-impression pages have low click-through rates
+    remediation: Rewrite titles and meta descriptions for high-impression pages with weak CTR.
+
+  - id: seo.gsc.ranking_opportunities
+    description: Search Console shows few keywords sitting just below stronger ranking positions.
+    weight: 5
+    fact_path: external_seo.gsc.summary.ranking_opportunities
+    evaluator: threshold
+    skip_if_missing: true
+    params:
+      max: 0
+      partial_max: 10
+    impact: medium
+    tier: mid_term
+    finding_label: Search Console shows near-page-one keyword opportunities
+    remediation: Improve pages ranking in positions 4-20 with stronger content, internal links, and title targeting.
+
+  - id: seo.gsc.url_inspection_indexing
+    description: URL Inspection found no priority URLs missing from Google.
+    weight: 6
+    fact_path: external_seo.url_inspection.summary.not_on_google
+    evaluator: threshold
+    skip_if_missing: true
+    params:
+      max: 0
+      partial_max: 3
+    impact: high
+    tier: quick_win
+    finding_label: Priority URLs may not be indexed by Google
+    remediation: Review URL Inspection results and fix crawl, indexing, canonical, or quality issues.

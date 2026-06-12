@@ -53,6 +53,7 @@ def generate_commentary(
     seo_facts: JsonDict,
     uxui_facts: JsonDict,
     psi_facts: JsonDict,
+    external_seo_facts: JsonDict | None = None,
     score_breakdown: JsonDict,
     settings: Settings,
 ) -> JsonDict:
@@ -65,6 +66,7 @@ def generate_commentary(
         seo_facts=seo_facts,
         uxui_facts=uxui_facts,
         psi_facts=psi_facts,
+        external_seo_facts=external_seo_facts,
         score_breakdown=score_breakdown,
         settings=settings,
     )

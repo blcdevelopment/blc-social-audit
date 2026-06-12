@@ -39,6 +39,7 @@ class Settings(BaseSettings):
 
     local_report_storage_dir: Path = Path("./storage/reports")
     local_screenshot_storage_dir: Path = Path("./storage/screenshots")
+    local_tool_export_storage_dir: Path = Path("./storage/tool_exports")
 
     openai_api_key: SecretStr | None = None
     openai_model: str = "gpt-4o"
@@ -56,6 +57,20 @@ class Settings(BaseSettings):
     psi_timeout_seconds: int = Field(default=60, ge=1)
     psi_max_retries: int = Field(default=3, ge=1)
     psi_cache_ttl_seconds: int = Field(default=86400, ge=0)
+
+    screaming_frog_enabled: bool = False
+    screaming_frog_binary: Path | None = None
+    screaming_frog_output_dir: Path = Path("./storage/tool_exports/screaming_frog")
+    screaming_frog_timeout_seconds: int = Field(default=1800, ge=30)
+    screaming_frog_export_tabs: str = "Internal:All,Response Codes:Client Error (4xx)"
+
+    google_oauth_client_id: str = ""
+    google_oauth_client_secret: SecretStr | None = None
+    google_oauth_redirect_uri: str = "http://localhost:8000/google/search-console/callback"
+    google_oauth_success_redirect_url: str = "http://localhost:3000/audits"
+    gsc_default_date_range_days: int = Field(default=90, ge=7, le=540)
+    gsc_row_limit: int = Field(default=25000, ge=1, le=25000)
+    url_inspection_max_urls: int = Field(default=20, ge=0, le=200)
 
     crawler_user_agent: str = "BLC-Audit-Bot/1.0 (+https://builderleadconverter.com/audit-bot)"
     crawler_max_pages: int = Field(default=10, ge=1, le=50)
@@ -82,7 +97,7 @@ class Settings(BaseSettings):
             return [item.strip() for item in value.split(",") if item.strip()]
         return value
 
-    @field_validator("crawler_chromium_executable_path", mode="before")
+    @field_validator("crawler_chromium_executable_path", "screaming_frog_binary", mode="before")
     @classmethod
     def parse_optional_path(cls, value: str | Path | None) -> str | Path | None:
         if value == "":

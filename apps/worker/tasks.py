@@ -14,6 +14,8 @@ from apps.shared.models import AuditJob, AuditResult
 from apps.worker.celery_app import celery_app
 from apps.worker.stages.commentary import generate_commentary
 from apps.worker.stages.crawler import CrawlResult, crawl_site_sync
+from apps.worker.stages.docx_renderer import DocxRenderResult, render_audit_docx
+from apps.worker.stages.external_seo import collect_external_seo_facts
 from apps.worker.stages.extractor_seo import extract_seo_facts
 from apps.worker.stages.extractor_uxui import extract_uxui_facts
 from apps.worker.stages.grounding_validator import validate_commentary_grounding
@@ -59,6 +61,7 @@ def _upsert_audit_result(
     psi_facts: JsonDict,
     seo_facts: JsonDict,
     uxui_facts: JsonDict,
+    external_seo_facts: JsonDict,
     score_breakdown: JsonDict,
     commentary: JsonDict,
     validation_log: JsonDict,
@@ -74,6 +77,7 @@ def _upsert_audit_result(
             seo_facts={},
             uxui_facts={},
             psi_facts={},
+            external_seo_facts={},
             score_breakdown={},
             commentary={},
             validation_log={},
@@ -91,6 +95,7 @@ def _upsert_audit_result(
     result.seo_facts = seo_facts
     result.uxui_facts = uxui_facts
     result.psi_facts = psi_facts
+    result.external_seo_facts = external_seo_facts
     result.score_breakdown = score_breakdown
     result.commentary = commentary
     result.validation_log = validation_log
@@ -110,11 +115,39 @@ def _upsert_audit_result(
     return result
 
 
-def _store_pdf_result(db: Session, result: AuditResult, pdf_result: PdfRenderResult) -> None:
-    result.report_metadata = pdf_result.report_metadata
+def _store_export_results(
+    db: Session,
+    result: AuditResult,
+    pdf_result: PdfRenderResult,
+    docx_result: DocxRenderResult,
+) -> None:
+    result.report_metadata = {
+        **pdf_result.report_metadata,
+        "exports": {
+            "pdf": pdf_result.report_metadata,
+            "docx": docx_result.report_metadata,
+        },
+        "docx_path": docx_result.docx_path,
+        "docx_size_bytes": docx_result.size_bytes,
+    }
     result.pdf_path = pdf_result.pdf_path
     db.commit()
     db.refresh(result)
+
+
+def _page_urls_from_crawled_pages(crawled_pages: JsonDict, fallback_url: str) -> list[str]:
+    pages = crawled_pages.get("pages")
+    if not isinstance(pages, list):
+        return [fallback_url]
+
+    urls = []
+    for page in pages:
+        if not isinstance(page, dict):
+            continue
+        url = page.get("final_url") or page.get("url")
+        if url:
+            urls.append(str(url))
+    return urls or [fallback_url]
 
 
 def run_collection_audit(
@@ -148,8 +181,23 @@ def run_collection_audit(
             seo_facts = extract_seo_facts(crawl_result.pages)
             uxui_facts = extract_uxui_facts(crawl_result.pages)
 
+            _mark_job(db, job, AuditStatus.EXTRACTING, "Collecting external SEO insights", 76)
+            external_seo_facts = collect_external_seo_facts(
+                url=job.url,
+                audit_id=str(job.id),
+                page_urls=_psi_page_urls(crawl_result, job.url),
+                settings=settings,
+                db=db,
+            )
+
             _mark_job(db, job, AuditStatus.SCORING, "Scoring extracted facts", 80)
-            score_breakdown = score_audit(seo_facts, uxui_facts, psi_facts, settings)
+            score_breakdown = score_audit(
+                seo_facts,
+                uxui_facts,
+                psi_facts,
+                settings,
+                external_seo_facts=external_seo_facts,
+            )
 
             _mark_job(db, job, AuditStatus.COMMENTING, "Generating grounded commentary", 88)
             commentary = generate_commentary(
@@ -161,6 +209,7 @@ def run_collection_audit(
                 seo_facts=seo_facts,
                 uxui_facts=uxui_facts,
                 psi_facts=psi_facts,
+                external_seo_facts=external_seo_facts,
                 score_breakdown=score_breakdown,
                 settings=settings,
             )
@@ -172,6 +221,7 @@ def run_collection_audit(
                     "seo_facts": seo_facts,
                     "uxui_facts": uxui_facts,
                     "psi_facts": psi_facts,
+                    "external_seo_facts": external_seo_facts,
                     # Only the headline scores are citable numbers. The full score
                     # breakdown's rule weights, params, and ratios are internal scoring
                     # mechanics and must not count as "grounding" for LLM numeric claims.
@@ -186,14 +236,16 @@ def run_collection_audit(
                 psi_facts,
                 seo_facts,
                 uxui_facts,
+                external_seo_facts,
                 score_breakdown,
                 commentary,
                 validation_log,
             )
 
-            _mark_job(db, job, AuditStatus.RENDERING, "Rendering branded PDF report", 98)
+            _mark_job(db, job, AuditStatus.RENDERING, "Rendering report exports", 98)
             pdf_result = render_audit_pdf(job, result, settings)
-            _store_pdf_result(db, result, pdf_result)
+            docx_result = render_audit_docx(job, result, settings)
+            _store_export_results(db, result, pdf_result, docx_result)
 
             _mark_job(db, job, AuditStatus.COMPLETE, "Audit report complete", 100)
         except Exception as exc:
@@ -214,3 +266,109 @@ def run_collection_audit(
 @celery_app.task(name="apps.worker.tasks.run_audit")
 def run_audit(job_id: str) -> None:
     run_collection_audit(job_id)
+
+
+def rerun_external_enrichment_for_audit(job_id: str) -> None:
+    settings = get_settings()
+    parsed_job_id = UUID(job_id)
+
+    with SessionLocal() as db:
+        job = db.get(AuditJob, parsed_job_id)
+        if job is None or job.result is None:
+            return
+
+        try:
+            result = job.result
+            _mark_job(db, job, AuditStatus.EXTRACTING, "Collecting external SEO insights", 76)
+            crawled_pages = result.crawled_pages or {}
+            page_urls = _page_urls_from_crawled_pages(crawled_pages, job.url)
+            external_seo_facts = collect_external_seo_facts(
+                url=job.url,
+                audit_id=str(job.id),
+                page_urls=page_urls,
+                settings=settings,
+                db=db,
+            )
+
+            _mark_job(db, job, AuditStatus.SCORING, "Rescoring enriched audit facts", 82)
+            seo_facts = result.seo_facts or {}
+            uxui_facts = result.uxui_facts or {}
+            psi_facts = result.psi_facts or {}
+            score_breakdown = score_audit(
+                seo_facts,
+                uxui_facts,
+                psi_facts,
+                settings,
+                external_seo_facts=external_seo_facts,
+            )
+
+            _mark_job(db, job, AuditStatus.COMMENTING, "Refreshing grounded commentary", 88)
+            commentary = generate_commentary(
+                audit_context={
+                    "url": job.url,
+                    "niche": job.niche,
+                    "target_audience": job.target_audience,
+                },
+                seo_facts=seo_facts,
+                uxui_facts=uxui_facts,
+                psi_facts=psi_facts,
+                external_seo_facts=external_seo_facts,
+                score_breakdown=score_breakdown,
+                settings=settings,
+            )
+
+            _mark_job(db, job, AuditStatus.VALIDATING, "Validating refreshed commentary", 95)
+            commentary, validation_log = validate_commentary_grounding(
+                commentary,
+                fact_sources={
+                    "seo_facts": seo_facts,
+                    "uxui_facts": uxui_facts,
+                    "psi_facts": psi_facts,
+                    "external_seo_facts": external_seo_facts,
+                    "scores": score_breakdown.get("scores", {}),
+                },
+            )
+
+            result.external_seo_facts = external_seo_facts
+            result.score_breakdown = score_breakdown
+            result.commentary = commentary
+            result.validation_log = validation_log
+            result.seo_score = score_breakdown["scores"]["seo"]
+            result.uxui_score = score_breakdown["scores"]["uxui"]
+            result.lead_gen_score = score_breakdown["scores"]["lead_gen"]
+            result.rubric_version = score_breakdown["rubric_version"]
+            result.llm_model = str(commentary.get("model") or "not_configured")
+            result.report_metadata = {
+                **(result.report_metadata or {}),
+                "status": "pending_export_render",
+                "collection_completed_at": datetime.now(UTC).isoformat(),
+                "external_enrichment_completed": True,
+                "commentary_provider": commentary.get("provider"),
+            }
+            db.commit()
+            db.refresh(result)
+
+            _mark_job(db, job, AuditStatus.RENDERING, "Rendering enriched report exports", 98)
+            pdf_result = render_audit_pdf(job, result, settings)
+            docx_result = render_audit_docx(job, result, settings)
+            _store_export_results(db, result, pdf_result, docx_result)
+
+            _mark_job(db, job, AuditStatus.COMPLETE, "Audit report complete", 100)
+        except Exception as exc:
+            db.rollback()
+            failed_job = db.get(AuditJob, parsed_job_id)
+            if failed_job is not None:
+                _mark_job(
+                    db,
+                    failed_job,
+                    AuditStatus.FAILED,
+                    "External SEO enrichment failed",
+                    100,
+                    str(exc),
+                )
+            raise
+
+
+@celery_app.task(name="apps.worker.tasks.rerun_external_enrichment")
+def rerun_external_enrichment(job_id: str) -> None:
+    rerun_external_enrichment_for_audit(job_id)

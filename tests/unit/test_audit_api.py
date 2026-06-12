@@ -1,7 +1,10 @@
 from collections.abc import Generator
+from io import BytesIO
 from types import SimpleNamespace
+from zipfile import ZipFile
 
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -9,6 +12,7 @@ from sqlalchemy.pool import StaticPool
 from apps.api.deps import get_db_session
 from apps.api.main import app
 from apps.api.routes import audits as audit_routes
+from apps.api.routes import google as google_routes
 from apps.shared.audit_states import AuditStatus
 from apps.shared.models import AuditJob, AuditResult, Base
 
@@ -27,6 +31,29 @@ def test_swagger_ui_is_available() -> None:
     openapi_response = client.get("/openapi.json")
     assert openapi_response.status_code == 200
     assert openapi_response.json()["info"]["title"] == "BLC Website Audit Automation"
+
+
+def test_google_connect_url_is_returned_after_app_auth(monkeypatch) -> None:
+    monkeypatch.setattr(
+        google_routes,
+        "get_settings",
+        lambda: SimpleNamespace(
+            google_oauth_client_id="client-123",
+            google_oauth_client_secret=SecretStr("secret"),
+            google_oauth_redirect_uri="http://localhost:8000/google/search-console/callback",
+        ),
+    )
+    client = TestClient(app)
+
+    response = client.get("/google/search-console/connect-url")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ready"
+    assert payload["reason"] is None
+    assert payload["connect_url"].startswith("https://accounts.google.com/o/oauth2/v2/auth?")
+    assert "client_id=client-123" in payload["connect_url"]
+    assert "webmasters.readonly" in payload["connect_url"]
 
 
 def test_create_and_read_audit_lifecycle(monkeypatch) -> None:
@@ -260,3 +287,75 @@ def test_report_endpoint_streams_generated_pdf(tmp_path) -> None:
         assert report_response.content.startswith(b"%PDF-1.4")
     finally:
         app.dependency_overrides.clear()
+
+
+def test_docx_endpoint_generates_editable_report(tmp_path, monkeypatch) -> None:
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+        future=True,
+    )
+    Base.metadata.create_all(engine)
+    TestingSession = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+    def override_db() -> Generator[Session, None, None]:
+        with TestingSession() as db:
+            yield db
+
+    with TestingSession() as db:
+        job = AuditJob(
+            url="https://example.com/",
+            status=AuditStatus.COMPLETE.value,
+            current_stage="Audit report complete",
+            progress_pct=100,
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        db.add(
+            AuditResult(
+                job_id=job.id,
+                seo_score=80,
+                uxui_score=70,
+                lead_gen_score=75,
+                crawled_pages={
+                    "status": "complete",
+                    "final_url": "https://example.com/",
+                    "summary": {"successful_pages": 1, "failed_pages": 0, "skipped_pages": 0},
+                },
+                seo_facts={},
+                uxui_facts={},
+                psi_facts={"status": "skipped", "summary": {}},
+                score_breakdown={"scores": {"seo": 80, "uxui": 70, "lead_gen": 75}},
+                commentary={"content": {"executive_summary": "Editable report ready."}},
+                validation_log={"status": "complete"},
+                report_metadata={},
+                pdf_path=None,
+                rubric_version="phase1-test",
+                llm_model="deterministic",
+            )
+        )
+        db.commit()
+        job_id = job.id
+
+    monkeypatch.setattr(
+        audit_routes,
+        "get_settings",
+        lambda: SimpleNamespace(local_report_storage_dir=tmp_path),
+    )
+    app.dependency_overrides[get_db_session] = override_db
+    try:
+        client = TestClient(app)
+        response = client.get(f"/audits/{job_id}/docx")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    with ZipFile(BytesIO(response.content)) as archive:
+        document = archive.read("word/document.xml").decode("utf-8")
+    assert "Website Audit Report" in document
+    assert "Editable report ready." in document

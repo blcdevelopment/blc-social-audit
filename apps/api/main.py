@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
-from apps.api.routes import audits, health
+from apps.api.routes import audits, google, health
 from apps.shared.config import get_settings
 
 settings = get_settings()
@@ -36,6 +36,7 @@ app.add_middleware(
 
 app.include_router(health.router)
 app.include_router(audits.router)
+app.include_router(google.router)
 
 
 @app.get("/", include_in_schema=False)

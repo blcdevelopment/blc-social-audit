@@ -11,10 +11,11 @@ deliberately deferred to later phases or to production hardening.
 These are out of scope for Phase 1 by design (see [`docs/01_REQUIREMENTS.md`](01_REQUIREMENTS.md)):
 
 - **Social media audits** (Instagram/Facebook/LinkedIn/YouTube).
-- **User accounts, authentication, multi-tenancy.** The UI/API is an internal,
-  single-operator tool with no login.
+- **Multi-tenancy.** The UI/API is still an internal shared tool, not a tenant-aware
+  SaaS product.
 - **Competitor benchmarking** (SEMrush/Ahrefs/Similarweb).
-- **Analytics integrations** (Google Analytics, Search Console, Microsoft Clarity).
+- **Full analytics integrations** (GA4, Microsoft Clarity, CRM attribution). Search
+  Console enrichment exists, but only for verified properties connected through Google OAuth.
 - **Public share links / white-label self-service.**
 - **Hosted/AWS production infrastructure** (packaging is prepared, hosting is not).
 
@@ -22,15 +23,19 @@ These are out of scope for Phase 1 by design (see [`docs/01_REQUIREMENTS.md`](01
 
 ## 2. Security & Access
 
-- **No API/UI authentication.** Anyone who can reach the API can submit audits and
-  read results. Acceptable for local/internal use only. API auth is deferred to
-  productionization.
+- **Authentication is optional by environment.** Clerk UI/API auth is wired in and the
+  frontend forwards Clerk bearer tokens to the API, but auth is disabled when
+  `CLERK_ISSUER` is empty for local dev, tests, and the QA harness. Production must set
+  `CLERK_ISSUER`, `CLERK_AUTHORIZED_PARTIES`, and the frontend Clerk keys.
 - **SSRF protection is partial.** The crawler blocks private/loopback hosts by
   default (`CRAWLER_ALLOW_PRIVATE_HOSTS=false`) and validates the start URL, but
   request-level interception (e.g. blocking redirects/sub-resources that resolve
   to internal IPs mid-crawl) is **not** fully implemented. Treat submitted URLs as
   untrusted input and harden this before exposing the service publicly.
 - Secrets live in `.env`; there is no secrets manager integration yet.
+- Google Search Console refresh tokens are stored in the application database for the
+  local-first implementation. Production should encrypt these fields or move them into a
+  managed secrets store before connecting real client accounts.
 
 ---
 
@@ -54,9 +59,22 @@ These are out of scope for Phase 1 by design (see [`docs/01_REQUIREMENTS.md`](01
   PSI-dependent rules can therefore differ across live runs even for the same
   site. (The hermetic QA harness avoids this by skipping PSI.)
 
+## 5. External SEO Enrichment
+
+- Screaming Frog enrichment requires SEO Spider to be installed and licensed on the worker.
+  If it is disabled, missing, times out, or fails, the audit continues and its external
+  facts are marked skipped/failed.
+- Screaming Frog is invoked only through a controlled argument list against the submitted
+  audit URL, but production workers still need OS-level resource limits and a dedicated
+  output volume for large crawls.
+- Search Console data is available only for Google properties the connected account can
+  access. No matching property means GSC and URL Inspection facts are skipped.
+- The app uses official Google APIs. It does not scrape the Search Console Insights UI.
+- URL Inspection is quota-limited and only runs for a small priority URL set.
+
 ---
 
-## 5. AI Commentary
+## 6. AI Commentary
 
 - Requires `OPENAI_API_KEY`. Without it, commentary uses a **deterministic local
   fallback** that is correct but generic (not site-specific prose).
@@ -69,7 +87,7 @@ These are out of scope for Phase 1 by design (see [`docs/01_REQUIREMENTS.md`](01
 
 ---
 
-## 6. Reproducibility — the precise guarantee
+## 7. Reproducibility — the precise guarantee
 
 - **Scores are reproducible given identical extracted facts** (verified by the
   hermetic QA harness — `make qa-repro`). The rubric engine is pure and deterministic.
@@ -80,7 +98,7 @@ These are out of scope for Phase 1 by design (see [`docs/01_REQUIREMENTS.md`](01
 
 ---
 
-## 7. Data & Storage
+## 8. Data & Storage
 
 - **Report storage is local filesystem only.** PDFs are written under
   `storage/reports/`; there is no object-storage backend.
@@ -91,7 +109,7 @@ These are out of scope for Phase 1 by design (see [`docs/01_REQUIREMENTS.md`](01
 
 ---
 
-## 8. Operations & Observability
+## 9. Operations & Observability
 
 - **No monitoring, alerting, or error tracking** (e.g. Sentry) wired up.
 - **No retry/dead-letter handling** beyond Celery's task time limits; a job that
@@ -102,7 +120,7 @@ These are out of scope for Phase 1 by design (see [`docs/01_REQUIREMENTS.md`](01
 
 ---
 
-## 9. Recommended Next Steps (later phases)
+## 10. Recommended Next Steps (later phases)
 
 1. Add API/UI authentication and complete request-level SSRF interception.
 2. Add data retention/cleanup for `storage/` and old audit rows.
