@@ -45,9 +45,9 @@ def test_phase_1_rubrics_load_and_validate() -> None:
     uxui = load_rubric(settings.rubric_uxui_path)
     composite = load_composite_rubric(settings.rubric_composite_path)
 
-    assert seo.version == "phase1-seo-v2"
+    assert seo.version == "phase1-seo-v4"
     assert uxui.version == "phase1-uxui-v2"
-    assert sum(rule.weight for rule in seo.rules) == 100
+    assert sum(rule.weight for rule in seo.rules) == 158
     assert sum(rule.weight for rule in uxui.rules) == 100
     assert composite.weights == {"seo": 0.45, "uxui": 0.55}
 
@@ -76,5 +76,86 @@ def test_scoring_is_reproducible_for_same_facts() -> None:
     second = score_audit(seo, uxui, _psi(), settings)
 
     assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
-    assert first["categories"]["seo"]["weights"]["skipped"] == 20
+    assert first["categories"]["seo"]["weights"]["skipped"] == 78
     assert first["categories"]["seo"]["score"] >= 85
+
+
+def test_scoring_does_not_treat_failed_technical_crawl_zero_summary_as_clean() -> None:
+    settings = Settings(_env_file=None)
+    seo, uxui = _facts_for_fixture("strong_site.html")
+    legacy_failed_external = {
+        "technical_crawl": {
+            "status": "failed",
+            "summary": _technical_crawl_zero_summary(),
+            "issues": [],
+        },
+        "gsc": {"status": "skipped", "summary": {}},
+        "url_inspection": {"status": "skipped", "summary": {}},
+    }
+
+    scored = score_audit(
+        seo,
+        uxui,
+        _psi(),
+        settings,
+        external_seo_facts=legacy_failed_external,
+    )
+
+    rules = {
+        rule["rule_id"]: rule
+        for rule in scored["categories"]["seo"]["rules"]
+        if rule["rule_id"].startswith("seo.technical_crawl.")
+    }
+    assert rules["seo.technical_crawl.no_broken_internal_urls"]["result"] == "skipped"
+    assert rules["seo.technical_crawl.missing_titles"]["result"] == "skipped"
+    assert rules["seo.technical_crawl.missing_meta_descriptions"]["result"] == "skipped"
+
+
+def test_scoring_uses_complete_technical_crawl_zero_summary() -> None:
+    settings = Settings(_env_file=None)
+    seo, uxui = _facts_for_fixture("strong_site.html")
+    complete_external = {
+        "technical_crawl": {
+            "status": "complete",
+            "summary": _technical_crawl_zero_summary(),
+            "issues": [],
+        },
+        "gsc": {"status": "skipped", "summary": {}},
+        "url_inspection": {"status": "skipped", "summary": {}},
+    }
+
+    scored = score_audit(
+        seo,
+        uxui,
+        _psi(),
+        settings,
+        external_seo_facts=complete_external,
+    )
+
+    rules = {
+        rule["rule_id"]: rule
+        for rule in scored["categories"]["seo"]["rules"]
+        if rule["rule_id"].startswith("seo.technical_crawl.")
+    }
+    assert rules["seo.technical_crawl.no_broken_internal_urls"]["result"] == "pass"
+    assert rules["seo.technical_crawl.missing_titles"]["result"] == "pass"
+    assert rules["seo.technical_crawl.missing_meta_descriptions"]["result"] == "pass"
+
+
+def _technical_crawl_zero_summary() -> dict:
+    return {
+        "urls_crawled": 0,
+        "html_urls_crawled": 0,
+        "client_error_internal_urls": 0,
+        "server_error_internal_urls": 0,
+        "client_error_external_urls": 0,
+        "server_error_external_urls": 0,
+        "non_indexable_internal_urls": 0,
+        "missing_titles": 0,
+        "duplicate_titles": 0,
+        "missing_meta_descriptions": 0,
+        "duplicate_meta_descriptions": 0,
+        "missing_h1": 0,
+        "images_missing_alt": 0,
+        "missing_canonicals": 0,
+    }

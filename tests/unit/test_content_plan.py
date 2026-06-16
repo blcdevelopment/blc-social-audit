@@ -163,7 +163,45 @@ def test_no_internal_rule_ids_leak_into_prose() -> None:
     )
     finding = plan.seo.findings[0]
     assert "seo.meta_description" not in finding.title
-    assert "seo.meta_description" not in finding.explanation
+    assert "seo.meta_description" not in finding.meaning
+    assert "seo.meta_description" not in finding.why
+
+
+def test_external_seo_findings_include_real_locations() -> None:
+    rule = _rule(
+        "seo.technical_crawl.no_broken_internal_urls",
+        "fail",
+        weight=8,
+        impact="high",
+        tier="quick_win",
+        label="Internal broken URLs were found",
+        fact_path="external_seo.technical_crawl.summary.client_error_internal_urls",
+        value=2,
+    )
+    plan = build_content_plan(
+        audit_context={"url": "https://x.test", "niche": None, "target_audience": None},
+        seo_facts={},
+        uxui_facts={},
+        psi_facts={},
+        external_seo_facts={
+            "technical_crawl": {
+                "status": "complete",
+                "issues": [
+                    {
+                        "id": "client_error_internal_urls",
+                        "examples": ["https://example.com/broken"],
+                    }
+                ],
+            }
+        },
+        score_breakdown=_breakdown([rule]),
+        settings=_settings(),
+    )
+
+    finding = plan.seo.findings[0]
+    assert "https://example.com/broken" in finding.location_urls
+    assert "external_seo" not in finding.meaning
+    assert "external_seo" not in finding.why
 
 
 def test_plan_is_grounding_safe_on_real_fixture() -> None:

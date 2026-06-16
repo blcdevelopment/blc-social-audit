@@ -276,7 +276,16 @@ def collect_pagespeed_facts(urls: str | Sequence[str], settings: Settings) -> Js
 
     pages = []
     completed = 0
+    budget = settings.psi_total_budget_seconds
+    deadline = time.monotonic() + budget if budget and budget > 0 else None
+    truncated = False
     for url in selected_urls:
+        if deadline is not None and time.monotonic() >= deadline:
+            # Out of time budget: stop issuing new PageSpeed requests and report on
+            # the pages collected so far rather than letting the audit overrun the
+            # Celery soft time limit.
+            truncated = True
+            break
         strategies = {
             strategy: _fetch_strategy(url, strategy, settings) for strategy in PSI_STRATEGIES
         }
@@ -290,7 +299,7 @@ def collect_pagespeed_facts(urls: str | Sequence[str], settings: Settings) -> Js
         )
 
     expected = len(pages) * len(PSI_STRATEGIES)
-    if completed == expected:
+    if completed == expected and not truncated:
         status = "complete"
     elif completed:
         status = "partial"

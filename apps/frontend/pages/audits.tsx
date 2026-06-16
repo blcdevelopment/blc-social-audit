@@ -1,8 +1,16 @@
+import { useAuth } from "@clerk/nextjs";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import Layout from "../components/Layout";
-import { ApiError, AuditListItem, listAudits, reportUrl } from "../lib/api";
+import SearchConsoleIntegration from "../components/SearchConsoleIntegration";
+import {
+  ApiError,
+  AuditListItem,
+  ReportFormat,
+  downloadReport,
+  listAudits,
+} from "../lib/api";
 import { formatDate, isTerminal, scoreTone, statusLabel, statusTone } from "../lib/format";
 
 function ScoreCell({ score }: { score: number | null }) {
@@ -24,15 +32,18 @@ function RowScores({ audit }: { audit: AuditListItem }) {
 }
 
 export default function AuditsHistoryPage() {
+  const { getToken } = useAuth();
   const [audits, setAudits] = useState<AuditListItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [downloading, setDownloading] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const response = await listAudits(50);
+      const token = await getToken();
+      const response = await listAudits(50, token);
       setAudits(response.audits);
     } catch (err) {
       setError(
@@ -41,7 +52,28 @@ export default function AuditsHistoryPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [getToken]);
+
+  async function handleDownload(jobId: string, format: ReportFormat) {
+    setError(null);
+    setDownloading(`${jobId}:${format}`);
+    try {
+      const token = await getToken();
+      const { blob, filename } = await downloadReport(jobId, format, token);
+      const objectUrl = window.URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.URL.revokeObjectURL(objectUrl);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not download the report.");
+    } finally {
+      setDownloading(null);
+    }
+  }
 
   useEffect(() => {
     load();
@@ -70,6 +102,8 @@ export default function AuditsHistoryPage() {
             {error}
           </div>
         )}
+
+        <SearchConsoleIntegration />
 
         {audits === null && !error && (
           <div className="card muted-card">
@@ -122,14 +156,24 @@ export default function AuditsHistoryPage() {
                         Details
                       </Link>
                       {audit.report_available && (
-                        <a
-                          href={reportUrl(audit.job_id)}
-                          className="link-action"
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          PDF
-                        </a>
+                        <>
+                          <button
+                            type="button"
+                            className="link-action button-link"
+                            onClick={() => handleDownload(audit.job_id, "pdf")}
+                            disabled={downloading !== null}
+                          >
+                            {downloading === `${audit.job_id}:pdf` ? "PDF..." : "PDF"}
+                          </button>
+                          <button
+                            type="button"
+                            className="link-action button-link"
+                            onClick={() => handleDownload(audit.job_id, "docx")}
+                            disabled={downloading !== null}
+                          >
+                            {downloading === `${audit.job_id}:docx` ? "DOCX..." : "DOCX"}
+                          </button>
+                        </>
                       )}
                     </td>
                   </tr>

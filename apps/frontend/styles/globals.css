@@ -297,6 +297,12 @@ h1 {
   color: var(--warning);
 }
 
+.alert-success {
+  background: #e3f4ea;
+  border: 1px solid #b9e4ca;
+  color: var(--blc-accent);
+}
+
 /* ---------- Spinner ---------- */
 .spinner {
   width: 16px;
@@ -517,6 +523,12 @@ h1 {
   font-size: 20px;
 }
 
+.download-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 /* ---------- Score cards ---------- */
 .score-grid {
   display: grid;
@@ -673,6 +685,43 @@ h1 {
   margin-bottom: 2px;
 }
 
+.roadmap-block h3 {
+  font-size: 19px;
+  margin-bottom: 16px;
+}
+
+.roadmap-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.roadmap-tier-ui {
+  border-left: 3px solid var(--blc-primary);
+  padding-left: 14px;
+}
+
+.roadmap-tier-ui h4 {
+  color: var(--ink);
+  font-size: 14px;
+  margin-bottom: 10px;
+}
+
+.roadmap-tier-ui ol {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.roadmap-tier-ui li {
+  margin-bottom: 12px;
+}
+
+.roadmap-tier-ui p {
+  color: var(--muted);
+  font-size: 14px;
+  margin: 3px 0 0;
+}
+
 .sev {
   flex-shrink: 0;
   height: fit-content;
@@ -698,6 +747,153 @@ h1 {
 .sev-info {
   background: #eef1f5;
   color: var(--muted);
+}
+
+/* ---------- External SEO ---------- */
+.external-seo-block {
+  display: grid;
+  gap: 18px;
+}
+
+.external-status-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.external-status-grid div {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.external-status-grid span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.external-status-grid strong {
+  display: block;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+.enrichment-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.enrichment-grid h4 {
+  font-size: 15px;
+  margin-bottom: 6px;
+}
+
+.insight-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 12px;
+  font-size: 13px;
+}
+
+.insight-table th,
+.insight-table td {
+  border-bottom: 1px solid var(--line);
+  padding: 10px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.insight-table th {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.insight-table strong {
+  display: block;
+  margin-top: 6px;
+}
+
+.insight-table p {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.issue-guidance {
+  display: grid;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.issue-guidance p {
+  margin: 0;
+}
+
+.issue-guidance b,
+.issue-locations span {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.issue-locations {
+  margin-top: 8px;
+}
+
+.issue-locations ul {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+}
+
+.issue-locations li {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- Integrations ---------- */
+.integration-card {
+  display: grid;
+  gap: 16px;
+}
+
+.integration-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.integration-stats div {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.integration-stats span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.integration-stats strong {
+  display: block;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+.integration-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
 /* ---------- Meta grid ---------- */
@@ -783,6 +979,25 @@ h1 {
   margin-left: 14px;
 }
 
+.button-link {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: var(--blc-primary);
+  cursor: pointer;
+  font-family: inherit;
+  padding: 0;
+}
+
+.button-link:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.button-link:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
 .score-cells {
   display: flex;
   gap: 8px;
@@ -809,6 +1024,16 @@ h1 {
 
 @media (max-width: 720px) {
   .score-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .roadmap-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .external-status-grid,
+  .enrichment-grid,
+  .integration-stats {
     grid-template-columns: 1fr;
   }
 

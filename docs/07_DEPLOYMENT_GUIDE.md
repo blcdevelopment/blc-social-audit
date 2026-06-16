@@ -1,5 +1,23 @@
 # Internal Deployment Guide & Epic P1-E7 (Internal Deployment & Phase 2 Readiness)
 
+> ## ⚠️ SUPERSEDED — historical record (banner added 2026-06-16)
+>
+> **This guide describes the earlier internal-testing deployment plan** (a single
+> shared/VPS host on a private network/VPN, **no authentication**, manual UI serving,
+> ports locked down by firewall). **That plan is no longer how the system is deployed.**
+>
+> The system is now **live in production** and is documented authoritatively in the root
+> [`DEPLOYMENT.md`](../DEPLOYMENT.md). The production deployment is materially different:
+> a single Linode VM running `docker-compose.prod.yml` (postgres, redis, api, worker,
+> Next.js frontend, **Caddy** reverse proxy with **automatic Let's Encrypt TLS**),
+> **Clerk authentication** (RS256 JWT / `__session` cookie), Google Search Console OAuth,
+> and **GitHub Actions CI/CD** that auto-deploys on merge to `main` — all served at
+> **https://ai.builderleadconverter.com**.
+>
+> **For anything current — deploying, configuring, auth, TLS, CI/CD, the live stack — use
+> [`DEPLOYMENT.md`](../DEPLOYMENT.md), not this file.** Everything below is retained only as
+> a historical record of the original internal-testing approach.
+
 **Project:** BLC Website Audit Automation
 **Client:** Builder Lead Converter (BLC)
 **Document purpose:** Explain the best way to deploy the system for **internal testing**, point to the existing setup/run/operator docs, and define the Epic P1-E7 Jira plan.
@@ -24,7 +42,7 @@ scope Phase 2. This is a **testing deployment**, not production hosting.
 What "internal use" means here:
 
 - A small number of trusted BLC team members on a private network or VPN.
-- No public internet exposure, no authentication added yet.
+- No public internet exposure, no authentication added yet. *(Superseded — the live system is public at https://ai.builderleadconverter.com behind Clerk auth; see [`DEPLOYMENT.md`](../DEPLOYMENT.md).)*
 - The goal is **validation and feedback**, not uptime or scale.
 
 ---
@@ -250,7 +268,9 @@ sudo apt-get install -y nodejs
 
 The system is internal-only by design (see [`docs/06_KNOWN_LIMITATIONS.md`](06_KNOWN_LIMITATIONS.md)):
 
-- **No authentication.** Anyone who can reach the API/UI can run audits and read
+- **No authentication.** *(Superseded — the live system now has Clerk authentication
+  gating the `/audits/*` router; see [`DEPLOYMENT.md`](../DEPLOYMENT.md).)* Anyone who can
+  reach the API/UI can run audits and read
   results. **Keep it on a private network/VPN. Do not expose it to the public internet.**
 - **SSRF protection is partial.** Submitted URLs are untrusted input; private-host
   blocking is on, but request-level interception is not complete.

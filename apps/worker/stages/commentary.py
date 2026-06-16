@@ -5,7 +5,7 @@ from pathlib import Path
 from string import Template
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from apps.shared.config import Settings
 
@@ -17,7 +17,16 @@ class CommentaryFinding(BaseModel):
 
     severity: Literal["info", "low", "medium", "high"]
     title: str
-    explanation: str
+    # Structured, card-friendly prose. ``meaning`` = "what it means" (+ the measurement),
+    # ``why`` = "why it matters". ``explanation`` is the legacy single-paragraph form,
+    # kept for the DOCX export and the grounding/LLM path; the PDF renders the structured
+    # fields and falls back to ``explanation`` only when they are absent.
+    meaning: str = ""
+    why: str = ""
+    explanation: str = ""
+    # Where to start, rendered as a bulleted list (URLs / locations, not numeric claims).
+    location_label: str = ""
+    location_urls: list[str] = Field(default_factory=list)
     evidence_refs: list[str]
 
 
@@ -28,6 +37,8 @@ class CommentaryRecommendation(BaseModel):
     title: str
     rationale: str
     action_items: list[str]
+    location_label: str = ""
+    location_urls: list[str] = Field(default_factory=list)
 
 
 class CommentarySection(BaseModel):
@@ -53,6 +64,7 @@ def generate_commentary(
     seo_facts: JsonDict,
     uxui_facts: JsonDict,
     psi_facts: JsonDict,
+    external_seo_facts: JsonDict | None = None,
     score_breakdown: JsonDict,
     settings: Settings,
 ) -> JsonDict:
@@ -65,6 +77,7 @@ def generate_commentary(
         seo_facts=seo_facts,
         uxui_facts=uxui_facts,
         psi_facts=psi_facts,
+        external_seo_facts=external_seo_facts,
         score_breakdown=score_breakdown,
         settings=settings,
     )

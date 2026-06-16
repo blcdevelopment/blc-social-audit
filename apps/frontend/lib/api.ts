@@ -4,6 +4,12 @@ export const API_BASE_URL = (
   process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000"
 ).replace(/\/$/, "");
 
+export type ReportFormat = "pdf" | "docx";
+
+interface ApiRequestInit extends RequestInit {
+  authToken?: string | null;
+}
+
 export interface AuditCreateRequest {
   url: string;
   niche?: string | null;
@@ -66,6 +72,7 @@ export interface ReportSection {
   score: number | null;
   findings: ReportFinding[];
   recommendations: ReportRecommendation[];
+  opportunities: RuleSummary[];
 }
 
 export interface RoadmapTier {
@@ -91,6 +98,84 @@ export interface PageSpeedSummary {
   avg_desktop_performance: number | null;
 }
 
+export interface ExternalSeoSummary {
+  status: string;
+  technical_crawl_status: string;
+  technical_crawl_tool: string | null;
+  gsc_status: string;
+  url_inspection_status: string;
+  technical_issue_count: number;
+  search_opportunity_count: number;
+}
+
+export interface TechnicalSeoIssue {
+  id: string;
+  severity: "info" | "low" | "medium" | "high";
+  title: string;
+  count: number;
+  summary: string;
+  why_it_matters: string;
+  recommended_fix: string;
+  location_label: string;
+  examples: string[];
+}
+
+export interface TechnicalSeoSection {
+  status: string;
+  status_label: string;
+  reason_label: string | null;
+  source: string | null;
+  tool_label: string | null;
+  summary: Record<string, unknown>;
+  issues: TechnicalSeoIssue[];
+  notes: string[];
+  warnings: string[];
+}
+
+export interface SearchPerformanceSection {
+  status: string;
+  status_label: string;
+  reason_label: string | null;
+  site_url: string | null;
+  date_range: Record<string, unknown>;
+  summary: Record<string, unknown>;
+  top_queries: Record<string, unknown>[];
+  top_pages: Record<string, unknown>[];
+  high_impression_low_ctr_pages: Record<string, unknown>[];
+  ranking_opportunities: Record<string, unknown>[];
+  declining_pages: Record<string, unknown>[];
+  url_inspection_summary: Record<string, unknown>;
+  url_inspection_items: Record<string, unknown>[];
+}
+
+export interface SearchConsoleProperty {
+  siteUrl: string;
+  permissionLevel?: string | null;
+}
+
+export interface SearchConsolePropertiesResponse {
+  status: string;
+  account_email: string | null;
+  properties: SearchConsoleProperty[];
+  reason: string | null;
+}
+
+export interface SearchConsoleConnectUrlResponse {
+  status: string;
+  connect_url: string | null;
+  reason: string | null;
+}
+
+export interface RuleSummary {
+  rule_id: string;
+  description: string;
+  result: "pass" | "partial" | "fail" | "skipped";
+  points_awarded: number;
+  points_possible: number;
+  evidence_value: string | null;
+  reason: string | null;
+}
+
 export interface ReportMetadata {
   site_domain: string;
   niche: string | null;
@@ -111,6 +196,9 @@ export interface ReportPayload {
   roadmap: RoadmapTier[];
   validation_summary: ValidationSummary;
   pagespeed_summary: PageSpeedSummary;
+  external_seo_summary: ExternalSeoSummary;
+  technical_seo_section: TechnicalSeoSection;
+  search_performance_section: SearchPerformanceSection;
 }
 
 export interface AuditDetail {
@@ -158,12 +246,24 @@ async function readError(response: Response): Promise<string> {
   return `Request failed with status ${response.status}.`;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+function requestHeaders(authToken?: string | null, includeJson = true): HeadersInit {
+  const headers: Record<string, string> = {};
+  if (includeJson) headers["Content-Type"] = "application/json";
+  if (authToken) headers.Authorization = `Bearer ${authToken}`;
+  return headers;
+}
+
+async function request<T>(path: string, init?: ApiRequestInit): Promise<T> {
+  const { authToken, headers, ...requestInit } = init || {};
   let response: Response;
   try {
     response = await fetch(`${API_BASE_URL}${path}`, {
-      headers: { "Content-Type": "application/json" },
-      ...init,
+      credentials: "include",
+      headers: {
+        ...requestHeaders(authToken),
+        ...(headers as Record<string, string> | undefined),
+      },
+      ...requestInit,
     });
   } catch {
     throw new ApiError(
@@ -177,21 +277,91 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
-export function createAudit(payload: AuditCreateRequest): Promise<AuditCreateResponse> {
+export function createAudit(
+  payload: AuditCreateRequest,
+  authToken?: string | null,
+): Promise<AuditCreateResponse> {
   return request<AuditCreateResponse>("/audits", {
     method: "POST",
+    authToken,
     body: JSON.stringify(payload),
   });
 }
 
-export function listAudits(limit = 25): Promise<AuditListResponse> {
-  return request<AuditListResponse>(`/audits?limit=${limit}`);
+export function listAudits(
+  limit = 25,
+  authToken?: string | null,
+): Promise<AuditListResponse> {
+  return request<AuditListResponse>(`/audits?limit=${limit}`, { authToken });
 }
 
-export function getAuditDetail(jobId: string): Promise<AuditDetail> {
-  return request<AuditDetail>(`/audits/${jobId}`);
+export function getAuditDetail(
+  jobId: string,
+  authToken?: string | null,
+): Promise<AuditDetail> {
+  return request<AuditDetail>(`/audits/${jobId}`, { authToken });
 }
 
-export function reportUrl(jobId: string): string {
-  return `${API_BASE_URL}/audits/${jobId}/report`;
+export function reportUrl(jobId: string, format: ReportFormat = "pdf"): string {
+  return `${API_BASE_URL}/audits/${jobId}/${format === "pdf" ? "report" : "docx"}`;
+}
+
+export function getSearchConsoleProperties(
+  authToken?: string | null,
+): Promise<SearchConsolePropertiesResponse> {
+  return request<SearchConsolePropertiesResponse>("/google/search-console/properties", {
+    authToken,
+  });
+}
+
+export function createSearchConsoleConnectUrl(
+  authToken?: string | null,
+): Promise<SearchConsoleConnectUrlResponse> {
+  return request<SearchConsoleConnectUrlResponse>("/google/search-console/connect-url", {
+    authToken,
+  });
+}
+
+export function rerunAuditEnrichment(
+  jobId: string,
+  authToken?: string | null,
+): Promise<{ job_id: string; status: string; current_stage: string | null; message: string }> {
+  return request(`/audits/${jobId}/rerun-enrichment`, {
+    method: "POST",
+    authToken,
+  });
+}
+
+function filenameFromDisposition(disposition: string | null, fallback: string): string {
+  const match = disposition?.match(/filename="?([^";]+)"?/i);
+  return match?.[1] || fallback;
+}
+
+export async function downloadReport(
+  jobId: string,
+  format: ReportFormat,
+  authToken?: string | null,
+): Promise<{ blob: Blob; filename: string }> {
+  let response: Response;
+  try {
+    response = await fetch(reportUrl(jobId, format), {
+      credentials: "include",
+      headers: requestHeaders(authToken, false),
+    });
+  } catch {
+    throw new ApiError(
+      `Could not reach the audit API. Make sure the backend is running on ${API_BASE_URL}.`,
+      0,
+    );
+  }
+  if (!response.ok) {
+    throw new ApiError(await readError(response), response.status);
+  }
+  return {
+    blob: await response.blob(),
+    filename: filenameFromDisposition(
+      response.headers.get("content-disposition"),
+      `blc-website-audit-${jobId}.${format}`,
+    ),
+  };
 }

@@ -616,3 +616,26 @@ Social data access, costs, and legal posture in this plan were checked against c
 
 > Platform APIs, scraper pricing, and case law move quickly. Re-verify the §3.2 and §10
 > specifics at the start of Phase 2.0 discovery before committing budget.
+
+---
+
+## Status reconciliation (2026-06-16)
+
+> **Several Workstream-A productionization items have already shipped — ahead of this
+> plan.** This document still describes them as unbuilt Phase-2 work; that framing is now
+> partially stale. As built today:
+> - **Team auth (Clerk)** is **live** — opt-in via the `CLERK_ISSUER` env var (when unset,
+>   the API runs open, which is how local dev / the QA harness / tests run). This delivers
+>   the §4.1 "lightweight authentication" item (currently a dev Clerk instance; open
+>   sign-up is a known gap, invite-only is a manual operator step).
+> - **Managed hosting** is **live** — a single Linode VM behind **Caddy** (automatic
+>   Let's Encrypt TLS, single-origin reverse proxy) at `https://ai.builderleadconverter.com`.
+> - **CI/CD auto-deploy on merge to `main`** is **live** — `.github/workflows/deploy.yml`
+>   SSHes the box and runs `deploy/deploy.sh` (pinned to the merged SHA, sequential image
+>   builds, `/health` gate).
+>
+> See the root **`DEPLOYMENT.md`** for the authoritative as-built deployment description.
+> The rest of Workstream A (S3/object storage, complete request-level SSRF interception,
+> Sentry/observability, retention) and **all of Workstreams B, C, and D remain unbuilt** —
+> the scope, decisions, estimates, and tickets below stand. (The hosting choice that
+> shipped is Linode + Caddy, not the Vercel + Railway/Render options floated in §4/§8.)

@@ -20,6 +20,50 @@ If anything in the build is ever unclear, the order of precedence is: **current 
 
 ---
 
+> ### As-built notes (2026-06-16)
+>
+> This document is the **historical scope-of-record**: the sections below preserve the original
+> client scope, Technical Assessment, and Phase 1 execution plan **as they were locked**. The
+> bullets here only annotate where the shipped Phase 1 build diverged from those original plans —
+> they do **not** rewrite the historical text. For the authoritative as-built reference, see
+> [`docs/03_ARCHITECTURE.md`](03_ARCHITECTURE.md), [`DEPLOYMENT.md`](../DEPLOYMENT.md), and the
+> committed `*.mmd` diagrams. Divergences:
+>
+> - **Frontend is plain CSS, not Tailwind/shadcn.** §6.1 names "Next.js + Tailwind + shadcn/ui";
+>   the shipped UI is **Next.js 14 (Pages Router) + React 18 + TypeScript with plain CSS** (no UI
+>   component library). `tsc --noEmit` is the typecheck gate.
+> - **Auth shipped (Clerk), not deferred to Phase 2.** §3.3, §3.8, §4.2.6 and §6.1 say "no auth /
+>   single-user / Clerk in Phase 2." As built, **Clerk auth is live and opt-in by env**: when
+>   `CLERK_ISSUER` is set the whole `/audits/*` router is gated (Bearer JWT or `__session`
+>   cookie); when it is empty the API is open (how local dev, the QA harness, and tests run). The
+>   Clerk instance is currently a **dev instance**; open sign-up is a known gap (invitation-only
+>   is a manual operator step).
+> - **Managed hosting + CI/CD shipped, not deferred.** §4.5 and §6.1 treat production deployment
+>   as "not front-loaded / after local end-to-end success." It is now **live in production** on a
+>   single Linode VM at `https://ai.builderleadconverter.com` (Docker Compose: postgres, redis,
+>   api, worker, frontend, caddy), with GitHub Actions CI/CD auto-deploying on merge to `main`.
+>   See [`DEPLOYMENT.md`](../DEPLOYMENT.md).
+> - **External-SEO subsystem added (site-health sweep + Google Search Console).** §2.3 / §5.2
+>   list GA/GSC/Clarity/SEMrush as Phase 3-or-later. As built, Phase 1 includes a built-in
+>   **site-health technical-crawl sweep** (zero extra deps; the licensed Screaming Frog CLI is an
+>   optional add-on) plus **optional Google Search Console** (Search Analytics + URL Inspection
+>   via OAuth). These are facts under `external_seo.technical_crawl.*` and degrade gracefully — a
+>   missing/failed source never penalizes the score or aborts the audit.
+> - **DOCX export added alongside the PDF.** §2.7 / §4.2.5 specify a branded PDF report only. The
+>   build also renders a **branded `.docx`** on demand (`GET /audits/{id}/docx`); DOCX failure
+>   never fails the audit.
+> - **Re-enrichment path added.** Beyond the original one-shot pipeline, a completed audit can
+>   re-run **only** its external-SEO collection → rescore → recomment → re-render via
+>   `POST /audits/{id}/rerun-enrichment` (the prior report is restored if the rerun fails).
+> - **Phase 1 commentary is fully deterministic — no live LLM call.** §4.1, §4.2.4 and §6.1
+>   describe an OpenAI/ChatGPT commentary pipeline. As built, Phase 1 commentary is generated
+>   **entirely from a deterministic content plan**; OpenAI is **not** called at all in Phase 1
+>   (the LLM-polish path is dormant scaffolding retained for Phase 2). The grounding/validation
+>   pass (§3.5, §6.2) is real and active. So the "ChatGPT-powered" framing reflects the original
+>   intent, not the shipped Phase 1 behavior.
+
+---
+
 ## 1. Project context
 
 ### 1.1 What the client does
@@ -537,3 +581,4 @@ How much of the original Darius scope does Phase 1 cover? This is the honest acc
 | 2026-04-29 | Phase 1 accepted into evaluation | Darius Rus |
 | 2026-05-02 | Consolidated requirements specification compiled | Abdullah Arshed |
 | 2026-05-26 | Updated Phase 1 execution plan to local-first and moved production/deployment preparation to the end | Abdullah Arshed |
+| 2026-06-16 | Added "As-built notes" callout (§0) reconciling original locked scope with what shipped (plain-CSS frontend, Clerk auth, Linode hosting + CI/CD, external-SEO + GSC, DOCX export, re-enrichment, deterministic commentary); historical text left intact | Abdullah Arshed |

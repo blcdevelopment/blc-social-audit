@@ -75,6 +75,11 @@ def test_run_collection_audit_persists_epic_4_artifacts(monkeypatch, tmp_path) -
             _env_file=None,
             google_psi_api_key=None,
             crawler_screenshots_enabled=False,
+            # Keep the unit test network-free: the external SEO stage takes its
+            # real skip paths (same contract the hermetic QA harness pins).
+            site_health_enabled=False,
+            screaming_frog_enabled=False,
+            google_oauth_client_id="",
         ),
     )
     pdf_path = tmp_path / "report.pdf"
@@ -129,6 +134,8 @@ def test_run_collection_audit_persists_epic_4_artifacts(monkeypatch, tmp_path) -
         assert job.result.uxui_score > 0
         assert job.result.lead_gen_score > 0
         assert job.result.score_breakdown["status"] == "complete"
+        assert job.result.external_seo_facts["sources"]["technical_crawl"] == "skipped"
+        assert job.result.external_seo_facts["gsc"]["status"] == "skipped"
         assert job.result.commentary["status"] == "deterministic"
         assert job.result.commentary["provider"] == "deterministic"
         assert job.result.validation_log["status"] == "complete"

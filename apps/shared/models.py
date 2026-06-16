@@ -97,6 +97,7 @@ class AuditResult(Base):
     seo_facts: Mapped[JsonDict] = mapped_column(json_type(), nullable=False, default=dict)
     uxui_facts: Mapped[JsonDict] = mapped_column(json_type(), nullable=False, default=dict)
     psi_facts: Mapped[JsonDict] = mapped_column(json_type(), nullable=False, default=dict)
+    external_seo_facts: Mapped[JsonDict] = mapped_column(json_type(), nullable=False, default=dict)
     score_breakdown: Mapped[JsonDict] = mapped_column(json_type(), nullable=False, default=dict)
     commentary: Mapped[JsonDict] = mapped_column(json_type(), nullable=False, default=dict)
     validation_log: Mapped[JsonDict] = mapped_column(json_type(), nullable=False, default=dict)
@@ -109,3 +110,22 @@ class AuditResult(Base):
     )
 
     job: Mapped[AuditJob] = relationship(back_populates="result")
+
+
+class GoogleSearchConsoleConnection(Base):
+    __tablename__ = "google_search_console_connections"
+    __table_args__ = (Index("idx_gsc_connections_created", "created_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    account_email: Mapped[str] = mapped_column(String(320), nullable=False, unique=True)
+    access_token: Mapped[str | None] = mapped_column(Text)
+    refresh_token: Mapped[str | None] = mapped_column(Text)
+    token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    scopes: Mapped[JsonDict] = mapped_column(json_type(), nullable=False, default=dict)
+    properties: Mapped[JsonDict] = mapped_column(json_type(), nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )

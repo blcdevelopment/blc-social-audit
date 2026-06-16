@@ -2,6 +2,7 @@
 # Folder is literally named "seo_audits " (trailing space); glob handles it.
 seo_audits*/
 *.pptx
+storage/tool_exports/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -210,6 +211,9 @@ cython_debug/
 # Temporary file for partial code execution
 tempCodeRunnerFile.py
 .DS_Store
+
+# Local Mermaid diagram scratch files (architecture.mmd, audit-flow.mmd, etc.)
+*.mmd
 
 # Ruff stuff:
 .ruff_cache/
