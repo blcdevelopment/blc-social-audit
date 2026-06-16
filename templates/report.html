@@ -1,3 +1,15 @@
+{% macro score_gauge(score, max_score, ring, size) -%}
+<div class="score-gauge score-gauge-{{ size }}">
+  <svg class="gauge-ring" viewBox="0 0 36 36" xmlns="http://www.w3.org/2000/svg">
+    <circle class="gauge-track" cx="18" cy="18" r="15.915"></circle>
+    <circle class="gauge-arc" cx="18" cy="18" r="15.915" stroke="{{ ring }}" stroke-dasharray="{{ score }} {{ 100 - score }}" transform="rotate(-90 18 18)"></circle>
+  </svg>
+  <div class="gauge-label">
+    <strong>{{ score }}</strong>
+    <span>/ {{ max_score }}</span>
+  </div>
+</div>
+{%- endmacro %}
 <!doctype html>
 <html lang="en">
   <head>
@@ -27,8 +39,21 @@
         {% endif %}
       </div>
       <div class="cover-main">
+        <p class="cover-eyebrow">Comprehensive Website Audit</p>
         <h1>Website Audit Report</h1>
         <p class="cover-url">{{ payload.metadata.final_url }}</p>
+        <div class="cover-scores">
+          {% for score in payload.scores %}
+            {% set ring = {"strong": "#28864b", "fair": "#c98a16", "weak": "#b42318"}[score.band] %}
+            <div class="cover-score score-band-{{ score.band }}">
+              {{ score_gauge(score.score, score.max_score, ring, "lg") }}
+              <p class="cover-score-label">{{ score.label }}</p>
+              <p class="cover-score-band">{{ score.band_label }}</p>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="cover-bottom">
         <dl class="cover-details">
           <div>
             <dt>Generated</dt>
@@ -51,8 +76,8 @@
             </div>
           {% endif %}
         </dl>
+        <p class="cover-footer">Prepared for internal BLC review and prospect-facing follow-up.</p>
       </div>
-      <p class="cover-footer">Prepared for internal BLC review and prospect-facing follow-up.</p>
     </section>
 
     <section class="page-section toc" id="contents">
@@ -76,10 +101,15 @@
 
       <div class="score-strip">
         {% for score in payload.scores %}
+          {% set ring = {"strong": "#28864b", "fair": "#c98a16", "weak": "#b42318"}[score.band] %}
           <article class="score-pill score-pill-{{ score.id }} score-band-{{ score.band }}">
-            <p>{{ score.label }}</p>
-            <strong>{{ score.score }}</strong>
-            <span>/ {{ score.max_score }} · {{ score.band_label }}</span>
+            <div class="score-pill-top">
+              {{ score_gauge(score.score, score.max_score, ring, "md") }}
+              <div class="score-pill-heading">
+                <p class="score-pill-label">{{ score.label }}</p>
+                <span class="score-pill-band">{{ score.band_label }}</span>
+              </div>
+            </div>
             <small>{{ score.description }}</small>
           </article>
         {% endfor %}
@@ -171,11 +201,30 @@
           <div class="finding-list">
             {% for finding in section.findings %}
               <article class="finding-card severity-{{ finding.severity }}">
-                <div class="finding-meta">
-                  <span>{{ finding.severity }}</span>
+                <div class="finding-head">
+                  <span class="sev-pill sev-{{ finding.severity }}">{{ finding.severity }}</span>
+                  <h4>{{ finding.title }}</h4>
                 </div>
-                <h4>{{ finding.title }}</h4>
-                <p>{{ finding.explanation }}</p>
+                {% if finding.meaning %}
+                  <div class="issue-guidance">
+                    <p><span class="guide-label">What it means</span>{{ finding.meaning }}</p>
+                    {% if finding.why %}
+                      <p><span class="guide-label">Why it matters</span>{{ finding.why }}</p>
+                    {% endif %}
+                  </div>
+                {% else %}
+                  <p class="finding-body">{{ finding.explanation }}</p>
+                {% endif %}
+                {% if finding.location_urls %}
+                  <div class="issue-locations">
+                    <p class="location-label">{{ finding.location_label or "Where to start" }}:</p>
+                    <ul class="url-list">
+                      {% for url in finding.location_urls %}
+                        <li>{{ url }}</li>
+                      {% endfor %}
+                    </ul>
+                  </div>
+                {% endif %}
               </article>
             {% endfor %}
           </div>
@@ -183,14 +232,27 @@
           <h3>Recommendations</h3>
           <div class="recommendation-list">
             {% for recommendation in section.recommendations %}
-              <article class="recommendation">
-                <p class="recommendation-tier">{{ recommendation.tier.replace("_", " ") }}</p>
+              <article class="recommendation tier-{{ recommendation.tier }}">
+                <span class="tier-pill tier-pill-{{ recommendation.tier }}">{{ recommendation.tier.replace("_", " ") }}</span>
                 <h4>{{ recommendation.title }}</h4>
                 <p>{{ recommendation.rationale }}</p>
                 {% if recommendation.action_items %}
-                  {% for item in recommendation.action_items %}
-                    <p class="action-copy">{{ item }}</p>
-                  {% endfor %}
+                  <p class="rec-action-label">Do this</p>
+                  <ul class="action-items">
+                    {% for item in recommendation.action_items %}
+                      <li>{{ item }}</li>
+                    {% endfor %}
+                  </ul>
+                {% endif %}
+                {% if recommendation.location_urls %}
+                  <div class="issue-locations">
+                    <p class="location-label">{{ recommendation.location_label or "Where to start" }}:</p>
+                    <ul class="url-list">
+                      {% for url in recommendation.location_urls %}
+                        <li>{{ url }}</li>
+                      {% endfor %}
+                    </ul>
+                  </div>
                 {% endif %}
               </article>
             {% endfor %}
@@ -246,30 +308,31 @@
           {% for issue in payload.technical_seo_section.issues %}
             <article class="technical-issue severity-{{ issue.severity }}">
               <div class="technical-issue-head">
-                <div>
-                  <p class="issue-kicker">{{ issue.severity }} · {{ issue.count }} affected</p>
-                  <h3>{{ issue.title }}</h3>
-                </div>
+                <span class="sev-pill sev-{{ issue.severity }}">{{ issue.severity }}</span>
+                <span class="count-chip">{{ issue.count }} affected</span>
               </div>
-              <dl class="explanation-list">
-                <div>
-                  <dd>{{ issue.summary }} {{ issue.why_it_matters }} {{ issue.recommended_fix }}</dd>
-                </div>
-              </dl>
+              <h4 class="issue-title">{{ issue.title }}</h4>
+              <div class="issue-guidance">
+                <p><span class="guide-label">What it means</span>{{ issue.summary }}</p>
+                <p><span class="guide-label">Why it matters</span>{{ issue.why_it_matters }}</p>
+                <p><span class="guide-label">Recommended fix</span>{{ issue.recommended_fix }}</p>
+              </div>
               {% if issue.examples %}
                 {% set shown = issue.examples[:4] %}
-                <p class="location-label">
-                  {% if issue.count > shown | length %}
-                    Examples ({{ shown | length }} of {{ issue.count }} affected):
-                  {% else %}
-                    Affected URLs:
-                  {% endif %}
-                </p>
-                <ul class="url-list">
-                  {% for example in shown %}
-                    <li>{{ example }}</li>
-                  {% endfor %}
-                </ul>
+                <div class="issue-locations">
+                  <p class="location-label">
+                    {% if issue.count > shown | length %}
+                      {{ issue.location_label }} — examples ({{ shown | length }} of {{ issue.count }}):
+                    {% else %}
+                      {{ issue.location_label }}:
+                    {% endif %}
+                  </p>
+                  <ul class="url-list">
+                    {% for example in shown %}
+                      <li>{{ example }}</li>
+                    {% endfor %}
+                  </ul>
+                </div>
               {% endif %}
             </article>
           {% endfor %}
@@ -448,28 +511,39 @@
     <section class="page-section" id="roadmap">
       <p class="eyebrow">Action Roadmap</p>
       <h2>Prioritized lead generation roadmap</h2>
-      {% for tier in payload.roadmap %}
-        <article class="roadmap-tier">
-          <h3>{{ tier.label }}</h3>
-          {% if tier.recommendations %}
-            <ol>
+      <p class="helper-copy">
+        Work left to right: start with quick wins, then mid-term improvements, then long-term
+        growth. Each card is a recommendation tied to the findings earlier in this report.
+      </p>
+      <div class="roadmap-grid">
+        {% for tier in payload.roadmap %}
+          <div class="roadmap-col roadmap-{{ tier.tier }}">
+            <div class="roadmap-col-head">
+              <h3>{{ tier.label }}</h3>
+            </div>
+            {% if tier.recommendations %}
               {% for recommendation in tier.recommendations %}
-                <li>
-                  <strong>{{ recommendation.title }}</strong>
+                <article class="roadmap-card">
+                  <div class="roadmap-card-head">
+                    <span class="roadmap-card-index">{{ loop.index }}</span>
+                    <h4>{{ recommendation.title }}</h4>
+                  </div>
                   <p>{{ recommendation.rationale }}</p>
                   {% if recommendation.action_items %}
-                    {% for item in recommendation.action_items %}
-                      <p class="action-copy">{{ item }}</p>
-                    {% endfor %}
+                    <ul class="action-items">
+                      {% for item in recommendation.action_items %}
+                        <li>{{ item }}</li>
+                      {% endfor %}
+                    </ul>
                   {% endif %}
-                </li>
+                </article>
               {% endfor %}
-            </ol>
-          {% else %}
-            <p>No {{ tier.label | lower }} recommendations were generated for this audit.</p>
-          {% endif %}
-        </article>
-      {% endfor %}
+            {% else %}
+              <p class="muted roadmap-empty">No {{ tier.label | lower }} recommendations were generated for this audit.</p>
+            {% endif %}
+          </div>
+        {% endfor %}
+      </div>
     </section>
 
     <section class="page-section" id="appendix">

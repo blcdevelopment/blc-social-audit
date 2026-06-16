@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any
@@ -27,6 +28,21 @@ from apps.worker.stages.scoring import score_audit
 JsonDict = dict[str, Any]
 CrawlerFunc = Callable[[str, Settings, str | None], CrawlResult]
 PsiCollectorFunc = Callable[[Sequence[str], Settings], JsonDict]
+
+
+# Seconds held back after external enrichment for scoring, commentary, grounding,
+# PDF/DOCX rendering, and persistence, so the whole task finishes inside the Celery
+# soft time limit even when the earlier stages ran long.
+_PIPELINE_TAIL_RESERVE_SECONDS = 75
+
+
+def _external_enrichment_deadline(settings: Settings, task_started: float) -> float:
+    """Absolute ``time.monotonic()`` deadline by which external SEO enrichment must
+    stop, derived from when the task started and the configured soft time limit."""
+    soft_limit = getattr(settings, "celery_task_soft_time_limit_seconds", None)
+    if not isinstance(soft_limit, int | float):
+        return task_started + 600.0
+    return task_started + max(60.0, float(soft_limit) - _PIPELINE_TAIL_RESERVE_SECONDS)
 
 
 def _collect_external_seo_safely(**kwargs: Any) -> JsonDict:
@@ -193,6 +209,7 @@ def run_collection_audit(
     psi_collector: PsiCollectorFunc = collect_pagespeed_facts,
 ) -> None:
     settings = get_settings()
+    task_started = time.monotonic()
     parsed_job_id = UUID(job_id)
 
     with SessionLocal() as db:
@@ -227,6 +244,7 @@ def run_collection_audit(
                 seo_facts=seo_facts,
                 crawled_pages=crawl_result.to_dict(),
                 rendered_pages=crawl_result.pages,
+                deadline=_external_enrichment_deadline(settings, task_started),
             )
 
             _mark_job(db, job, AuditStatus.SCORING, "Scoring extracted facts", 80)
@@ -309,6 +327,7 @@ def run_audit(job_id: str) -> None:
 
 def rerun_external_enrichment_for_audit(job_id: str) -> None:
     settings = get_settings()
+    task_started = time.monotonic()
     parsed_job_id = UUID(job_id)
 
     with SessionLocal() as db:
@@ -347,6 +366,7 @@ def rerun_external_enrichment_for_audit(job_id: str) -> None:
                 seo_facts=result.seo_facts or {},
                 crawled_pages=crawled_pages,
                 rendered_pages=None,
+                deadline=_external_enrichment_deadline(settings, task_started),
             )
 
             _mark_job(db, job, AuditStatus.SCORING, "Rescoring enriched audit facts", 82)

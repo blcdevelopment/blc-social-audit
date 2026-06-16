@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Sequence
 from typing import Any
 
@@ -12,6 +13,10 @@ from apps.worker.stages.site_health import collect_site_health_facts
 
 JsonDict = dict[str, Any]
 
+# Below this many seconds of remaining budget, skip the Google Search Console step
+# (search analytics + per-URL inspection) so it cannot push the audit over the limit.
+_GSC_MIN_SECONDS = 30
+
 
 def collect_external_seo_facts(
     *,
@@ -23,6 +28,7 @@ def collect_external_seo_facts(
     seo_facts: JsonDict | None = None,
     crawled_pages: JsonDict | None = None,
     rendered_pages: Sequence[Any] | None = None,
+    deadline: float | None = None,
 ) -> JsonDict:
     technical_crawl = _collect_technical_crawl(
         url=url,
@@ -31,13 +37,17 @@ def collect_external_seo_facts(
         seo_facts=seo_facts or {},
         crawled_pages=crawled_pages or {},
         rendered_pages=rendered_pages,
+        deadline=deadline,
     )
-    google = collect_google_search_console_facts(
-        url=url,
-        page_urls=page_urls,
-        settings=settings,
-        db=db,
-    )
+    if deadline is not None and (deadline - time.monotonic()) < _GSC_MIN_SECONDS:
+        google = _skipped_google("insufficient_time_budget")
+    else:
+        google = collect_google_search_console_facts(
+            url=url,
+            page_urls=page_urls,
+            settings=settings,
+            db=db,
+        )
     return {
         "status": _combined_status(
             technical_crawl,
@@ -64,12 +74,13 @@ def _collect_technical_crawl(
     seo_facts: JsonDict,
     crawled_pages: JsonDict,
     rendered_pages: Sequence[Any] | None,
+    deadline: float | None = None,
 ) -> JsonDict:
     """Fill the technical crawl slot: Screaming Frog when licensed/enabled, else the
     built-in site health sweep. Both emit the same summary keys and issue ids."""
     screaming_frog: JsonDict | None = None
     if settings.screaming_frog_enabled:
-        screaming_frog = collect_screaming_frog_facts(url, audit_id, settings)
+        screaming_frog = collect_screaming_frog_facts(url, audit_id, settings, deadline=deadline)
         if screaming_frog.get("status") == "complete":
             return screaming_frog
 
@@ -79,6 +90,7 @@ def _collect_technical_crawl(
         crawled_pages=crawled_pages,
         rendered_pages=rendered_pages,
         settings=settings,
+        deadline=deadline,
     )
     if screaming_frog is not None and site_health.get("status") != "complete":
         # Neither tool produced usable data — report the Screaming Frog attempt,
@@ -90,6 +102,14 @@ def _collect_technical_crawl(
             "error": screaming_frog.get("error") or screaming_frog.get("reason"),
         }
     return site_health
+
+
+def _skipped_google(reason: str) -> JsonDict:
+    """Search-Console shape returned when the time budget is too low to query Google."""
+    return {
+        "gsc": {"status": "skipped", "reason": reason, "summary": {}, "issues": []},
+        "url_inspection": {"status": "skipped", "reason": reason, "summary": {}, "items": []},
+    }
 
 
 def empty_external_seo_facts(reason: str = "not_collected") -> JsonDict:

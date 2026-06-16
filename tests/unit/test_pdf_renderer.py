@@ -48,7 +48,10 @@ def test_render_report_pdf_qa_variants(
     assert len(reader.pages) == pdf_result.page_count
     assert "Website Audit Report" in text
     assert "Score Overview" not in text
-    assert "combined business-readiness score" in normalized_text
+    # ``.replace("- ", "-")`` collapses a hyphenation line-break: the score cards render
+    # 3-up (narrower columns), so "business-readiness" can wrap at its hyphen and pypdf
+    # extracts it as "business- readiness". The full phrase must still be present.
+    assert "combined business-readiness score" in normalized_text.replace("- ", "-")
     assert "Formula: round((SEO 81 * 45%) + (UX/UI 74 * 55%)) = 77/100" in normalized_text
     assert "It evaluated 2 checks and earned 81 of 100 available points" in normalized_text
     assert "It evaluated 2 checks and earned 74 of 100 available points" in normalized_text

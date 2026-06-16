@@ -163,7 +163,8 @@ def test_no_internal_rule_ids_leak_into_prose() -> None:
     )
     finding = plan.seo.findings[0]
     assert "seo.meta_description" not in finding.title
-    assert "seo.meta_description" not in finding.explanation
+    assert "seo.meta_description" not in finding.meaning
+    assert "seo.meta_description" not in finding.why
 
 
 def test_external_seo_findings_include_real_locations() -> None:
@@ -197,9 +198,10 @@ def test_external_seo_findings_include_real_locations() -> None:
         settings=_settings(),
     )
 
-    explanation = plan.seo.findings[0].explanation
-    assert "https://example.com/broken" in explanation
-    assert "external_seo" not in explanation
+    finding = plan.seo.findings[0]
+    assert "https://example.com/broken" in finding.location_urls
+    assert "external_seo" not in finding.meaning
+    assert "external_seo" not in finding.why
 
 
 def test_plan_is_grounding_safe_on_real_fixture() -> None:

@@ -317,7 +317,13 @@ class ReportFinding(BaseModel):
     section: ReportSectionId
     severity: Literal["info", "low", "medium", "high"]
     title: str
+    # Structured card fields (preferred by the PDF). ``explanation`` is the combined
+    # single-paragraph form, kept for the DOCX export and as a render fallback.
+    meaning: str = ""
+    why: str = ""
     explanation: str
+    location_label: str = ""
+    location_urls: list[str] = Field(default_factory=list)
     evidence_refs: list[str] = Field(default_factory=list)
     source: Literal["commentary", "rubric"] = "commentary"
 
@@ -330,6 +336,8 @@ class ReportRecommendation(BaseModel):
     title: str
     rationale: str
     action_items: list[str] = Field(default_factory=list)
+    location_label: str = ""
+    location_urls: list[str] = Field(default_factory=list)
 
 
 class RoadmapTier(BaseModel):
@@ -788,12 +796,27 @@ def _commentary_findings(
     findings: list[ReportFinding] = []
     for item in _list(section_content.get("findings")):
         payload = _dict(item)
+        meaning = _text(payload.get("meaning"), "")
+        why = _text(payload.get("why"), "")
+        # Compose the legacy single-paragraph explanation (DOCX + render fallback) from the
+        # structured fields when the content plan did not supply one.
+        explanation = (
+            _text(payload.get("explanation"), "")
+            or " ".join(part for part in (meaning, why) if part).strip()
+            or "No explanation provided."
+        )
         findings.append(
             ReportFinding(
                 section=section_id,
                 severity=_severity(payload.get("severity")),
                 title=_text(payload.get("title"), "Finding"),
-                explanation=_text(payload.get("explanation"), "No explanation provided."),
+                meaning=meaning,
+                why=why,
+                explanation=explanation,
+                location_label=_text(payload.get("location_label"), ""),
+                location_urls=[
+                    str(value) for value in _list(payload.get("location_urls")) if value
+                ],
                 evidence_refs=[str(value) for value in _list(payload.get("evidence_refs"))],
                 source="commentary",
             )
@@ -815,6 +838,10 @@ def _commentary_recommendations(
                 title=_text(payload.get("title"), "Recommendation"),
                 rationale=_text(payload.get("rationale"), "Recommended from audit evidence."),
                 action_items=[str(value) for value in _list(payload.get("action_items"))],
+                location_label=_text(payload.get("location_label"), ""),
+                location_urls=[
+                    str(value) for value in _list(payload.get("location_urls")) if value
+                ],
             )
         )
     return recommendations

@@ -64,6 +64,7 @@ def collect_site_health_facts(
     crawled_pages: JsonDict,
     rendered_pages: Sequence[Any] | None,
     settings: Settings,
+    deadline: float | None = None,
 ) -> JsonDict:
     started_at = _utc_now()
     if not settings.site_health_enabled:
@@ -78,6 +79,7 @@ def collect_site_health_facts(
                 rendered_pages=rendered_pages,
                 settings=settings,
                 started_at=started_at,
+                deadline=deadline,
             )
         )
     except SoftTimeLimitExceeded:
@@ -96,6 +98,7 @@ async def _collect(
     rendered_pages: Sequence[Any] | None,
     settings: Settings,
     started_at: str,
+    deadline: float | None = None,
 ) -> JsonDict:
     site_url = str(crawled_pages.get("final_url") or url)
     summary = empty_summary()
@@ -156,6 +159,7 @@ async def _collect(
             examples=examples,
             notes=notes,
             host_allowed_cache=host_allowed_cache,
+            global_deadline=deadline,
         )
 
     summary["sitemap_url_count"] = len(sitemap_urls)
@@ -393,9 +397,14 @@ async def _sweep(
     examples: dict[str, list[str]],
     notes: list[str],
     host_allowed_cache: dict[str, bool],
+    global_deadline: float | None = None,
 ) -> JsonDict:
     semaphore = asyncio.Semaphore(settings.site_health_concurrency)
     deadline = time.monotonic() + settings.site_health_total_budget_seconds
+    if global_deadline is not None:
+        # Never run past the whole-audit deadline, even if the sweep's own budget is
+        # larger than the time the pipeline has left.
+        deadline = min(deadline, global_deadline)
     counters = {"internal_checked": 0, "external_checked": 0, "blocked": 0, "skipped_budget": 0}
     lock = asyncio.Lock()
 

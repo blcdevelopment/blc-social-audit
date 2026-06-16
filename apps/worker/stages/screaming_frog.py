@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import shutil
 import subprocess
+import time
 from collections import Counter, defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -16,8 +17,18 @@ JsonDict = dict[str, Any]
 
 SCREAMING_FROG_SOURCE = "screaming_frog_csv"
 
+# Below this many seconds of remaining budget there is no point starting a crawl that
+# would only time out; skip it so the site-health fallback can use the time instead.
+_MIN_RUN_SECONDS = 30
 
-def collect_screaming_frog_facts(url: str, audit_id: str, settings: Settings) -> JsonDict:
+
+def collect_screaming_frog_facts(
+    url: str,
+    audit_id: str,
+    settings: Settings,
+    *,
+    deadline: float | None = None,
+) -> JsonDict:
     started_at = _utc_now()
     if not settings.screaming_frog_enabled:
         return _skipped("disabled", started_at)
@@ -28,6 +39,10 @@ def collect_screaming_frog_facts(url: str, audit_id: str, settings: Settings) ->
 
     if not _is_http_url(url):
         return _failed("invalid_crawl_url", started_at)
+
+    timeout_seconds = _effective_timeout_seconds(settings, deadline)
+    if timeout_seconds < _MIN_RUN_SECONDS:
+        return _skipped("insufficient_time_budget", started_at)
 
     output_dir = (settings.screaming_frog_output_dir / audit_id).resolve()
     try:
@@ -54,7 +69,7 @@ def collect_screaming_frog_facts(url: str, audit_id: str, settings: Settings) ->
             check=False,
             capture_output=True,
             text=True,
-            timeout=_effective_timeout_seconds(settings),
+            timeout=timeout_seconds,
         )
     except subprocess.TimeoutExpired:
         return _failed("screaming_frog_timeout", started_at, output_dir=output_dir)
@@ -301,18 +316,24 @@ def _int(value: Any) -> int | None:
         return None
 
 
-def _effective_timeout_seconds(settings: Settings) -> int:
-    """Clamp the subprocess timeout under the Celery soft time limit.
+def _effective_timeout_seconds(settings: Settings, deadline: float | None = None) -> int:
+    """Clamp the subprocess timeout under the remaining audit time budget.
 
     The audit task must outlive the Screaming Frog subprocess so this stage can
-    record a 'failed' payload and the rest of the audit can continue; two minutes
-    of the soft-limit budget are reserved for the remaining stages.
+    record a 'failed' payload and the rest of the audit can continue. Two minutes of
+    the soft-limit budget are reserved for the remaining stages, and when a pipeline
+    ``deadline`` is supplied the timeout is further bounded by the time actually left
+    (a 20s slice is held back for the site-health fallback). The result may be small
+    or negative; the caller skips the crawl when it drops below ``_MIN_RUN_SECONDS``.
     """
     configured = int(settings.screaming_frog_timeout_seconds)
     soft_limit = getattr(settings, "celery_task_soft_time_limit_seconds", None)
+    cap = configured
     if isinstance(soft_limit, int | float):
-        return max(30, min(configured, int(soft_limit) - 120))
-    return configured
+        cap = min(cap, int(soft_limit) - 120)
+    if deadline is not None:
+        cap = min(cap, int(deadline - time.monotonic()) - 20)
+    return cap
 
 
 def _resolve_binary(configured: Path | None) -> str | None:

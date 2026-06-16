@@ -139,10 +139,16 @@ def _recommendation_sort_key(rule: JsonDict) -> tuple[int, int, float, str]:
 
 
 def _finding(rule: JsonDict, facts: JsonDict) -> CommentaryFinding:
+    meaning, why = _meaning_and_why(rule)
+    label, urls = _location_bullets(rule, facts)
     return CommentaryFinding(
         severity=_severity(rule.get("impact"), rule.get("result")),
         title=_finding_title(rule),
-        explanation=_explanation(rule, facts),
+        meaning=meaning,
+        why=why,
+        explanation="",
+        location_label=label,
+        location_urls=urls,
         evidence_refs=_evidence_refs(rule),
     )
 
@@ -154,11 +160,16 @@ def _recommendation(rule: JsonDict, facts: JsonDict) -> CommentaryRecommendation
         if isinstance(remediation, str) and remediation.strip()
         else _DEFAULT_ACTION
     )
+    meaning, why = _meaning_and_why(rule)
+    label, urls = _location_bullets(rule, facts)
+    rationale = " ".join(part for part in (meaning, why) if part).strip()
     return CommentaryRecommendation(
         tier=_tier(rule.get("tier")),
         title=_finding_title(rule),
-        rationale=_explanation(rule, facts),
+        rationale=rationale,
         action_items=[action],
+        location_label=label,
+        location_urls=urls,
     )
 
 
@@ -229,16 +240,16 @@ def _finding_title(rule: JsonDict) -> str:
     return "Improvement opportunity"
 
 
-def _explanation(rule: JsonDict, facts: JsonDict) -> str:
+def _meaning_and_why(rule: JsonDict) -> tuple[str, str]:
+    """Return ("what it means" + measurement, "why it matters") as two card-ready
+    strings. Numbers come only from the rule's stored ``evidence.value`` so grounding
+    keeps them; no URLs are included (those go in the bulleted location list)."""
     rule_id = str(rule.get("rule_id") or "")
     context = _RULE_CONTEXT.get(rule_id, _GENERIC_CONTEXT)
-    parts = [
-        context["meaning"],
-        _evidence_sentence(rule, context),
-        context["why"],
-        _where_sentence(rule, facts),
-    ]
-    return " ".join(part for part in parts if part).strip()
+    meaning_parts = [context.get("meaning"), _evidence_sentence(rule, context)]
+    meaning = " ".join(part for part in meaning_parts if part).strip()
+    why = str(context.get("why") or "").strip()
+    return meaning, why
 
 
 def _evidence_sentence(rule: JsonDict, context: JsonDict) -> str | None:
@@ -469,17 +480,19 @@ _RULE_CONTEXT: dict[str, JsonDict] = {
 }
 
 
-def _where_sentence(rule: JsonDict, facts: JsonDict) -> str | None:
+def _location_bullets(rule: JsonDict, facts: JsonDict) -> tuple[str, list[str]]:
+    """Return (label, bullet items) for "where to start", so the report can render the
+    locations as a list instead of cramming URLs into the end of a paragraph."""
     rule_id = str(rule.get("rule_id") or "")
     examples = _location_examples(rule_id, facts)
     if examples:
-        return "Start by checking " + ", ".join(examples[:3]) + "."
+        return "Start by checking", [str(example) for example in examples[:3]]
 
     if "pages[0]" in str(rule.get("fact_path") or ""):
         homepage = _first_page_url(facts)
         if homepage:
-            return f"Start by checking the homepage: {homepage}."
-    return None
+            return "Start by checking the homepage", [homepage]
+    return "", []
 
 
 def _location_examples(rule_id: str, facts: JsonDict) -> list[str]:

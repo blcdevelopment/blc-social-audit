@@ -34,8 +34,11 @@ class Settings(BaseSettings):
     audit_enqueue_enabled: bool = True
     # Hard limit kills the worker process; soft limit raises inside the task so the
     # job can be marked FAILED instead of leaving a row stuck in a non-terminal state.
-    celery_task_time_limit_seconds: int = Field(default=900, ge=30)
-    celery_task_soft_time_limit_seconds: int = Field(default=840, ge=15)
+    # 30-minute hard / 29-minute soft ceiling. Large sites with Screaming Frog and
+    # full PageSpeed need the headroom; the per-stage time budgets still keep a single
+    # audit from running anywhere near this long on a normal site.
+    celery_task_time_limit_seconds: int = Field(default=1800, ge=30)
+    celery_task_soft_time_limit_seconds: int = Field(default=1740, ge=15)
 
     local_report_storage_dir: Path = Path("./storage/reports")
     local_screenshot_storage_dir: Path = Path("./storage/screenshots")
@@ -57,6 +60,11 @@ class Settings(BaseSettings):
     psi_timeout_seconds: int = Field(default=60, ge=1)
     psi_max_retries: int = Field(default=3, ge=1)
     psi_cache_ttl_seconds: int = Field(default=86400, ge=0)
+    # Total wall-clock budget for the PageSpeed stage. PSI runs serially over each
+    # crawled page (mobile + desktop); without a budget a slow or rate-limited API can
+    # push the whole audit past the Celery soft time limit. When the budget is reached
+    # the stage stops issuing new requests and returns the pages collected so far.
+    psi_total_budget_seconds: int = Field(default=360, ge=30)
 
     screaming_frog_enabled: bool = False
     screaming_frog_binary: Path | None = None

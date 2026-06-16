@@ -15,7 +15,9 @@ SENTENCE_RE = re.compile(r"(?<=[.!?])\s+")
 #     bracketed index is not a measurement.
 #   - action_items: prescriptive advice that legitimately carries target numbers (e.g.
 #     "70-160 characters", "1-5 fields") - guidance, not a claim about the site.
-UNGROUNDED_KEYS = frozenset({"evidence_refs", "action_items"})
+#   - location_urls / location_label: "where to start" addresses (URLs can contain
+#     digits like ".../96-percent-failure/") - locations, not measurements.
+UNGROUNDED_KEYS = frozenset({"evidence_refs", "action_items", "location_urls", "location_label"})
 # Timeframe/duration phrases (e.g. "30 days", "1-3 months", "3 to 12 months") are
 # rhetorical recommendation language, not measured site facts, so the numbers in them
 # must not trigger sentence stripping. They are masked out before grounding the rest.
