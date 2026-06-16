@@ -212,6 +212,9 @@ cython_debug/
 tempCodeRunnerFile.py
 .DS_Store
 
+# Local Mermaid diagram scratch files (architecture.mmd, audit-flow.mmd, etc.)
+*.mmd
+
 # Ruff stuff:
 .ruff_cache/
 
