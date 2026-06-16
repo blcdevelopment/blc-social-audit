@@ -1,7 +1,12 @@
 # 11 — Commentary Consistency Plan (deterministic findings, optional LLM polish)
 
-> **Status:** Phase 1 **implemented** (deterministic content plan, rubric v2 metadata,
-> grounding scoping, tests, QA). Phases 2–3 are designed so they drop in without rework.
+> **Status:** Phase 1 **implemented — verified 2026-06-16** (deterministic content plan
+> [content_plan.py](../apps/worker/stages/content_plan.py); `generate_commentary` returns
+> `status/provider/model == "deterministic"`; `RubricRule` carries
+> `impact`/`tier`/`finding_label`/`remediation`/`surface_as_finding`;
+> `commentary_max_findings_per_section` / `commentary_max_recommendations_per_section`
+> (defaults 5) in config; grounding reverts emptied fields to baseline rather than leaking a
+> placeholder). Phases 2–3 are designed so they drop in without rework.
 > This does **not** touch crawling, extraction, or the deterministic scoring engine — only
 > how findings/recommendations are *authored*.
 > **Approval recorded:** build Phase 1 now structured so Phase 2 (LLM polish) drops in
@@ -29,7 +34,14 @@ days. That is gold-plating (Phase 3, deferred).
 
 ---
 
-## 2. What the current system actually does (verified against code)
+## 2. The problem this plan solved — pre-Phase-1 "before" snapshot
+
+> **Historical note (2026-06-16):** the issues and line anchors below describe the
+> **pre-Phase-1** state this plan set out to fix. Phase 1 has since shipped (see the status
+> banner above), so this table is a "before" snapshot, not current behavior — issues #1–#6 are
+> all resolved (the LLM-authoring fallback path was deleted, grounding reverts to baseline, and
+> the rubric now carries `impact`/`tier`/`finding_label`/`remediation`/`surface_as_finding`).
+> The referenced line numbers point at code as it was *before* the fix and no longer match.
 
 | # | Issue | Evidence in code |
 |---|---|---|
@@ -111,6 +123,10 @@ def build_content_plan(
 ) -> CommentaryContent:        # the EXISTING model from commentary.py
     ...
 ```
+
+> **As-built (2026-06-16):** the shipped signature also takes an
+> `external_seo_facts: JsonDict | None = None` keyword (added for the external-SEO/GSC rules);
+> `generate_commentary` forwards it through. The sketch above predates that parameter.
 
 Responsibilities, all deterministic:
 
@@ -298,8 +314,9 @@ the leak is still latent and must be removed:
 No structural change (same `CommentaryContent`). With the plan always populated:
 
 - `_fallback_findings` / the `score < 70` severity heuristic at
-  [report_payload.py:307-340](../apps/worker/stages/report_payload.py#L307-L340) become
+  [report_payload.py:850-860](../apps/worker/stages/report_payload.py#L850-L860) become
   dead-but-harmless. Keep as defense-in-depth in Phase 1; consider deleting in a follow-up.
+  (As-built 2026-06-16: still present and unused, exactly as planned.)
 
 ---
 
@@ -412,7 +429,7 @@ needed and a `_commentary_diff` helper mirroring `_rule_diff`.
 3. **Two existing commentary tests change meaning** — update, don't delete blindly; they
    encode the old two-path behavior we are intentionally removing.
 4. **Don't widen grounding's trusted set.** The deliberate choice to exclude rule
-   weights/ratios from "known numbers" ([tasks.py:174-178](../apps/worker/tasks.py#L174-L178))
+   weights/ratios from "known numbers" ([tasks.py:282-285](../apps/worker/tasks.py#L282-L285))
    stays; baseline prose respects it by construction.
 5. **PSI skip stays graceful** — `skipped` rules are not findings, so a missing PSI key never
    manufactures a finding (matches today's behavior).

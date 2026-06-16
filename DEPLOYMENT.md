@@ -1,6 +1,8 @@
 # Deployment Guide — BLC Website Audit
 
-> **Status (2026-06-10): ✅ Build-verified, ready to deploy.**
+> **Status (2026-06-10): ✅ Build-verified, ready to deploy.** *(Last verified against the
+> code: 2026-06-16 — stack, Caddy routing, CI/CD flow, and the `deploy/deploy.sh` `/health`
+> gate all still match.)*
 > All three production images (`api`, `frontend`, `worker`) build cleanly and the
 > auth/architecture has been reviewed end-to-end. The remaining work is **operator-side
 > only** (secrets, the box, and the Clerk dashboard) — no code changes are required.
@@ -17,8 +19,9 @@ For *how the app is built* (pipeline, scoring, conventions), see [CLAUDE.md](CLA
 ## 1. What we are deploying
 
 A Phase-1 website-audit app: submit a URL → crawl with Playwright → collect PageSpeed
-Insights → extract SEO + UX/UI facts → score deterministically → generate grounded AI
-commentary → render a branded PDF → expose it through a Next.js operator UI.
+Insights → extract SEO + UX/UI facts (plus an external-SEO sweep) → score deterministically
+→ generate grounded, fully deterministic commentary (Phase 1 calls no LLM) → render a
+branded PDF (DOCX on demand) → expose it through a Next.js operator UI.
 
 | Layer | Tech | Container |
 |---|---|---|
@@ -216,12 +219,17 @@ CLERK_ISSUER=https://immortal-quail-38.clerk.accounts.dev   # exact Frontend API
 CLERK_AUTHORIZED_PARTIES=https://ai.builderleadconverter.com
 
 # --- Optional (safe to leave blank; app degrades gracefully) ---
-OPENAI_API_KEY=
+OPENAI_API_KEY=          # Phase-1 commentary is fully deterministic; this is dormant scaffolding
 GOOGLE_PSI_API_KEY=
 ```
 > `CLERK_ISSUER` is mandatory: empty → compose **aborts** (intended fail-fast); a wrong
 > slug/scheme → **every** audit request returns 401. Verify the slug matches your
 > `pk_test_` key's instance.
+>
+> Other integrations are optional and off by default — the external-SEO sweep runs built-in
+> (no key), while Google Search Console (`GOOGLE_OAUTH_*` / `GSC_*`) and the licensed
+> Screaming Frog CLI (`SCREAMING_FROG_*`) stay disabled unless configured. See
+> [.env.template](.env.template) for the full list; leaving them blank is a supported path.
 
 ### Step 5 — Build & launch
 ```bash
@@ -406,7 +414,7 @@ volume contents periodically.
 | **API auth boundary** | ✅ Every `/audits` endpoint requires a valid Clerk token (`require_user`). |
 | **Secrets in images** | ✅ `.dockerignore` keeps `.env` out of all images; frontend never sees the DB/OpenAI secrets. |
 | **TLS** | ✅ Caddy auto-issues + auto-renews Let's Encrypt; `caddy_data` volume persists certs. |
-| **SSRF** | Crawler blocks private/loopback/metadata IPs pre-navigation; mid-crawl sub-resource interception is **not** done (known limitation — see docs/06). |
+| **SSRF** | Crawler blocks private/loopback/metadata IPs pre-navigation and re-validates the post-redirect host; the external-SEO site-health sweep re-validates **every** redirect hop. The page crawler's mid-crawl sub-resource interception is still **not** done (known limitation — see docs/06). |
 
 ---
 

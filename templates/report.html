@@ -1,8 +1,8 @@
 {% macro score_gauge(score, max_score, ring, size) -%}
 <div class="score-gauge score-gauge-{{ size }}">
   <svg class="gauge-ring" viewBox="0 0 36 36" xmlns="http://www.w3.org/2000/svg">
-    <circle class="gauge-track" cx="18" cy="18" r="15.915"></circle>
-    <circle class="gauge-arc" cx="18" cy="18" r="15.915" stroke="{{ ring }}" stroke-dasharray="{{ score }} {{ 100 - score }}" transform="rotate(-90 18 18)"></circle>
+    <circle class="gauge-track" cx="18" cy="18" r="15.915" fill="#ffffff"></circle>
+    <circle class="gauge-arc" cx="18" cy="18" r="15.915" fill="none" stroke="{{ ring }}" stroke-dasharray="{{ score }} {{ 100 - score }}" transform="rotate(-90 18 18)"></circle>
   </svg>
   <div class="gauge-label">
     <strong>{{ score }}</strong>
@@ -11,7 +11,7 @@
 </div>
 {%- endmacro %}
 {% macro va_seg_arc(pct, start, color) -%}
-{% if pct and pct > 0 %}<circle class="va-donut-arc" cx="18" cy="18" r="15.915" stroke="{{ color }}" stroke-dasharray="{{ pct }} {{ 100 - pct }}" transform="rotate({{ (start * 3.6) - 90 }} 18 18)"></circle>{% endif %}
+{% if pct and pct > 0 %}<circle class="va-donut-arc" cx="18" cy="18" r="15.915" fill="none" stroke="{{ color }}" stroke-dasharray="{{ pct }} {{ 100 - pct }}" transform="rotate({{ (start * 3.6) - 90 }} 18 18)"></circle>{% endif %}
 {%- endmacro %}
 <!doctype html>
 <html lang="en">
@@ -516,7 +516,7 @@
       <p class="eyebrow">Action Roadmap</p>
       <h2>Prioritized lead generation roadmap</h2>
       <p class="helper-copy">
-        Work left to right: start with quick wins, then mid-term improvements, then long-term
+        Work top to bottom: start with quick wins, then mid-term improvements, then long-term
         growth. Each card is a recommendation tied to the findings earlier in this report.
       </p>
       <div class="roadmap-grid">
@@ -711,7 +711,7 @@
             <div class="va-donut-wrap">
               <div class="va-donut">
                 <svg class="va-donut-svg" viewBox="0 0 36 36" xmlns="http://www.w3.org/2000/svg">
-                  <circle class="va-donut-track" cx="18" cy="18" r="15.915"></circle>
+                  <circle class="va-donut-track" cx="18" cy="18" r="15.915" fill="#ffffff"></circle>
                   {{ va_seg_arc(ok_pct, 0, "#28864b") }}
                   {{ va_seg_arc(fail_pct, ok_pct, "#b42318") }}
                   {{ va_seg_arc(skip_pct, ok_pct + fail_pct, "#c98a16") }}
@@ -842,7 +842,7 @@
               <div class="va-donut-wrap">
                 <div class="va-donut">
                   <svg class="va-donut-svg" viewBox="0 0 36 36" xmlns="http://www.w3.org/2000/svg">
-                    <circle class="va-donut-track" cx="18" cy="18" r="15.915"></circle>
+                    <circle class="va-donut-track" cx="18" cy="18" r="15.915" fill="#ffffff"></circle>
                     {{ va_seg_arc(on_pct, 0, "#28864b") }}
                     {{ va_seg_arc(not_pct, on_pct, "#b42318") }}
                     {{ va_seg_arc(fail_pct2, on_pct + not_pct, "#98a2b3") }}

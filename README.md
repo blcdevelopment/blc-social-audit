@@ -2,9 +2,9 @@
 
 Local-first Phase 1 repository for the Builder Lead Converter website audit MVP.
 
-The Phase 1 build focuses on a website audit pipeline: URL submission, Playwright crawling, PageSpeed data collection, SEO and UX/UI extraction, deterministic scoring, grounded OpenAI/ChatGPT commentary, branded PDF generation, and an internal operator UI.
+The Phase 1 build focuses on a website audit pipeline: URL submission, Playwright crawling, PageSpeed data collection, SEO and UX/UI extraction, deterministic scoring, deterministic grounded commentary, branded PDF/DOCX generation, and an internal operator UI (Clerk-gated).
 
-Production and AWS deployment work is intentionally prepared after the local application works end-to-end.
+The application is deployed and live at https://ai.builderleadconverter.com. See [DEPLOYMENT.md](DEPLOYMENT.md) for the authoritative production deployment reference (Linode VM, Docker Compose, Caddy TLS, and GitHub Actions CI/CD).
 
 ## Phase 1 Foundation Through Epic P1-E6
 
@@ -30,7 +30,7 @@ P1-E5 internal operator UI, and the Epic P1-E6 QA, packaging, and handoff work:
 - Deterministic SEO and UX/UI fact extractors backed by fixture tests.
 - YAML scoring rubrics in `rubrics/` with schema validation and versioning.
 - Rule-based SEO, UX/UI, and Lead Generation Readiness scoring.
-- ChatGPT commentary prompts in `prompts/`, with a local fallback when no OpenAI key is configured.
+- Fully deterministic Phase 1 commentary built from a content plan (no LLM call); `prompts/` are wired only into a dormant OpenAI polish path reserved for Phase 2.
 - Grounding validation that strips unsupported numeric commentary claims.
 - Report payload composition from audit metadata, scores, findings, recommendations, validation,
   PageSpeed, and crawl QA artifacts.
@@ -40,6 +40,9 @@ P1-E5 internal operator UI, and the Epic P1-E6 QA, packaging, and handoff work:
 - Operator UI screens: audit submission with validation and error handling, an
   auto-polling progress + result page (stage stepper, percentage, scores, findings,
   PDF download), and an audit history table with status, scores, and report links.
+- Clerk authentication (opt-in): the `/audits/*` router and most Google routes require
+  a verified Clerk session when `CLERK_ISSUER` is set; with `CLERK_ISSUER` empty the API
+  is open, which is how local dev, the QA harness, and tests run unauthenticated.
 - Hermetic QA harness in `scripts/` that runs the real pipeline end-to-end and
   proves reproducibility with no PostgreSQL, Docker, or paid API keys required.
 - A `Makefile` of common developer and QA commands.
@@ -137,29 +140,36 @@ P1-E5 internal operator UI, and the Epic P1-E6 QA, packaging, and handoff work:
 ## API Endpoints
 
 - `GET /health`
-- `GET /docs`
-- `GET /openapi.json`
-- `POST /audits`
-- `GET /audits`
+- `GET /` (redirects to `/docs`)
+- `GET /docs`, `GET /redoc`, `GET /openapi.json`
+- `POST /audits` (create + enqueue, 201)
+- `GET /audits` (`limit` 1–100, default 25; `offset`)
 - `GET /audits/{job_id}` (audit detail with scores and composed report payload)
 - `GET /audits/{job_id}/status`
-- `GET /audits/{job_id}/report`
-- `GET /audits/{job_id}/docx`
-- `POST /audits/{job_id}/rerun-enrichment`
+- `POST /audits/{job_id}/rerun-enrichment` (re-runs external SEO → rescore → recomment → re-render)
+- `GET /audits/{job_id}/report` (streams the PDF)
+- `GET /audits/{job_id}/docx` (renders the DOCX on demand if absent)
 - `GET /google/search-console/connect`
+- `GET /google/search-console/connect-url`
+- `GET /google/search-console/callback` (unauthenticated; Google calls it, protected by an HMAC-signed, time-limited CSRF state)
 - `GET /google/search-console/properties`
+
+When `CLERK_ISSUER` is configured, the `/audits/*` router and the Google routes (except the
+OAuth callback) require a verified Clerk Bearer token or `__session` cookie.
 
 The current worker runs collection, scoring, commentary, grounding validation, report payload
 composition, and branded PDF/DOCX rendering. It crawls pages, collects or skips PageSpeed facts,
-extracts SEO/UX facts, optionally enriches with Screaming Frog and Google Search Console facts,
-scores the audit through YAML rubrics, generates deterministic grounded commentary, validates
-numeric claims, renders exports into local storage, and stores the final export paths in
-`audit_results`.
+extracts SEO/UX facts, optionally enriches with the built-in site-health sweep (or Screaming Frog
+when licensed) and Google Search Console facts, scores the audit through YAML rubrics, generates
+deterministic grounded commentary, validates numeric claims, renders exports into local storage,
+and stores the final export paths in `audit_results`.
 
 ## Optional SEO Enrichment
 
-Screaming Frog is disabled by default. To enable it on a worker that has SEO Spider installed
-and licensed, set:
+The default technical crawl is a built-in site-health sweep (tool id `site_health_sweep`) that
+needs no extra dependencies and re-validates every redirect hop through the SSRF guard. Screaming
+Frog is an optional alternative, disabled by default. To enable it on a worker that has SEO Spider
+installed and licensed, set:
 
 ```bash
 SCREAMING_FROG_ENABLED=true
@@ -208,3 +218,5 @@ make docker-up    # build + start the local stack
 | [docs/08_PHASE2_PLAN.md](docs/08_PHASE2_PLAN.md) | Phase 2 scope, approach & timeline |
 | [docs/09_PHASE2_JIRA_PLAN.md](docs/09_PHASE2_JIRA_PLAN.md) | Phase 2 Jira epics, tasks & tracking board (copy-paste ready) |
 | [docs/10_PHASE2_IMPLEMENTATION.md](docs/10_PHASE2_IMPLEMENTATION.md) | Phase 2 build manual — code touch-points & sequencing |
+| [docs/11_COMMENTARY_CONSISTENCY_PLAN.md](docs/11_COMMENTARY_CONSISTENCY_PLAN.md) | Commentary consistency plan |
+| [DEPLOYMENT.md](DEPLOYMENT.md) | Authoritative production deployment reference (live stack, CI/CD) |

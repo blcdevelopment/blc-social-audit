@@ -16,6 +16,15 @@ the build manual in [`docs/10_PHASE2_IMPLEMENTATION.md`](10_PHASE2_IMPLEMENTATIO
 > become **epics**, not part of the ID. The mapping is: **A → P2-E2**, **D → P2-E3**,
 > **B → P2-E4**, **C → P2-E5**, with **P2-E1** as discovery.
 
+> **Status reconciliation (2026-06-16).** Several Workstream-A (Epic P2-E2)
+> productionization items have **already shipped — ahead of this plan**: **team auth
+> (Clerk)**, **managed hosting (Linode + Caddy)**, and **CI/CD auto-deploy on merge to
+> `main`**. The corresponding rows in the §3 tracking board are marked **Done (shipped
+> ahead of plan, 2026-06-16)**; everything else is unchanged. See the root
+> **`DEPLOYMENT.md`** for the authoritative as-built description. The remaining P2-E2
+> items (S3 storage, full request-level SSRF interception, observability/retention,
+> dashboard/share) and all of P2-E3/P2-E4/P2-E5 remain to do.
+
 ---
 
 ## 1. Jira Settings
@@ -99,10 +108,10 @@ rewriting it**.
 | P2-3 | Bright Data Paid Smoke Test on Real Builder Accounts | Task | P2-E1 | ⬜ | Gate before P2-20 |
 | P2-4 | Draft `rubrics/social.yaml` & Gather Calibration Accounts | Task | P2-E1 | ⬜ | Feeds P2-23 |
 | P2-5 | Choose Hosting / Auth / Storage Stack & Confirm Volume | Task | P2-E1 | ⬜ | Feeds P2-6/P2-7/P2-9 |
-| P2-6 | Lightweight Team Authentication (API + UI) | Task | P2-E2 | ⬜ | No multi-tenancy |
+| P2-6 | Lightweight Team Authentication (API + UI) | Task | P2-E2 | ✅ Done (shipped ahead of plan, 2026-06-16) | Clerk auth live, opt-in via `CLERK_ISSUER`; no multi-tenancy (see `DEPLOYMENT.md`) |
 | P2-7 | Storage Interface + S3 Report/Screenshot Backend | Task | P2-E2 | ⬜ | None exists today |
 | P2-8 | Complete Request-Level SSRF Interception | Task | P2-E2 | ⬜ | Closes Known-Limitations §2 |
-| P2-9 | Managed Hosting + CI/CD Deploy | Task | P2-E2 | ⬜ | DB, workers, API, UI, TLS |
+| P2-9 | Managed Hosting + CI/CD Deploy | Task | P2-E2 | ✅ Done (shipped ahead of plan, 2026-06-16) | Live on Linode + Caddy (TLS); CI/CD auto-deploy on merge to main (see `DEPLOYMENT.md`) |
 | P2-10 | Observability: Sentry, Metrics, Alerts, Backups, Retention | Task | P2-E2 | ⬜ | |
 | P2-11 | Web Dashboard + History/Re-run/Share + White-Label | Story | P2-E2 | ⬜ | Reuses report payload |
 | P2-12 | Structured-Data (JSON-LD) Extractor + Schema Rubric Rules | Task | P2-E3 | ⬜ | |

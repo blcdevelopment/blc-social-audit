@@ -305,7 +305,7 @@ td span {
 }
 
 .gauge-track {
-  fill: none;
+  fill: #ffffff;
   stroke: #eaecf0;
   stroke-width: 3.1;
 }
@@ -843,7 +843,7 @@ td span {
 .roadmap-grid {
   display: grid;
   gap: 0.16in;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   margin-top: 0.16in;
 }
 
@@ -1113,7 +1113,7 @@ td span {
 }
 
 .va-donut-track {
-  fill: none;
+  fill: #ffffff;
   stroke: #eaecf0;
   stroke-width: 3.4;
 }

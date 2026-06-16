@@ -3,6 +3,10 @@
 Step-by-step setup for the local-first BLC Website Audit system. This expands on
 the quick start in the repository `README.md`.
 
+> **Last reconciled: 2026-06-16.** For *production* deployment (Linode VM, Docker
+> Compose prod stack, Caddy/TLS, CI/CD) see [`DEPLOYMENT.md`](../DEPLOYMENT.md) —
+> this guide covers local development only.
+
 ---
 
 ## 1. Prerequisites
@@ -50,15 +54,31 @@ Then edit `.env`. Every setting is documented in `.env.template` and parsed by
 |---|---|---|
 | Database | `DATABASE_URL`, `POSTGRES_*` | PostgreSQL connection |
 | Queue | `REDIS_URL`, `CELERY_*` | Celery broker/result backend |
-| OpenAI | `OPENAI_API_KEY`, `OPENAI_MODEL` | Optional; commentary falls back locally when empty |
+| OpenAI | `OPENAI_API_KEY`, `OPENAI_MODEL` | **Phase 1 does not call OpenAI** — commentary is fully deterministic. These keys feed only the dormant Phase 2 LLM-polish path |
 | PageSpeed | `GOOGLE_PSI_API_KEY`, `PSI_*` | Optional; PSI rules skip gracefully when empty |
 | Crawler | `CRAWLER_*` | Page cap, timeouts, robots, private-host policy |
-| Storage | `LOCAL_REPORT_STORAGE_DIR`, `LOCAL_SCREENSHOT_STORAGE_DIR` | Local filesystem paths for PDFs and screenshots |
+| Storage | `LOCAL_REPORT_STORAGE_DIR`, `LOCAL_SCREENSHOT_STORAGE_DIR`, `LOCAL_TOOL_EXPORT_STORAGE_DIR` | Local filesystem paths for PDFs, screenshots, and external-tool exports |
 | Rubrics/prompts/templates | `RUBRIC_*`, `COMMENTARY_*`, `REPORT_*`, `BRAND_CONFIG_PATH` | Paths to scoring/branding assets |
 
-> Without `OPENAI_API_KEY` and `GOOGLE_PSI_API_KEY`, the system still completes a
-> full audit: commentary uses a deterministic local fallback and PageSpeed rules
-> are skipped. This is exactly what the QA harness relies on.
+### Optional integrations (all off by default)
+
+The app runs **open and fully functional** with none of these configured; each
+degrades gracefully (sources that aren't `complete` have their summary stripped
+before scoring, so a missing/failed integration never penalizes a score or aborts
+an audit). Add them only when you want the corresponding capability.
+
+| Group | Keys | Notes |
+|---|---|---|
+| Clerk auth | `CLERK_ISSUER`, `CLERK_SECRET_KEY`, `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_AUTHORIZED_PARTIES` | **Opt-in.** Leave `CLERK_ISSUER` empty and the API is **open** (this is how local dev, tests, and the QA harness run unauthenticated). Set `CLERK_ISSUER` to gate the whole `/audits/*` router behind a Clerk JWT |
+| Site Health sweep | `SITE_HEALTH_*` | Built-in technical-crawl source (tool id `site_health_sweep`), **enabled by default**, zero extra dependencies. Caps internal/external URL counts, concurrency, and time budget |
+| Screaming Frog | `SCREAMING_FROG_*` | Optional licensed CLI for technical crawl; `SCREAMING_FROG_ENABLED=false` by default. When enabled it is preferred over the site-health sweep, which remains the fallback |
+| Google OAuth / Search Console | `GOOGLE_OAUTH_*`, `GOOGLE_OAUTH_STATE_SECRET`, `GSC_*`, `URL_INSPECTION_MAX_URLS` | Optional OAuth connection for Search Analytics + URL Inspection facts |
+
+> Without `OPENAI_API_KEY`, `GOOGLE_PSI_API_KEY`, `CLERK_ISSUER`, Screaming Frog, or
+> Google OAuth, the system still completes a full audit: the API is open, commentary
+> is the deterministic content plan, PageSpeed rules are skipped, and external-SEO
+> sources fall back (the built-in site-health sweep) or skip. This is exactly what the
+> QA harness relies on.
 
 ---
 
@@ -125,7 +145,7 @@ See [`docs/03_ARCHITECTURE.md`](03_ARCHITECTURE.md) §8 for what the QA harness 
 | Crawler cannot launch a browser | Playwright browser not installed | `make browsers`; or set `CRAWLER_CHROMIUM_EXECUTABLE_PATH` |
 | `alembic upgrade head` fails on SQLite | Migration targets PostgreSQL (`pgcrypto`) | Run against PostgreSQL; the SQLite path is only used by the hermetic QA harness via `create_all` |
 | API returns 503 on submit | Worker/Redis not reachable | Ensure Redis and the Celery worker are running |
-| Commentary shows `local_fallback` | No `OPENAI_API_KEY` set | Expected; set the key to use OpenAI |
+| Commentary provider is `deterministic` | Phase 1 design — no LLM is called | Expected; the deterministic content plan is the output unconditionally. `OPENAI_API_KEY` only feeds the dormant Phase 2 polish path |
 
 ---
 
@@ -135,10 +155,10 @@ See [`docs/03_ARCHITECTURE.md`](03_ARCHITECTURE.md) §8 for what the QA harness 
 |---|---|
 | `apps/api/` | FastAPI app, routes, schemas |
 | `apps/worker/` | Celery app, `tasks.py` orchestrator, `stages/` pipeline modules |
-| `apps/shared/` | Settings, database, models, audit states, report storage |
+| `apps/shared/` | Settings, database engine/session, ORM models, audit-state enum (storage dirs are config values in `config.py`) |
 | `apps/frontend/` | Next.js operator UI |
 | `rubrics/` | YAML scoring rubrics (see `docs/04_RUBRIC_GUIDE.md`) |
-| `prompts/` | OpenAI commentary system/user prompts |
+| `prompts/` | Commentary system/user prompts (wired into the dormant Phase 2 LLM-polish path only) |
 | `templates/`, `brand/`, `assets/` | PDF template, CSS, branding |
 | `migrations/` | Alembic migrations |
 | `scripts/` | QA harness (`qa_e2e.py`, `qa_reproducibility.py`, `qa_common.py`) |

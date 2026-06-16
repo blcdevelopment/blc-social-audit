@@ -10,6 +10,15 @@ Jira epics/tasks + tracking board → [`docs/09_PHASE2_JIRA_PLAN.md`](09_PHASE2_
 > `P2-1…P2-28`. Epic map: **P2-E1** discovery · **P2-E2** productionization · **P2-E3** deepen
 > website · **P2-E4** social · **P2-E5** enrichment (v3).
 
+> **Status reconciliation (2026-06-16).** Several Workstream-A / Epic-P2-E2
+> productionization items have **already shipped — ahead of this build manual**: **team
+> auth (Clerk)** (opt-in via `CLERK_ISSUER`; §4.1), **managed hosting (Linode + Caddy)**,
+> and **CI/CD auto-deploy on merge to `main`** (§4.4). The root **`DEPLOYMENT.md`** is the
+> authoritative as-built description. The §1 baseline and the touch-points below were
+> written against pre-auth Phase 1; treat §4.1/§4.4 as partly delivered. The rest of
+> P2-E2 (S3 storage, full request-level SSRF interception, observability/retention,
+> dashboard/share) and all of P2-E3/P2-E4/P2-E5 remain unbuilt.
+
 ---
 
 ## 0. How to read this document
@@ -44,7 +53,9 @@ progress into `audit_jobs` via `_mark_job`:
    `PSI_SCOPE`/`PSI_MAX_PAGES`, graceful skip).
 3. **Extract** — `extractor_seo.extract_seo_facts(pages)` + `extractor_uxui.extract_uxui_facts(pages)`.
 4. **Score** — `scoring.score_audit(seo_facts, uxui_facts, psi_facts, settings)`.
-5. **Commentate** — `commentary.generate_commentary(...)` (OpenAI, local fallback when no key).
+5. **Commentate** — `commentary.generate_commentary(...)` (Phase 1 is **fully deterministic**:
+   it returns a `build_content_plan` result with `provider`/`model` == `"deterministic"` and
+   never calls OpenAI; `_call_openai` is dormant scaffolding for Phase 2 polish).
 6. **Validate** — `grounding_validator.validate_commentary_grounding(...)`.
 7. **Compose + render** — `report_payload.compose_report_payload(job, result)` →
    `pdf_renderer.render_audit_pdf(job, result, settings)` → PDF written under
@@ -66,15 +77,22 @@ Key facts that shape Phase 2:
   [`apps/api/schemas/audits.py`](../apps/api/schemas/audits.py). Social handles are new input.
 - **There is no storage abstraction.** `pdf_renderer.render_audit_pdf` writes straight to
   `settings.local_report_storage_dir`; screenshots go to `settings.local_screenshot_storage_dir`.
-- **There is no auth.** `apps/api/main.py` mounts the routers with CORS only; every route in
-  `apps/api/routes/audits.py` is open.
+- **Auth is now live (Clerk), opt-in via `CLERK_ISSUER`.** *(Updated 2026-06-16 — shipped
+  ahead of this plan; see `DEPLOYMENT.md`.)* `apps/api/auth.py` `require_user()` verifies a
+  Clerk JWT and the `/audits/*` router is gated with `Depends(require_user)`. When
+  `CLERK_ISSUER` is unset the dependency returns `None` and the API runs **open** — which is
+  exactly how local dev, the QA harness, and tests run unauthenticated. The original Phase-1
+  baseline (CORS only, every route open) survives only in that key-less mode; P2-6's
+  remaining work is hardening (open sign-up → invite-only).
 - **SSRF is partial.** The crawler validates the start URL + blocks private hosts by default
   (`crawler_allow_private_hosts=False`), but does not re-validate redirects/sub-resources.
 - **The report payload is two-section + composite.** `report_payload.py` types
   `ReportSectionId = Literal["seo", "uxui", "lead_generation"]` and `ScoreCard.id =
   Literal["lead_gen", "seo", "uxui"]`. A social section/card is a typed addition here.
-- **39 unit tests pass** (`pytest`), incl. scoring, extractors, grounding, report payload,
-  PDF, and a hermetic QA harness (`scripts/qa_e2e.py`, `scripts/qa_reproducibility.py`).
+- **18 unit-test files** under `tests/unit/` pass (`pytest`), covering scoring, extractors,
+  grounding, report payload, PDF/DOCX, PSI, crawler utils, external-SEO (site-health,
+  Screaming Frog, GSC), commentary/content-plan, API, lifecycle, and the full worker run,
+  plus a hermetic QA harness (`scripts/qa_e2e.py`, `scripts/qa_reproducibility.py`).
 
 ---
 

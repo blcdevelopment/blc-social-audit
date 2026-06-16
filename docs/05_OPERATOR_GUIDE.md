@@ -1,26 +1,50 @@
 # Operator Guide (P1-26)
 
-For the BLC operator running website audits through the internal UI. No coding
-required — just the running stack.
+For the BLC operator running website audits through the UI. No coding required —
+just the running stack.
+
+> **Last reconciled: 2026-06-16.**
 
 ---
 
 ## 1. Before You Start
 
-Make sure the stack is running (a developer typically does this):
+**Production** runs at **https://ai.builderleadconverter.com** (single Linode VM,
+Caddy-terminated TLS). You sign in with Clerk (see §2) — there's nothing to start.
+
+For **local development** a developer typically brings up the stack:
 
 - API at `http://localhost:8000` (check `http://localhost:8000/health`)
 - Celery worker running (it does the actual audit work)
 - Operator UI at `http://localhost:3000`
 
-If you want real performance data and AI-written commentary, the developer must
-set `GOOGLE_PSI_API_KEY` and `OPENAI_API_KEY` in `.env`. Without them, audits
-still complete: PageSpeed sections are marked skipped and commentary uses a
-built-in fallback.
+If you want real PageSpeed performance data, the developer must set
+`GOOGLE_PSI_API_KEY` in `.env`. Without it, audits still complete: PageSpeed
+sections are simply marked skipped and do not lower the score. (Phase 1 commentary
+is fully deterministic — it is generated from the extracted facts and scores, and
+does **not** call any LLM, so no `OPENAI_API_KEY` is needed for the report prose.)
 
 ---
 
-## 2. Submitting an Audit
+## 2. Signing In (Clerk)
+
+Production is gated by **Clerk** authentication. Open
+`https://ai.builderleadconverter.com`, and if you're signed out you'll see a
+Welcome screen with a sign-in button. Sign in with your operator account; once
+signed in, the full app (submit, history, results, downloads) is available.
+
+Notes:
+
+- **Invitation-only.** Clerk is currently a **dev instance** and open sign-up is a
+  known gap, so access is granted by an operator inviting you manually — there is
+  no self-serve registration to rely on.
+- **Local dev / QA run unauthenticated.** When `CLERK_ISSUER` is unset (the local
+  and QA-harness default), the API is open and no sign-in is required. Production
+  sets `CLERK_ISSUER`, which turns auth on and gates the entire `/audits/*` API.
+
+---
+
+## 3. Submitting an Audit
 
 On the home page (`/`):
 
@@ -36,69 +60,127 @@ rejects the request.
 
 ---
 
-## 3. Watching Progress
+## 4. Watching Progress
 
-The progress/result page (`/audit/{id}`) auto-refreshes and shows the current
-stage and percentage:
+The progress/result page (`/audit/{id}`) auto-refreshes (it polls every 2.5s) and
+shows the current stage and percentage:
 
 ```text
-queued → crawling → collecting_performance → extracting → scoring
-       → commenting → validating → rendering → complete
+queued → crawling (15%) → collecting_performance / PSI (45%)
+       → extracting / SEO + UX-UI (70%) → extracting / external SEO (76%)
+       → scoring (80%) → commenting (88%) → validating (95%)
+       → rendering (98%) → complete (100%)
 ```
+
+The **external-SEO** step (76%) runs the built-in site-health sweep and, if
+connected, pulls Google Search Console insights — see §5.
 
 A typical audit takes from under a minute to a few minutes depending on site
 size and whether PageSpeed is enabled. When it reaches **complete**, the page
-shows the three scores, findings/recommendations, and a **Download PDF** button.
+shows the three scores, findings/recommendations, and **Download PDF** /
+**Download DOCX** buttons.
 
 If something goes wrong, the status becomes **failed** with an error message; the
 audit can simply be re-submitted.
 
 ---
 
-## 4. Reading the Scores
+## 5. Connecting Google Search Console (optional)
+
+Reports can be enriched with Google Search Console (GSC) data — top ranking
+opportunities and URL-inspection facts for the audited site. This is entirely
+optional; audits complete fine without it.
+
+Connection is a one-time, **shared** setup, not per-submitter:
+
+1. On the home page (`/`) or the history page (`/audits`), find the
+   **"BLC Search Console connection"** panel.
+2. If it shows **Not connected**, click **Connect** — you'll be redirected through
+   Google's OAuth consent screen for the shared BLC Google account.
+3. After granting access, Google returns you to the app and the panel shows
+   **Connected** with the connected account email and the available properties.
+
+Notes:
+
+- Website submitters do **not** need their own Search Console account — reports use
+  the connected BLC account whenever it has access to the audited site.
+- GSC data only appears in a report if the audited site is one of the connected
+  account's verified properties. Otherwise the Search Console section simply shows
+  that no matching data was available (the score is unaffected).
+- To pull GSC into an audit that already finished, use **Rerun enrichment** (§7).
+
+---
+
+## 6. Reading the Scores
 
 | Score | Meaning |
 |---|---|
-| **SEO** | Search-visibility fundamentals: titles, meta descriptions, headings, canonical, schema, image alt text, indexability, internal links, (and PageSpeed when available). |
+| **SEO** | Search-visibility fundamentals: titles, meta descriptions, headings, canonical, schema, image alt text, indexability, internal links, the site-wide technical crawl, Search Console facts (when connected), and PageSpeed (when available). |
 | **UX/UI** | Conversion and usability signals: CTAs, lead forms, contact details, trust signals, navigation, etc. |
 | **Lead Generation Readiness** | A weighted blend (SEO 45% + UX/UI 55%) — the headline "how ready is this site to convert visitors" number. |
 
 Each score has a **per-rule breakdown** (pass / partial / fail / skipped) with the
-evidence behind it. Skipped rules (e.g. PageSpeed without an API key) do not lower
-the score. Scores are deterministic: the same site audited twice produces the same
-numbers.
+evidence behind it. Skipped rules — e.g. PageSpeed without an API key, or an
+external source (technical crawl / Search Console) that wasn't available — do not
+lower the score; the category rescales around them. Scores are deterministic: the
+same site audited twice produces the same numbers.
 
-The **commentary** (executive summary, findings, recommendations) is written from
-those facts and scores. Numeric claims are validated against the extracted facts,
-so the report won't cite performance numbers it doesn't actually have.
+The **commentary** (executive summary, findings, recommendations) is generated
+deterministically from those facts and scores (Phase 1 uses no LLM). Numeric
+claims are validated against the extracted facts, so the report won't cite
+performance numbers it doesn't actually have.
 
 ---
 
-## 5. Audit History
+## 7. Rerunning External SEO Enrichment
+
+On a **completed** audit's detail page (`/audit/{id}`), a **Rerun enrichment**
+button re-runs only the external-SEO step — the technical-crawl sweep and Google
+Search Console — then rescores, regenerates commentary, and re-renders the report.
+The crawl, PageSpeed, and on-page extraction are **not** repeated.
+
+Use this after you connect Google Search Console (§5), or to refresh the technical
+crawl, without resubmitting the whole audit. If the rerun fails, the previous
+result and report are restored automatically — the audit stays **complete** with
+its prior report, and an error message is shown. (It needs a finished audit with a
+stored result; the action is unavailable otherwise.)
+
+---
+
+## 8. Audit History
 
 The history page (`/audits`) lists recent audits with status, created date,
-scores, and quick links to the detail view and the PDF. Failed or incomplete
-audits are labeled so you can spot and re-run them.
+scores, and quick links to the detail view and the report downloads. Failed or
+incomplete audits are labeled so you can spot and re-run them.
 
 ---
 
-## 6. Downloading & Sharing the Report
+## 9. Downloading & Sharing the Report
 
-From the result page or history, click the report link to download the branded
-PDF (`GET /audits/{id}/report`). Files are stored locally under
-`storage/reports/<audit-id>.pdf`. The PDF is the prospect-facing deliverable:
-cover page, executive summary, score overview, SEO and UX/UI sections with the
-rule trail, a recommendations roadmap, and an appendix.
+From the result page or history, download the branded report in two formats:
+
+- **PDF** — `GET /audits/{id}/report`, stored locally under
+  `storage/reports/<audit-id>.pdf`.
+- **DOCX** — `GET /audits/{id}/docx`, an editable Word version rendered on demand
+  (generated the first time it's requested if it doesn't already exist).
+
+The report is the prospect-facing deliverable: cover page, executive summary,
+score overview, SEO and UX/UI sections with the rule trail, the external-SEO /
+Search Console findings, a recommendations roadmap, and an appendix.
 
 ---
 
-## 7. Pre-Demo Smoke Test (real site, runbook)
+## 10. Pre-Demo Smoke Test (real site, runbook)
 
-To validate the full live path (real crawl + PageSpeed + OpenAI) before a client
-demo:
+To validate the full live path (real crawl + PageSpeed + external SEO) before a
+client demo:
 
-1. Set `OPENAI_API_KEY` and `GOOGLE_PSI_API_KEY` in `.env`.
-2. Start the stack: `make docker-up` (or run API + worker natively).
+1. Set `GOOGLE_PSI_API_KEY` in `.env` (and connect Google Search Console, §5, if
+   you want GSC data). Phase 1 commentary is deterministic, so no `OPENAI_API_KEY`
+   is required for the report prose.
+2. Start the stack: `make docker-up` (or run API + worker natively). For a local
+   API call, leave `CLERK_ISSUER` unset so the API is open; otherwise pass a Clerk
+   `Authorization: Bearer <jwt>` header.
 3. Submit a real builder/remodeler URL from the UI (or via the API):
 
    ```bash
@@ -124,12 +206,14 @@ demo:
 
 ---
 
-## 8. When Something Looks Off
+## 11. When Something Looks Off
 
 | Symptom | What it usually means |
 |---|---|
+| Welcome screen / can't get in | You're signed out, or your Clerk account hasn't been invited yet (access is invitation-only) |
 | PageSpeed sections say "skipped" | No `GOOGLE_PSI_API_KEY`, or PSI timed out — scores are unaffected |
-| Commentary looks generic / `local_fallback` | No `OPENAI_API_KEY` set |
+| Search Console section says "not available" | Google isn't connected (§5), or the audited site isn't a property on the connected BLC account — scores are unaffected |
+| "Rerun enrichment" unavailable / errors | The audit isn't complete or has no stored result; or the rerun failed and the prior report was restored — try again |
 | Some internal pages listed as "failed" | Those pages timed out or errored; the audit still completes on the rest |
 | Audit stuck and then "failed" | The worker hit a time limit or an unreachable site; re-submit |
 | "Report not available yet" | The audit hasn't finished rendering; wait for `complete` |

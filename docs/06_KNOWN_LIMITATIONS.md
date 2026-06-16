@@ -4,6 +4,8 @@ An honest list of what Phase 1 does **not** do, plus important behavioral
 caveats. Phase 1 is a local-first website-audit MVP; several items below are
 deliberately deferred to later phases or to production hardening.
 
+_Last reconciled: 2026-06-16._
+
 ---
 
 ## 1. Scope (intentionally out)
@@ -23,15 +25,27 @@ These are out of scope for Phase 1 by design (see [`docs/01_REQUIREMENTS.md`](01
 
 ## 2. Security & Access
 
-- **Authentication is optional by environment.** Clerk UI/API auth is wired in and the
-  frontend forwards Clerk bearer tokens to the API, but auth is disabled when
-  `CLERK_ISSUER` is empty for local dev, tests, and the QA harness. Production must set
-  `CLERK_ISSUER`, `CLERK_AUTHORIZED_PARTIES`, and the frontend Clerk keys.
-- **SSRF protection is partial.** The crawler blocks private/loopback hosts by
-  default (`CRAWLER_ALLOW_PRIVATE_HOSTS=false`) and validates the start URL, but
-  request-level interception (e.g. blocking redirects/sub-resources that resolve
-  to internal IPs mid-crawl) is **not** fully implemented. Treat submitted URLs as
-  untrusted input and harden this before exposing the service publicly.
+- **Authentication is live but optional by environment.** Clerk UI/API auth is wired in:
+  the whole `/audits/*` router is gated with `Depends(require_user)`, and the frontend
+  forwards a fresh Clerk bearer token on every API call. Auth is **opt-in** — when
+  `CLERK_ISSUER` is empty, `require_user()` returns `None` and the API is **open**, which is
+  exactly how local dev, the unit tests, and the QA harness run unauthenticated. Production
+  sets `CLERK_ISSUER` (the prod compose has a fail-fast `${CLERK_ISSUER:?}` guard) along with
+  `CLERK_AUTHORIZED_PARTIES` and the frontend Clerk keys. The Google OAuth callback
+  (`GET /google/search-console/callback`) is intentionally unauthenticated because Google
+  calls it; it is protected instead by an HMAC-signed, time-limited CSRF `state`.
+- **Clerk is currently a DEV instance** (`pk_test_…`). **Open sign-up is a known security
+  gap**: anyone can self-register on the dev instance, so invitation-only access is a manual
+  operator step today. Switching to a Clerk production instance and locking down sign-up is
+  productionization work.
+- **SSRF protection is partial.** The page crawler blocks private/loopback hosts by
+  default (`CRAWLER_ALLOW_PRIVATE_HOSTS=false`), validates the start URL, and re-validates the
+  post-redirect host — but mid-crawl request-level interception (blocking sub-resources or
+  redirect hops that resolve to internal IPs while a page is rendering) is **not** fully
+  implemented for the page crawler. By contrast, the **site-health sweep re-validates every
+  redirect hop** through the same SSRF guard, so its redirect-SSRF gap is closed. Treat
+  submitted URLs as untrusted input and harden the page crawler before exposing the service
+  publicly.
 - Secrets live in `.env`; there is no secrets manager integration yet.
 - Google Search Console refresh tokens are stored in the application database for the
   local-first implementation. Production should encrypt these fields or move them into a
@@ -87,16 +101,25 @@ These are out of scope for Phase 1 by design (see [`docs/01_REQUIREMENTS.md`](01
 
 ---
 
-## 6. AI Commentary
+## 6. Commentary
 
-- Requires `OPENAI_API_KEY`. Without it, commentary uses a **deterministic local
-  fallback** that is correct but generic (not site-specific prose).
+- **Phase 1 commentary is fully deterministic — there is no LLM call at all.**
+  `generate_commentary()` always builds a deterministic content plan
+  (`build_content_plan()`) from the extracted facts and scores and returns it with
+  `status`/`provider`/`model` set to `"deterministic"`, with or without an
+  `OPENAI_API_KEY`. There is no "OpenAI-then-fallback" behaviour in Phase 1: the
+  content plan **is** the output unconditionally, so commentary is consistent run to
+  run but is not LLM-written site-specific prose.
+- The dormant `_call_openai()` scaffolding and the `prompts/*.md` templates are wired
+  only into a **deferred Phase 2 polish layer** that will rewrite the plan's prose
+  strings when a key is configured, **without** changing structure, severities, or
+  ordering. LLM polish is **not** a Phase 1 feature.
 - The **grounding validator strips unsupported _numeric_ claims** by comparing
-  numbers in the commentary against extracted facts. It does not catch every
-  possible non-numeric inaccuracy — scores remain the deterministic source of
-  truth, and commentary is explanatory only.
-- OpenAI output is non-deterministic; commentary wording varies between runs even
-  though scores do not.
+  numbers in the commentary against extracted facts (timeframe phrases such as
+  "1–3 months" are masked first so they survive). If stripping would empty a field
+  it reverts to the baseline prose. It does not catch every possible non-numeric
+  inaccuracy — scores remain the deterministic source of truth, and commentary is
+  explanatory only.
 
 ---
 
@@ -135,7 +158,10 @@ These are out of scope for Phase 1 by design (see [`docs/01_REQUIREMENTS.md`](01
 
 ## 10. Recommended Next Steps (later phases)
 
-1. Add API/UI authentication and complete request-level SSRF interception.
-2. Add data retention/cleanup for `storage/` and old audit rows.
-3. Begin the deferred scope (social audits, competitor benchmarking, analytics)
+1. Harden the now-live Clerk auth: move to a Clerk production instance, close open
+   sign-up (invitation-only), and complete request-level SSRF interception in the
+   page crawler.
+2. Encrypt Google OAuth/refresh tokens at rest (or move them into a secrets manager).
+3. Add data retention/cleanup for `storage/` and old audit rows.
+4. Begin the deferred scope (social audits, competitor benchmarking, analytics)
    as separate phases.
