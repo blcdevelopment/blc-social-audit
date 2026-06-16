@@ -10,6 +10,9 @@
   </div>
 </div>
 {%- endmacro %}
+{% macro va_seg_arc(pct, start, color) -%}
+{% if pct and pct > 0 %}<circle class="va-donut-arc" cx="18" cy="18" r="15.915" stroke="{{ color }}" stroke-dasharray="{{ pct }} {{ 100 - pct }}" transform="rotate({{ (start * 3.6) - 90 }} 18 18)"></circle>{% endif %}
+{%- endmacro %}
 <!doctype html>
 <html lang="en">
   <head>
@@ -91,6 +94,7 @@
         <li><a href="#uxui">UX/UI Findings</a></li>
         <li><a href="#roadmap">Roadmap</a></li>
         <li><a href="#appendix">Appendix</a></li>
+        <li><a href="#visual-analytics">Visual Analytics</a></li>
       </ol>
     </section>
 
@@ -614,6 +618,257 @@
         The internal scoring trail is stored with the audit result for QA, but this client-facing
         report shows the interpreted findings and fixes instead of raw rule identifiers.
       </p>
+    </section>
+
+    <section class="page-section" id="visual-analytics">
+      <p class="eyebrow">Visual Analytics</p>
+      <h2>Performance at a glance</h2>
+      <p class="helper-copy">
+        These charts summarize the rest of this report visually. Every value is taken
+        directly from the checks this audit ran on the site — nothing here is estimated.
+        Rings and bars use the same colors as the scores: green is strong, amber is fair,
+        red needs work.
+      </p>
+
+      <h3>Scores at a glance</h3>
+      <div class="va-gauge-row">
+        {% for score in payload.scores %}
+          {% set ring = {"strong": "#28864b", "fair": "#c98a16", "weak": "#b42318"}[score.band] %}
+          <div class="va-gauge-cell score-band-{{ score.band }}">
+            {{ score_gauge(score.score, 100, ring, "md") }}
+            <p class="va-gauge-label">{{ score.label }}</p>
+            <p class="va-gauge-band">{{ score.band_label }}</p>
+          </div>
+        {% endfor %}
+      </div>
+
+      <h3>Rule health by category</h3>
+      <p class="helper-copy">
+        How many of each category's checks passed, partly passed, failed, or were skipped.
+        Skipped means there was not enough data to judge a check, which never lowers the score.
+      </p>
+      <div class="va-card">
+        {% for cat in [{"label": "SEO", "rules": payload.appendix.seo_rules}, {"label": "UX/UI", "rules": payload.appendix.uxui_rules}] %}
+          {% set total = cat.rules | length %}
+          {% if total > 0 %}
+            {% set npass = cat.rules | selectattr("result", "equalto", "pass") | list | length %}
+            {% set npart = cat.rules | selectattr("result", "equalto", "partial") | list | length %}
+            {% set nfail = cat.rules | selectattr("result", "equalto", "fail") | list | length %}
+            {% set nskip = cat.rules | selectattr("result", "equalto", "skipped") | list | length %}
+            <div class="va-stack-row">
+              <div class="va-stack-head">
+                <span class="va-stack-title">{{ cat.label }}</span>
+                <span class="va-stack-count">{{ npass }} passed · {{ npart }} partial · {{ nfail }} failed · {{ nskip }} skipped</span>
+              </div>
+              <div class="va-stack">
+                <span class="va-seg" style="width: {{ (npass / total * 100) | round(2) }}%; background: #28864b;"></span>
+                <span class="va-seg" style="width: {{ (npart / total * 100) | round(2) }}%; background: #c98a16;"></span>
+                <span class="va-seg" style="width: {{ (nfail / total * 100) | round(2) }}%; background: #b42318;"></span>
+                <span class="va-seg" style="width: {{ (nskip / total * 100) | round(2) }}%; background: #98a2b3;"></span>
+              </div>
+            </div>
+          {% endif %}
+        {% endfor %}
+        <div class="va-legend">
+          <span class="va-legend-item"><span class="va-dot" style="background: #28864b;"></span>Passed</span>
+          <span class="va-legend-item"><span class="va-dot" style="background: #c98a16;"></span>Partial</span>
+          <span class="va-legend-item"><span class="va-dot" style="background: #b42318;"></span>Failed</span>
+          <span class="va-legend-item"><span class="va-dot" style="background: #98a2b3;"></span>Skipped</span>
+        </div>
+      </div>
+
+      <h3>Technical issues by volume</h3>
+      {% set tech = payload.technical_seo_section %}
+      {% if tech.status == "complete" and tech.issues %}
+        {% set tech_max = tech.issues | map(attribute="count") | max %}
+        <div class="va-card">
+          {% for issue in tech.issues[:8] %}
+            {% set sev_color = {"high": "#b42318", "medium": "#dc6803", "low": "#2e90fa", "info": "#98a2b3"}[issue.severity] %}
+            <div class="va-bar-row">
+              <span class="va-bar-label">{{ issue.title }}</span>
+              <span class="va-bar-track"><span class="va-bar-fill" style="width: {{ ((issue.count / tech_max * 100) if tech_max else 0) | round(2) }}%; background: {{ sev_color }};"></span></span>
+              <span class="va-bar-value">{{ issue.count }}</span>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="muted">
+          Technical crawl data was not collected for this audit, so there are no
+          issue-volume bars to show.
+          {% if tech.reason_label %}Reason: {{ tech.reason_label }}{% endif %}
+        </p>
+      {% endif %}
+
+      <div class="va-grid-2">
+        <div class="va-card">
+          <h4>Crawl coverage</h4>
+          {% set cs = payload.crawl_summary %}
+          {% set cs_total = cs.successful_pages + cs.failed_pages + cs.skipped_pages %}
+          {% if cs_total > 0 %}
+            {% set ok_pct = cs.successful_pages / cs_total * 100 %}
+            {% set fail_pct = cs.failed_pages / cs_total * 100 %}
+            {% set skip_pct = cs.skipped_pages / cs_total * 100 %}
+            <div class="va-donut-wrap">
+              <div class="va-donut">
+                <svg class="va-donut-svg" viewBox="0 0 36 36" xmlns="http://www.w3.org/2000/svg">
+                  <circle class="va-donut-track" cx="18" cy="18" r="15.915"></circle>
+                  {{ va_seg_arc(ok_pct, 0, "#28864b") }}
+                  {{ va_seg_arc(fail_pct, ok_pct, "#b42318") }}
+                  {{ va_seg_arc(skip_pct, ok_pct + fail_pct, "#c98a16") }}
+                </svg>
+                <div class="va-donut-label">
+                  <strong>{{ cs.successful_pages }}</strong>
+                  <span>of {{ cs_total }} pages</span>
+                </div>
+              </div>
+              <div class="va-legend va-legend-stack">
+                <span class="va-legend-item"><span class="va-dot" style="background: #28864b;"></span>{{ cs.successful_pages }} rendered</span>
+                <span class="va-legend-item"><span class="va-dot" style="background: #b42318;"></span>{{ cs.failed_pages }} failed</span>
+                <span class="va-legend-item"><span class="va-dot" style="background: #c98a16;"></span>{{ cs.skipped_pages }} skipped</span>
+              </div>
+            </div>
+          {% else %}
+            <p class="muted">No crawl coverage data is available.</p>
+          {% endif %}
+        </div>
+
+        <div class="va-card">
+          <h4>PageSpeed performance</h4>
+          {% set ps = payload.pagespeed_summary %}
+          {% if ps.avg_mobile_performance is not none or ps.avg_desktop_performance is not none %}
+            {% if ps.avg_mobile_performance is not none %}
+              {% set m = ps.avg_mobile_performance %}
+              {% set m_color = "#28864b" if m >= 90 else ("#c98a16" if m >= 50 else "#b42318") %}
+              <div class="va-bar-row">
+                <span class="va-bar-label">Mobile</span>
+                <span class="va-bar-track"><span class="va-bar-fill" style="width: {{ m }}%; background: {{ m_color }};"></span></span>
+                <span class="va-bar-value">{{ m }}</span>
+              </div>
+            {% endif %}
+            {% if ps.avg_desktop_performance is not none %}
+              {% set d = ps.avg_desktop_performance %}
+              {% set d_color = "#28864b" if d >= 90 else ("#c98a16" if d >= 50 else "#b42318") %}
+              <div class="va-bar-row">
+                <span class="va-bar-label">Desktop</span>
+                <span class="va-bar-track"><span class="va-bar-fill" style="width: {{ d }}%; background: {{ d_color }};"></span></span>
+                <span class="va-bar-value">{{ d }}</span>
+              </div>
+            {% endif %}
+            {% if ps.slowest_pages %}
+              <p class="va-subcaption">Slowest pages (avg performance)</p>
+              {% for row in ps.slowest_pages[:5] %}
+                {% set avg = row.get("average_performance") %}
+                {% if avg is not none %}
+                  {% set a_color = "#28864b" if avg >= 90 else ("#c98a16" if avg >= 50 else "#b42318") %}
+                  <div class="va-bar-row">
+                    <span class="va-bar-label va-bar-label-url">{{ row.get("url", "") }}</span>
+                    <span class="va-bar-track"><span class="va-bar-fill" style="width: {{ avg }}%; background: {{ a_color }};"></span></span>
+                    <span class="va-bar-value">{{ avg }}</span>
+                  </div>
+                {% endif %}
+              {% endfor %}
+            {% endif %}
+          {% else %}
+            <p class="muted">PageSpeed data was not collected for this audit.</p>
+          {% endif %}
+        </div>
+      </div>
+
+      <h3>Search visibility (Google Search Console)</h3>
+      {% set sp = payload.search_performance_section %}
+      {% if sp.status == "complete" %}
+        {% set top_q = sp.top_queries | sort(attribute="clicks", reverse=true) %}
+        {% if top_q %}
+          {% set q_max = top_q | map(attribute="clicks") | max %}
+          <div class="va-card">
+            <h4>Top queries by clicks</h4>
+            {% for row in top_q[:8] %}
+              {% set clicks = row.get("clicks", 0) or 0 %}
+              <div class="va-bar-row">
+                <span class="va-bar-label">{{ row.get("query", "") }}</span>
+                <span class="va-bar-track"><span class="va-bar-fill" style="width: {{ ((clicks / q_max * 100) if q_max else 0) | round(2) }}%; background: var(--primary);"></span></span>
+                <span class="va-bar-value">{{ clicks | round | int }}</span>
+              </div>
+            {% endfor %}
+          </div>
+        {% endif %}
+
+        {% set strike = sp.ranking_opportunities | sort(attribute="impressions", reverse=true) %}
+        {% if strike %}
+          {% set s_max = strike | map(attribute="impressions") | max %}
+          <div class="va-card">
+            <h4>Striking distance — queries in positions 4-20</h4>
+            <p class="va-subcaption">Bar length = impressions; these queries are close to page one</p>
+            {% for row in strike[:8] %}
+              {% set impr = row.get("impressions", 0) or 0 %}
+              <div class="va-bar-row">
+                <span class="va-bar-label">{{ row.get("query", "") }}</span>
+                <span class="va-bar-track"><span class="va-bar-fill" style="width: {{ ((impr / s_max * 100) if s_max else 0) | round(2) }}%; background: #1f74b7;"></span></span>
+                <span class="va-bar-value">#{{ row.get("position", 0) | round(1) }}</span>
+              </div>
+            {% endfor %}
+          </div>
+        {% endif %}
+
+        {% set decl = sp.declining_pages %}
+        {% if decl %}
+          {% set worst = 0 - (decl | map(attribute="click_delta") | min) %}
+          <div class="va-card">
+            <h4>Declining pages (lost clicks)</h4>
+            {% for row in decl[:6] %}
+              {% set drop = 0 - (row.get("click_delta", 0) or 0) %}
+              <div class="va-bar-row">
+                <span class="va-bar-label va-bar-label-url">{{ row.get("page", "") }}</span>
+                <span class="va-bar-track"><span class="va-bar-fill" style="width: {{ ((drop / worst * 100) if worst else 0) | round(2) }}%; background: #b42318;"></span></span>
+                <span class="va-bar-value">-{{ drop | round | int }}</span>
+              </div>
+            {% endfor %}
+          </div>
+        {% endif %}
+
+        {% set uis = sp.url_inspection_summary %}
+        {% set inspected = uis.get("urls_inspected", 0) or 0 %}
+        {% if inspected > 0 %}
+          {% set not_on = uis.get("not_on_google", 0) or 0 %}
+          {% set failed = uis.get("failed", 0) or 0 %}
+          {% set on_google = [inspected - not_on, 0] | max %}
+          {% set idx_total = on_google + not_on + failed %}
+          {% if idx_total > 0 %}
+            {% set on_pct = on_google / idx_total * 100 %}
+            {% set not_pct = not_on / idx_total * 100 %}
+            {% set fail_pct2 = failed / idx_total * 100 %}
+            <div class="va-card">
+              <h4>Indexation (URL inspection)</h4>
+              <div class="va-donut-wrap">
+                <div class="va-donut">
+                  <svg class="va-donut-svg" viewBox="0 0 36 36" xmlns="http://www.w3.org/2000/svg">
+                    <circle class="va-donut-track" cx="18" cy="18" r="15.915"></circle>
+                    {{ va_seg_arc(on_pct, 0, "#28864b") }}
+                    {{ va_seg_arc(not_pct, on_pct, "#b42318") }}
+                    {{ va_seg_arc(fail_pct2, on_pct + not_pct, "#98a2b3") }}
+                  </svg>
+                  <div class="va-donut-label">
+                    <strong>{{ on_google }}</strong>
+                    <span>on Google</span>
+                  </div>
+                </div>
+                <div class="va-legend va-legend-stack">
+                  <span class="va-legend-item"><span class="va-dot" style="background: #28864b;"></span>{{ on_google }} on Google</span>
+                  <span class="va-legend-item"><span class="va-dot" style="background: #b42318;"></span>{{ not_on }} not on Google</span>
+                  {% if failed > 0 %}<span class="va-legend-item"><span class="va-dot" style="background: #98a2b3;"></span>{{ failed }} inspection failed</span>{% endif %}
+                </div>
+              </div>
+            </div>
+          {% endif %}
+        {% endif %}
+      {% else %}
+        <p class="muted">
+          Google Search Console data was not collected for this audit, so there are no
+          search-visibility charts.
+          {% if sp.reason_label %}Reason: {{ sp.reason_label }}{% endif %}
+          Connect a verified property and rerun enrichment to populate it.
+        </p>
+      {% endif %}
     </section>
   </body>
 </html>

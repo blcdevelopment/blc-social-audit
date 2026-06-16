@@ -60,6 +60,10 @@ def test_render_report_pdf_qa_variants(
     assert "SEO rule trail" not in text
     assert "UX/UI rule trail" not in text
     assert "raw rule identifiers" in text
+    # Visual-analytics section (charts) is appended at the end and renders in every variant.
+    assert "Performance at a glance" in text
+    assert "Rule health by category" in text
+    assert "Crawl coverage" in text
 
     if variant == "long":
         assert len(reader.pages) >= 8
