@@ -69,6 +69,11 @@ def test_render_report_pdf_qa_variants(
         assert len(reader.pages) >= 8
     if missing_psi:
         assert "No Google PageSpeed API key is configured" in normalized_text
+    else:
+        # Core Web Vitals (lab) + CrUX field snapshot render when PSI data is present.
+        assert "Core Web Vitals" in normalized_text
+        assert "Largest Contentful Paint" in normalized_text
+        assert "Real-user field data (Chrome UX Report)" in normalized_text
     if failed_pages:
         assert "Timed out rendering" in text
 
@@ -165,6 +170,40 @@ def _complete_psi() -> dict:
         "scope": "all_crawled_pages",
         "pages_requested": 3,
         "pages_analyzed": 3,
+        "strategies": {
+            "mobile": {
+                "status": "complete",
+                "lab_metrics": {
+                    "first_contentful_paint_ms": 2900,
+                    "largest_contentful_paint_ms": 3200,
+                    "speed_index_ms": 4000,
+                    "total_blocking_time_ms": 90,
+                    "cumulative_layout_shift": 0.004,
+                },
+                "field_data": {
+                    "origin": {
+                        "overall_category": "AVERAGE",
+                        "largest_contentful_paint_ms": {"p75": 3270, "category": "AVERAGE"},
+                        "cumulative_layout_shift": {"p75": 0.03, "category": "FAST"},
+                        "interaction_to_next_paint_ms": None,
+                        "first_contentful_paint_ms": {"p75": 2100, "category": "AVERAGE"},
+                        "time_to_first_byte_ms": {"p75": 900, "category": "AVERAGE"},
+                    },
+                    "page": None,
+                },
+            },
+            "desktop": {
+                "status": "complete",
+                "lab_metrics": {
+                    "first_contentful_paint_ms": 1400,
+                    "largest_contentful_paint_ms": 1900,
+                    "speed_index_ms": 2100,
+                    "total_blocking_time_ms": 20,
+                    "cumulative_layout_shift": 0.002,
+                },
+                "field_data": {"page": None, "origin": None},
+            },
+        },
         "summary": {
             "avg_mobile_performance": 72,
             "avg_desktop_performance": 91,

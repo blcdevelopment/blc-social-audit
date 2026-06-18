@@ -159,6 +159,34 @@ def _document_xml(payload: ReportPayload) -> str:
             "Meta",
         )
     )
+    cwv = payload.core_web_vitals
+    if cwv.available:
+        parts.append(_heading("Core Web Vitals", 2))
+        for row in cwv.lab_rows:
+            mobile = (
+                f"{row.mobile.value_label} ({row.mobile.rating_label})" if row.mobile else "N/A"
+            )
+            desktop = (
+                f"{row.desktop.value_label} ({row.desktop.rating_label})" if row.desktop else "N/A"
+            )
+            parts.append(_paragraph(f"{row.label} — Mobile: {mobile}; Desktop: {desktop}.", "Meta"))
+        if cwv.field_available:
+            scope = f" ({cwv.field_source}, {cwv.field_form_factor})" if cwv.field_source else ""
+            assessment = ""
+            if cwv.field_assessment:
+                assessment = f" Overall assessment: {cwv.field_assessment}."
+            parts.append(
+                _paragraph(f"Real-user field data (Chrome UX Report){scope}.{assessment}", "Meta")
+            )
+            for metric in cwv.field_metrics:
+                parts.append(
+                    _paragraph(
+                        f"{metric.label} (75th percentile): "
+                        f"{metric.value_label} ({metric.rating_label}).",
+                        "Meta",
+                    )
+                )
+
     parts.append(
         _paragraph(
             "Fact check: every number in the written commentary was checked against the "
@@ -255,15 +283,6 @@ def _external_seo_xml(payload: ReportPayload) -> list[str]:
             "Meta",
         )
     )
-    if search_available and search.date_range:
-        parts.append(
-            _paragraph(
-                "Data window: "
-                f"{search.date_range.get('start')} to {search.date_range.get('end')} "
-                "(Google's own measurements of this site in search results).",
-                "Meta",
-            )
-        )
     parts.append(
         _paragraph(
             "What this section tells you: Search Console shows how people already find the "

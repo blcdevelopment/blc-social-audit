@@ -44,6 +44,49 @@ def _audit_score(audits: MappingLike, audit_id: str) -> int | None:
     return _score_to_percent(audits.get(audit_id, {}).get("score"))
 
 
+# CrUX field metrics carried inside the PSI response (loadingExperience /
+# originLoadingExperience). Maps our snake_case key -> the PSI metric id.
+_CRUX_FIELD_METRICS = {
+    "largest_contentful_paint_ms": "LARGEST_CONTENTFUL_PAINT_MS",
+    "interaction_to_next_paint_ms": "INTERACTION_TO_NEXT_PAINT",
+    "cumulative_layout_shift": "CUMULATIVE_LAYOUT_SHIFT_SCORE",
+    "first_contentful_paint_ms": "FIRST_CONTENTFUL_PAINT_MS",
+    "time_to_first_byte_ms": "EXPERIMENTAL_TIME_TO_FIRST_BYTE",
+}
+
+
+def _crux_metric(metrics: MappingLike, our_key: str, api_key: str) -> JsonDict | None:
+    metric = metrics.get(api_key)
+    if not isinstance(metric, dict):
+        return None
+    percentile = metric.get("percentile")
+    category = metric.get("category")
+    if not isinstance(percentile, int | float):
+        return {"p75": None, "category": category} if category else None
+    # PSI reports the CLS field percentile as an integer scaled by 100 (e.g. 3 -> 0.03),
+    # unlike the lab CLS which is already a unitless fraction. Normalize to real units here.
+    p75 = round(percentile / 100, 3) if our_key == "cumulative_layout_shift" else percentile
+    return {"p75": p75, "category": category}
+
+
+def _crux_experience(experience: Any) -> JsonDict | None:
+    """Normalize a PSI loadingExperience / originLoadingExperience block (real-user
+    CrUX field data). Returns None when no usable field data is present."""
+    if not isinstance(experience, dict):
+        return None
+    metrics = experience.get("metrics") or {}
+    overall = experience.get("overall_category")
+    result: JsonDict = {"overall_category": overall}
+    has_metric = False
+    for our_key, api_key in _CRUX_FIELD_METRICS.items():
+        metric = _crux_metric(metrics, our_key, api_key)
+        result[our_key] = metric
+        has_metric = has_metric or metric is not None
+    if not has_metric and not overall:
+        return None
+    return result
+
+
 def normalize_pagespeed_response(payload: JsonDict, strategy: str) -> JsonDict:
     lighthouse = payload.get("lighthouseResult") or {}
     categories = lighthouse.get("categories") or {}
@@ -78,6 +121,13 @@ def normalize_pagespeed_response(payload: JsonDict, strategy: str) -> JsonDict:
             "render_blocking_resources": _audit_score(audits, "render-blocking-resources"),
             "meta_description": _audit_score(audits, "meta-description"),
             "document_title": _audit_score(audits, "document-title"),
+        },
+        # Real-user (CrUX) field data carried in the same PSI response. ``page`` is this
+        # exact URL's field data (often absent for low-traffic pages); ``origin`` is the
+        # whole-site field data Google shows as "this origin".
+        "field_data": {
+            "page": _crux_experience(payload.get("loadingExperience")),
+            "origin": _crux_experience(payload.get("originLoadingExperience")),
         },
     }
 

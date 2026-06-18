@@ -27,6 +27,7 @@ from apps.worker.stages.commentary import (
     CommentaryRecommendation,
     CommentarySection,
 )
+from apps.worker.stages.scoring import resolve_fact_path
 
 JsonDict = dict[str, Any]
 
@@ -139,7 +140,7 @@ def _recommendation_sort_key(rule: JsonDict) -> tuple[int, int, float, str]:
 
 
 def _finding(rule: JsonDict, facts: JsonDict) -> CommentaryFinding:
-    meaning, why = _meaning_and_why(rule)
+    meaning, why = _meaning_and_why(rule, facts)
     label, urls = _location_bullets(rule, facts)
     return CommentaryFinding(
         severity=_severity(rule.get("impact"), rule.get("result")),
@@ -160,12 +161,12 @@ def _recommendation(rule: JsonDict, facts: JsonDict) -> CommentaryRecommendation
         if isinstance(remediation, str) and remediation.strip()
         else _DEFAULT_ACTION
     )
-    meaning, why = _meaning_and_why(rule)
+    meaning, why = _meaning_and_why(rule, facts)
     label, urls = _location_bullets(rule, facts)
     rationale = " ".join(part for part in (meaning, why) if part).strip()
     return CommentaryRecommendation(
         tier=_tier(rule.get("tier")),
-        title=_finding_title(rule),
+        title=_recommendation_title(rule),
         rationale=rationale,
         action_items=[action],
         location_label=label,
@@ -240,24 +241,127 @@ def _finding_title(rule: JsonDict) -> str:
     return "Improvement opportunity"
 
 
-def _meaning_and_why(rule: JsonDict) -> tuple[str, str]:
+def _as_headline(text: str) -> str:
+    """Collapse whitespace and drop a trailing period so an action sentence reads
+    as a card headline."""
+    return " ".join(text.split()).rstrip(".")
+
+
+def _recommendation_title(rule: JsonDict) -> str:
+    """Action-first headline for a recommendation card.
+
+    A finding states the PROBLEM ("Pages do not use a single clear H1 heading");
+    a recommendation must state the FIX ("Give every page one clear H1 heading")
+    so the two never read as the same sentence. Hand-written titles live in
+    ``_ACTION_TITLES``; a rule without one falls back to its remediation phrased
+    as a headline, then to the finding label as a last resort - so a
+    recommendation is never a verbatim restatement of its finding."""
+    rule_id = str(rule.get("rule_id") or "")
+    title = _ACTION_TITLES.get(rule_id)
+    if title:
+        return title
+    remediation = rule.get("remediation")
+    if isinstance(remediation, str) and remediation.strip():
+        return _as_headline(remediation)
+    return _finding_title(rule)
+
+
+# Action-first recommendation headlines, keyed by rule_id. Each is the FIX as a
+# short imperative, deliberately distinct from the rule's problem-stating
+# ``finding_label`` so a report never shows the same sentence as both the problem
+# and the fix. Keep these in sync with the rule set in rubrics/*.yaml.
+_ACTION_TITLES: dict[str, str] = {
+    # --- SEO ---
+    "seo.title.present_all_pages": "Add a title tag to every page",
+    # Headlines stay number-free on purpose: grounding strips unsupported numeric
+    # claims from titles, and the exact target ranges already live in the
+    # remediation ("DO THIS"), which is grounding-exempt.
+    "seo.homepage_title.reasonable_length": "Adjust the homepage title length",
+    "seo.meta_description.present_all_pages": "Add a meta description to every page",
+    "seo.homepage_meta_description.reasonable_length": (
+        "Adjust the homepage meta description length"
+    ),
+    "seo.h1.present_once": "Give every page one clear H1 heading",
+    "seo.homepage.canonical": "Add a canonical tag to the homepage",
+    "seo.schema.present": "Add structured-data markup to key pages",
+    "seo.images.alt_coverage": "Raise alt-text coverage across images",
+    "seo.indexability.no_noindex_pages": "Unblock pages from search indexing",
+    "seo.internal_links.depth": "Strengthen internal links between pages",
+    "seo.psi.mobile_performance": "Speed up page loads on mobile",
+    "seo.psi.desktop_performance": "Speed up page loads on desktop",
+    "seo.technical_crawl.no_broken_internal_urls": "Repair broken links and error pages",
+    "seo.technical_crawl.indexable_urls": "Let blocked pages show in search",
+    "seo.technical_crawl.missing_titles": "Add title tags to untitled pages",
+    "seo.technical_crawl.duplicate_titles": "Make every page title unique",
+    "seo.technical_crawl.missing_meta_descriptions": "Add the missing meta descriptions",
+    "seo.technical_crawl.missing_h1": "Add an H1 to pages that lack one",
+    "seo.technical_crawl.missing_image_alt": "Add alt text to images that lack it",
+    "seo.gsc.low_ctr_pages": "Turn high-impression pages into clicks",
+    "seo.gsc.ranking_opportunities": "Push near-page-one keywords onto page one",
+    "seo.gsc.url_inspection_indexing": "Get priority pages indexed by Google",
+    # --- UX/UI ---
+    "uxui.primary_cta.present": "Add a clear primary call to action",
+    "uxui.cta.volume": "Add more conversion paths across the site",
+    "uxui.cta.above_fold": "Put a call to action above the fold",
+    "uxui.forms.present": "Add a short lead-capture form",
+    "uxui.homepage_form.field_count": "Right-size the homepage lead form",
+    "uxui.phone.visible": "Show a clickable phone number",
+    "uxui.email.visible": "Show a contact email on key pages",
+    "uxui.trust.present": "Add trust signals like reviews and testimonials",
+    "uxui.trust.depth": "Add more types of trust evidence",
+    "uxui.navigation.present": "Add clear primary navigation",
+    "uxui.copy.substantial": "Expand the copy to explain the offer",
+    "uxui.direct_contact.present": "Give visitors a direct way to make contact",
+    "uxui.lead_capture.cta": "Add a call to action to the homepage",
+}
+
+
+def _meaning_and_why(rule: JsonDict, facts: JsonDict) -> tuple[str, str]:
     """Return ("what it means" + measurement, "why it matters") as two card-ready
-    strings. Numbers come only from the rule's stored ``evidence.value`` so grounding
-    keeps them; no URLs are included (those go in the bulleted location list)."""
+    strings. Numbers come only from the rule's stored ``evidence.value`` or other stored
+    facts, so grounding keeps them; no URLs are included (those go in the location list)."""
     rule_id = str(rule.get("rule_id") or "")
     context = _RULE_CONTEXT.get(rule_id, _GENERIC_CONTEXT)
-    meaning_parts = [context.get("meaning"), _evidence_sentence(rule, context)]
+    meaning_parts = [context.get("meaning"), _evidence_sentence(rule, context, facts)]
     meaning = " ".join(part for part in meaning_parts if part).strip()
     why = str(context.get("why") or "").strip()
     return meaning, why
 
 
-def _evidence_sentence(rule: JsonDict, context: JsonDict) -> str | None:
+def _range_finding_sentence(context: JsonDict, facts: JsonDict) -> str | None:
+    """For a boolean "is in the ideal range" check, state the measured value AND the
+    baseline range it was judged against. Both come from stored facts (the extractor
+    exposes ``length`` plus ``ideal_min_length``/``ideal_max_length``), so grounding keeps
+    every number."""
+    spec = _dict(context.get("range_finding"))
+    if not spec:
+        return None
+    length = resolve_fact_path(facts, str(spec.get("length_path") or ""))
+    low = resolve_fact_path(facts, str(spec.get("min_path") or ""))
+    high = resolve_fact_path(facts, str(spec.get("max_path") or ""))
+    if not all(
+        isinstance(value, int) and not isinstance(value, bool) for value in (length, low, high)
+    ):
+        return None
+    subject = str(spec.get("subject") or "value")
+    unit = str(spec.get("unit") or "characters")
+    if length < low:
+        relation = "shorter than"
+    elif length > high:
+        relation = "longer than"
+    else:
+        relation = "outside"
+    return (
+        f"The {subject} is {length} {unit}, {relation} the useful range of {low} to {high} {unit}."
+    )
+
+
+def _evidence_sentence(rule: JsonDict, context: JsonDict, facts: JsonDict) -> str | None:
     value = _dict(rule.get("evidence")).get("value")
     number = _format_number(value)
     if number is None:
         if value is False:
-            return str(context.get("failed_check") or "")
+            return _range_finding_sentence(context, facts) or str(context.get("failed_check") or "")
         return None
     fact_path = str(rule.get("fact_path") or "")
     if fact_path.endswith("_pct"):
@@ -292,6 +396,13 @@ _RULE_CONTEXT: dict[str, JsonDict] = {
         "meaning": "The homepage title is the main search-result headline for the most important page on the site.",
         "why": "If it is too short, too long, or unclear, Google may rewrite it and searchers may not understand the offer quickly.",
         "failed_check": "The homepage title did not fall inside the useful search-result length range.",
+        "range_finding": {
+            "subject": "homepage title",
+            "unit": "characters",
+            "length_path": "seo.pages[0].title.length",
+            "min_path": "seo.pages[0].title.ideal_min_length",
+            "max_path": "seo.pages[0].title.ideal_max_length",
+        },
     },
     "seo.meta_description.present_all_pages": {
         "meaning": "A meta description is the short search-result summary that helps someone decide whether to click.",
@@ -303,6 +414,13 @@ _RULE_CONTEXT: dict[str, JsonDict] = {
         "meaning": "The homepage meta description should summarize the offer in a short, useful search-result snippet.",
         "why": "When the description is outside the useful range, the result can look weak, truncated, or auto-written by Google.",
         "failed_check": "The homepage meta description did not fall inside the useful search-result length range.",
+        "range_finding": {
+            "subject": "homepage meta description",
+            "unit": "characters",
+            "length_path": "seo.pages[0].meta_description.length",
+            "min_path": "seo.pages[0].meta_description.ideal_min_length",
+            "max_path": "seo.pages[0].meta_description.ideal_max_length",
+        },
     },
     "seo.h1.present_once": {
         "meaning": "An H1 is the main visible heading that tells visitors and search engines what a page is about.",

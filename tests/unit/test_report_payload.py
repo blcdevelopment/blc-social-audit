@@ -7,7 +7,7 @@ from apps.worker.stages.report_payload import compose_report_payload
 def test_compose_report_payload_includes_epic_4_contract() -> None:
     payload = compose_report_payload(_job(), _result())
 
-    assert payload.version == "phase1-report-v2"
+    assert payload.version == "phase1-report-v3"
     assert payload.metadata.site_domain == "example.com"
     assert [score.id for score in payload.scores] == ["lead_gen", "seo", "uxui"]
     score_descriptions = {score.id: score.description for score in payload.scores}
@@ -365,3 +365,72 @@ def _section(headline: str, evidence_prefix: str) -> dict:
             },
         ],
     }
+
+
+def test_core_web_vitals_rates_lab_and_field_metrics() -> None:
+    from apps.worker.stages.report_payload import _core_web_vitals
+
+    psi_facts = {
+        "status": "complete",
+        "strategies": {
+            "mobile": {
+                "status": "complete",
+                "lab_metrics": {
+                    "first_contentful_paint_ms": 2900,
+                    "largest_contentful_paint_ms": 3200,
+                    "speed_index_ms": 4000,
+                    "total_blocking_time_ms": 90,
+                    "cumulative_layout_shift": 0.004,
+                },
+                "field_data": {
+                    "origin": {
+                        "overall_category": "AVERAGE",
+                        "largest_contentful_paint_ms": {"p75": 3270, "category": "AVERAGE"},
+                        "cumulative_layout_shift": {"p75": 0.03, "category": "FAST"},
+                        "interaction_to_next_paint_ms": None,
+                        "first_contentful_paint_ms": None,
+                        "time_to_first_byte_ms": None,
+                    },
+                    "page": None,
+                },
+            },
+            "desktop": {
+                "status": "complete",
+                "lab_metrics": {
+                    "first_contentful_paint_ms": 1400,
+                    "largest_contentful_paint_ms": 1900,
+                    "speed_index_ms": 2100,
+                    "total_blocking_time_ms": 20,
+                    "cumulative_layout_shift": 0.002,
+                },
+                "field_data": {"page": None, "origin": None},
+            },
+        },
+    }
+    cwv = _core_web_vitals(psi_facts)
+
+    assert cwv.available
+    assert len(cwv.lab_rows) == 5
+    lcp = next(r for r in cwv.lab_rows if r.label == "Largest Contentful Paint")
+    assert lcp.mobile.value_label == "3.2 s"
+    assert lcp.mobile.rating == "needs_improvement"
+    assert lcp.desktop.value_label == "1.9 s"
+    assert lcp.desktop.rating == "good"
+
+    # Field data: origin-level, mobile, CrUX category authoritative; INP has no data.
+    assert cwv.field_available
+    assert cwv.field_source == "Whole site (origin)"
+    assert cwv.field_assessment == "Needs improvement"
+    field = {m.label: m for m in cwv.field_metrics}
+    assert field["Largest Contentful Paint"].value_label == "3.3 s"
+    assert field["Cumulative Layout Shift"].rating == "good"
+    assert field["Interaction to Next Paint"].rating_label == "No data"
+
+
+def test_core_web_vitals_absent_when_psi_skipped() -> None:
+    from apps.worker.stages.report_payload import _core_web_vitals
+
+    cwv = _core_web_vitals({"status": "skipped", "strategies": {}})
+    assert not cwv.available
+    assert not cwv.field_available
+    assert cwv.lab_rows == []

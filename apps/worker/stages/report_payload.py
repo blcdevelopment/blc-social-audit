@@ -11,7 +11,7 @@ JsonDict = dict[str, Any]
 ReportSectionId = Literal["seo", "uxui", "lead_generation"]
 RecommendationTier = Literal["quick_win", "mid_term", "long_term"]
 
-REPORT_PAYLOAD_VERSION = "phase1-report-v2"
+REPORT_PAYLOAD_VERSION = "phase1-report-v3"
 TIER_LABELS: dict[RecommendationTier, str] = {
     "quick_win": "Quick Wins (0-30 days)",
     "mid_term": "Mid-Term Improvements (1-3 months)",
@@ -397,6 +397,43 @@ class PageSpeedSummary(BaseModel):
     slowest_pages: list[JsonDict] = Field(default_factory=list)
 
 
+class CwvMetric(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    label: str
+    value_label: str  # display-ready, e.g. "3.2 s", "90 ms", "0.004", "No data"
+    rating: str  # good | needs_improvement | poor | unknown
+    rating_label: str  # "Good" | "Needs improvement" | "Poor" | "No data"
+    band: str  # strong | fair | weak | none  (drives the dot/cell colour)
+
+
+class LabCwvRow(BaseModel):
+    """One lab metric across both form factors, for the mobile/desktop table."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    label: str
+    mobile: CwvMetric | None = None
+    desktop: CwvMetric | None = None
+
+
+class CoreWebVitals(BaseModel):
+    """Detailed PageSpeed Insights metrics, as shown on pagespeed.web.dev: the lab
+    Core Web Vitals (mobile + desktop) plus the CrUX real-user field snapshot."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    available: bool = False
+    lab_rows: list[LabCwvRow] = Field(default_factory=list)
+    field_available: bool = False
+    field_source: str | None = None  # "Whole site (origin)" | "This page"
+    field_form_factor: str = "mobile"
+    field_assessment: str | None = None  # overall CrUX assessment label
+    field_metrics: list[CwvMetric] = Field(default_factory=list)
+    field_note: str | None = None
+
+
 class ExternalSeoSummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -486,6 +523,7 @@ class ReportPayload(BaseModel):
     roadmap: list[RoadmapTier]
     validation_summary: ValidationSummary
     pagespeed_summary: PageSpeedSummary
+    core_web_vitals: CoreWebVitals = Field(default_factory=CoreWebVitals)
     external_seo_summary: ExternalSeoSummary
     technical_seo_section: TechnicalSeoSection
     search_performance_section: SearchPerformanceSection
@@ -531,6 +569,7 @@ def compose_report_payload(job: Any, result: Any) -> ReportPayload:
         roadmap=_roadmap(sections),
         validation_summary=_validation_summary(_dict(result.validation_log)),
         pagespeed_summary=_pagespeed_summary(_dict(result.psi_facts)),
+        core_web_vitals=_core_web_vitals(_dict(result.psi_facts)),
         external_seo_summary=_external_seo_summary(external_seo_facts),
         technical_seo_section=_technical_seo_section(external_seo_facts),
         search_performance_section=_search_performance_section(external_seo_facts),
@@ -967,6 +1006,190 @@ def _pagespeed_summary(psi_facts: JsonDict) -> PageSpeedSummary:
         complete_mobile_pages=int(summary.get("complete_mobile_pages") or 0),
         complete_desktop_pages=int(summary.get("complete_desktop_pages") or 0),
         slowest_pages=[_dict(page) for page in _list(summary.get("slowest_pages"))],
+    )
+
+
+# Core Web Vitals thresholds (Google's standard Good / Needs-improvement boundaries, in
+# native units: milliseconds for time metrics, a unitless score for CLS).
+_LAB_THRESHOLDS = {
+    "first_contentful_paint_ms": (1800, 3000),
+    "largest_contentful_paint_ms": (2500, 4000),
+    "speed_index_ms": (3400, 5800),
+    "total_blocking_time_ms": (200, 600),
+    "cumulative_layout_shift": (0.1, 0.25),
+}
+_FIELD_THRESHOLDS = {
+    "largest_contentful_paint_ms": (2500, 4000),
+    "interaction_to_next_paint_ms": (200, 500),
+    "cumulative_layout_shift": (0.1, 0.25),
+    "first_contentful_paint_ms": (1800, 3000),
+    "time_to_first_byte_ms": (800, 1800),
+}
+# (key, label, unit) in display order. unit: "seconds" (ms -> s), "ms", or "cls".
+_LAB_METRIC_DISPLAY = [
+    ("first_contentful_paint_ms", "First Contentful Paint", "seconds"),
+    ("largest_contentful_paint_ms", "Largest Contentful Paint", "seconds"),
+    ("total_blocking_time_ms", "Total Blocking Time", "ms"),
+    ("cumulative_layout_shift", "Cumulative Layout Shift", "cls"),
+    ("speed_index_ms", "Speed Index", "seconds"),
+]
+_FIELD_METRIC_DISPLAY = [
+    ("largest_contentful_paint_ms", "Largest Contentful Paint", "seconds"),
+    ("interaction_to_next_paint_ms", "Interaction to Next Paint", "ms"),
+    ("cumulative_layout_shift", "Cumulative Layout Shift", "cls"),
+    ("first_contentful_paint_ms", "First Contentful Paint", "seconds"),
+    ("time_to_first_byte_ms", "Time to First Byte", "ms"),
+]
+_RATING_LABELS = {
+    "good": "Good",
+    "needs_improvement": "Needs improvement",
+    "poor": "Poor",
+    "unknown": "No data",
+}
+_RATING_BANDS = {
+    "good": "strong",
+    "needs_improvement": "fair",
+    "poor": "weak",
+    "unknown": "none",
+}
+# CrUX's own assessment categories take precedence over deriving from the percentile.
+_CRUX_CATEGORY_RATING = {"FAST": "good", "AVERAGE": "needs_improvement", "SLOW": "poor"}
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool)
+
+
+def _format_metric_value(value: Any, unit: str) -> str:
+    if not _is_number(value):
+        return "No data"
+    if unit == "seconds":
+        return f"{value / 1000:.1f} s"
+    if unit == "ms":
+        return f"{int(value + 0.5)} ms"
+    if unit == "cls":
+        return f"{value:.3f}"
+    return str(value)
+
+
+def _rate_value(value: Any, thresholds: tuple[float, float]) -> str:
+    if not _is_number(value):
+        return "unknown"
+    good_max, ni_max = thresholds
+    if value <= good_max:
+        return "good"
+    if value <= ni_max:
+        return "needs_improvement"
+    return "poor"
+
+
+def _cwv_metric(key: str, label: str, unit: str, value: Any, thresholds: JsonDict) -> CwvMetric:
+    rating = _rate_value(value, thresholds[key])
+    return CwvMetric(
+        key=key,
+        label=label,
+        value_label=_format_metric_value(value, unit),
+        rating=rating,
+        rating_label=_RATING_LABELS[rating],
+        band=_RATING_BANDS[rating],
+    )
+
+
+def _field_cwv_metric(key: str, label: str, unit: str, metric: Any) -> CwvMetric:
+    p75: Any = None
+    rating = "unknown"
+    metric = _dict(metric)
+    if metric:
+        p75 = metric.get("p75")
+        category = metric.get("category")
+        if isinstance(category, str) and category.upper() in _CRUX_CATEGORY_RATING:
+            rating = _CRUX_CATEGORY_RATING[category.upper()]
+        else:
+            rating = _rate_value(p75, _FIELD_THRESHOLDS[key])
+    return CwvMetric(
+        key=key,
+        label=label,
+        value_label=_format_metric_value(p75, unit),
+        rating=rating,
+        rating_label=_RATING_LABELS[rating],
+        band=_RATING_BANDS[rating],
+    )
+
+
+def _lab_metrics(strategy_facts: JsonDict) -> list[CwvMetric]:
+    if str(strategy_facts.get("status")) != "complete":
+        return []
+    lab = _dict(strategy_facts.get("lab_metrics"))
+    if not any(_is_number(lab.get(key)) for key, _, _ in _LAB_METRIC_DISPLAY):
+        return []
+    return [
+        _cwv_metric(key, label, unit, lab.get(key), _LAB_THRESHOLDS)
+        for key, label, unit in _LAB_METRIC_DISPLAY
+    ]
+
+
+def _lab_rows(mobile: JsonDict, desktop: JsonDict) -> list[LabCwvRow]:
+    mob = _lab_metrics(mobile)
+    des = _lab_metrics(desktop)
+    if not mob and not des:
+        return []
+    rows: list[LabCwvRow] = []
+    for index, (_key, label, _unit) in enumerate(_LAB_METRIC_DISPLAY):
+        rows.append(
+            LabCwvRow(
+                label=label,
+                mobile=mob[index] if index < len(mob) else None,
+                desktop=des[index] if index < len(des) else None,
+            )
+        )
+    return rows
+
+
+def _select_field_experience(mobile: JsonDict, desktop: JsonDict) -> tuple[JsonDict, str, str]:
+    """Pick the best available CrUX field block. Prefer origin-level (what Google shows
+    as "this origin") over page-level, and mobile over desktop. Returns (experience,
+    source_label, form_factor)."""
+    for strategy, form_factor in ((mobile, "mobile"), (desktop, "desktop")):
+        field = _dict(strategy.get("field_data"))
+        for source, label in (("origin", "Whole site (origin)"), ("page", "This page")):
+            experience = field.get(source)
+            if isinstance(experience, dict):
+                return experience, label, form_factor
+    return {}, "", "mobile"
+
+
+def _core_web_vitals(psi_facts: JsonDict) -> CoreWebVitals:
+    strategies = _dict(psi_facts.get("strategies"))
+    mobile = _dict(strategies.get("mobile"))
+    desktop = _dict(strategies.get("desktop"))
+
+    lab_rows = _lab_rows(mobile, desktop)
+
+    experience, source_label, form_factor = _select_field_experience(mobile, desktop)
+    field_metrics = [
+        _field_cwv_metric(key, label, unit, experience.get(key))
+        for key, label, unit in _FIELD_METRIC_DISPLAY
+    ]
+    field_available = any(metric.rating != "unknown" for metric in field_metrics)
+
+    field_assessment = None
+    overall = experience.get("overall_category") if experience else None
+    if isinstance(overall, str) and overall.upper() in _CRUX_CATEGORY_RATING:
+        field_assessment = _RATING_LABELS[_CRUX_CATEGORY_RATING[overall.upper()]]
+
+    return CoreWebVitals(
+        available=bool(lab_rows),
+        lab_rows=lab_rows,
+        field_available=field_available,
+        field_source=source_label or None,
+        field_form_factor=form_factor,
+        field_assessment=field_assessment,
+        field_metrics=field_metrics if field_available else [],
+        field_note=(
+            "Field data reflects real Chrome users over the most recent 28-day window."
+            if field_available
+            else None
+        ),
     )
 
 

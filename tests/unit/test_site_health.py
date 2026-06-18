@@ -232,6 +232,57 @@ def test_link_sweep_blocks_redirects_to_private_hosts(monkeypatch) -> None:
     assert summary["unreachable_internal_urls"] == 0
 
 
+def test_sweep_does_not_report_bot_blocked_external_links() -> None:
+    """Outbound 401/403/429/451 are bot-blocking, not broken links.
+
+    Regression: Spotify / Cloudflare-walled URLs returned 4xx to the audit's
+    server-side bot and were wrongly listed under "Outbound links returning
+    'not found' or blocked errors (4xx)" in a client-facing report. Only the
+    unambiguous "page is gone" codes (404/410) may surface for outbound links;
+    everything else is inconclusive and recorded for QA only.
+    """
+    path_status = {"/403": 403, "/429": 429, "/404": 404, "/ok": 200}
+    external_urls = [
+        "https://blocked.example/403",
+        "https://ratelimited.example/429",
+        "https://gone.example/404",
+        "https://live.example/ok",
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(path_status[request.url.path], request=request)
+
+    async def run() -> tuple[dict, dict, dict]:
+        summary: dict = {}
+        examples: dict = defaultdict(list)
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+            follow_redirects=False,
+        ) as client:
+            counters = await site_health._sweep(
+                client,
+                internal_urls=[],
+                external_urls=external_urls,
+                settings=_settings(),
+                summary=summary,
+                examples=examples,
+                notes=[],
+                host_allowed_cache={},
+            )
+        return counters, summary, examples
+
+    counters, summary, examples = asyncio.run(run())
+
+    assert counters["external_checked"] == 4
+    # Only the genuine "page gone" 404 counts as a broken outbound link.
+    assert summary.get("client_error_external_urls", 0) == 1
+    assert examples["client_error_external_urls"] == ["https://gone.example/404"]
+    # 403 + 429 are bot-blocking: tallied for QA, never surfaced as broken.
+    assert counters["inconclusive_external"] == 2
+    surfaced = set(examples["client_error_external_urls"])
+    assert not any("blocked.example" in u or "ratelimited.example" in u for u in surfaced)
+
+
 def test_sitemap_fetch_blocks_redirects_to_private_hosts(monkeypatch) -> None:
     monkeypatch.setattr(
         site_health,

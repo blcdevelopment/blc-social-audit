@@ -368,13 +368,6 @@
         <div><dt>Top queries analyzed</dt><dd>{{ payload.search_performance_section.summary.get("top_query_count", "N/A") if search_available else "N/A" }}</dd></div>
         <div><dt>Top pages analyzed</dt><dd>{{ payload.search_performance_section.summary.get("top_page_count", "N/A") if search_available else "N/A" }}</dd></div>
       </dl>
-      {% if search_available and payload.search_performance_section.date_range %}
-        <p class="muted">
-          Data window: {{ payload.search_performance_section.date_range.get("start") }}
-          to {{ payload.search_performance_section.date_range.get("end") }}
-          (Google's own measurements of this site in search results).
-        </p>
-      {% endif %}
       <div class="section-guide">
         <article>
           <h3>What this section tells you</h3>
@@ -586,6 +579,65 @@
           </dl>
         </article>
       </div>
+
+      {% if payload.core_web_vitals.available %}
+        <h3>Core Web Vitals</h3>
+        <p class="helper-copy">
+          The detailed PageSpeed Insights metrics behind the performance score, rated the
+          way Google rates them: green is good, amber needs improvement, red is poor.
+        </p>
+        <table class="cwv-table">
+          <thead>
+            <tr><th>Metric</th><th>Mobile (lab)</th><th>Desktop (lab)</th></tr>
+          </thead>
+          <tbody>
+            {% for row in payload.core_web_vitals.lab_rows %}
+              <tr>
+                <td class="cwv-metric-name">{{ row.label }}</td>
+                <td>
+                  {% if row.mobile %}
+                    <span class="cwv-dot cwv-band-{{ row.mobile.band }}"></span>{{ row.mobile.value_label }}
+                    <span class="cwv-rating">{{ row.mobile.rating_label }}</span>
+                  {% else %}N/A{% endif %}
+                </td>
+                <td>
+                  {% if row.desktop %}
+                    <span class="cwv-dot cwv-band-{{ row.desktop.band }}"></span>{{ row.desktop.value_label }}
+                    <span class="cwv-rating">{{ row.desktop.rating_label }}</span>
+                  {% else %}N/A{% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+
+        {% if payload.core_web_vitals.field_available %}
+          <h4>Real-user field data (Chrome UX Report)</h4>
+          <p class="helper-copy">
+            {{ payload.core_web_vitals.field_note }}
+            {% if payload.core_web_vitals.field_source %}
+              Scope: {{ payload.core_web_vitals.field_source }} ({{ payload.core_web_vitals.field_form_factor }}).
+            {% endif %}
+            {% if payload.core_web_vitals.field_assessment %}
+              Overall assessment: {{ payload.core_web_vitals.field_assessment }}.
+            {% endif %}
+          </p>
+          <table class="cwv-table">
+            <thead>
+              <tr><th>Metric</th><th>75th percentile (real users)</th><th>Rating</th></tr>
+            </thead>
+            <tbody>
+              {% for metric in payload.core_web_vitals.field_metrics %}
+                <tr>
+                  <td class="cwv-metric-name">{{ metric.label }}</td>
+                  <td><span class="cwv-dot cwv-band-{{ metric.band }}"></span>{{ metric.value_label }}</td>
+                  <td>{{ metric.rating_label }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% endif %}
+      {% endif %}
 
       <h3>Crawl QA</h3>
       <p class="helper-copy">
