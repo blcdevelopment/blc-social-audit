@@ -4,6 +4,12 @@
 **Date:** 2026-06-17
 **Canonical doc:** This file is the single AI insights plan. The previous separate AI SEO tooling plan has been merged here.
 
+> **⚠️ Partially superseded (2026-06-22):** the **AI-visibility vendor pick has changed from
+> Surfer to Rank Prompt** — see [14_AI_VISIBILITY_VENDOR_SELECTION.md](14_AI_VISIBILITY_VENDOR_SELECTION.md).
+> This affects **only** the AI-visibility section (§6.1, §9.1, §11.1). Everything else in this plan
+> — Windsor.ai analytics, Frase content research, OpenAI report intelligence, data architecture,
+> the enrichment seam (§12.4), scoring, phases, and the file checklist — **remains current.**
+
 ## 0. TL;DR
 
 BLC should treat "AI insights" as two layers:
@@ -163,6 +169,12 @@ Start with Surfer, but verify Claude coverage and API/export access before purch
 Pricing and plan features change. Treat this as a public-page snapshot checked on 2026-06-17.
 
 ### 6.1 Surfer SEO
+
+> **⚠️ Superseded for AI visibility (2026-06-22):** Surfer is **no longer the AI-visibility
+> vendor** — research found no confirmed self-serve public API for its AI tracker. The pick is now
+> **Rank Prompt**; see [14_AI_VISIBILITY_VENDOR_SELECTION.md](14_AI_VISIBILITY_VENDOR_SELECTION.md)
+> for pricing, the tiered credit model, API features, and the trial gate. The Surfer notes below
+> are kept for historical context only.
 
 Observed public pricing:
 
@@ -346,7 +358,11 @@ Estimated capability uplift if implemented well:
 
 ### 9.1 AI Visibility & Prompt Tracking
 
-Source: Surfer.
+> **⚠️ Vendor updated (2026-06-22):** source is now **Rank Prompt**, not Surfer — see
+> [14_AI_VISIBILITY_VENDOR_SELECTION.md](14_AI_VISIBILITY_VENDOR_SELECTION.md). The questions and
+> example findings below are vendor-agnostic and still apply.
+
+Source: ~~Surfer~~ **Rank Prompt** (provisional — pending the live-trial gate in docs/14).
 
 Answers:
 
@@ -541,6 +557,16 @@ audit_chat_messages
 ## 11. Normalized Fact Contracts
 
 ### 11.1 Surfer AI Visibility Facts
+
+> **⚠️ Provider changed to Rank Prompt (2026-06-22)** — see
+> [14_AI_VISIBILITY_VENDOR_SELECTION.md](14_AI_VISIBILITY_VENDOR_SELECTION.md). The **normalized
+> shape below stays useful as the BLC-internal contract** (set `"provider": "rank_prompt"`), but
+> note Rank Prompt's raw schema differs and must be mapped onto it:
+> - **No literal `mention_count`** — compute `brand_mentioned_prompts` / `brand_mention_rate_pct`
+>   from Rank Prompt's `ranked_prompts` / `total_results` / `brand_appears`.
+> - **Platforms** are bundle-tiered (4 bundled + premium add-ons), and **`ai_mode` is unconfirmed**
+>   (only `ai_overviews` is in the enum) — don't list a separate Google AI Mode yet.
+> - **By-country** comes from **per-region reports** aggregated app-side, not one fact blob.
 
 ```json
 {
