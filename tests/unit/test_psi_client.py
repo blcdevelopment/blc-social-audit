@@ -190,3 +190,38 @@ def test_collect_pagespeed_facts_homepage_scope_only_runs_first_page(monkeypatch
         ("https://example.com/", "mobile"),
         ("https://example.com/", "desktop"),
     ]
+
+
+def test_normalize_pagespeed_response_extracts_crux_field_data() -> None:
+    payload = {
+        "lighthouseResult": {"categories": {"performance": {"score": 0.86}}, "audits": {}},
+        "loadingExperience": {
+            "overall_category": "AVERAGE",
+            "metrics": {
+                "LARGEST_CONTENTFUL_PAINT_MS": {"percentile": 3270, "category": "AVERAGE"},
+                "CUMULATIVE_LAYOUT_SHIFT_SCORE": {"percentile": 3, "category": "FAST"},
+            },
+        },
+        "originLoadingExperience": {
+            "overall_category": "SLOW",
+            "metrics": {
+                "LARGEST_CONTENTFUL_PAINT_MS": {"percentile": 4200, "category": "SLOW"},
+            },
+        },
+    }
+    facts = normalize_pagespeed_response(payload, "mobile")
+
+    page = facts["field_data"]["page"]
+    origin = facts["field_data"]["origin"]
+    assert page["overall_category"] == "AVERAGE"
+    assert page["largest_contentful_paint_ms"] == {"p75": 3270, "category": "AVERAGE"}
+    # PSI scales the field CLS by 100; we normalize 3 -> 0.03 so downstream is in real units.
+    assert page["cumulative_layout_shift"] == {"p75": 0.03, "category": "FAST"}
+    assert origin["overall_category"] == "SLOW"
+    # Absent metrics (e.g. INP "missing data") stay None, never fabricated.
+    assert origin["interaction_to_next_paint_ms"] is None
+
+
+def test_normalize_pagespeed_response_without_field_data() -> None:
+    facts = normalize_pagespeed_response({"lighthouseResult": {}}, "mobile")
+    assert facts["field_data"] == {"page": None, "origin": None}

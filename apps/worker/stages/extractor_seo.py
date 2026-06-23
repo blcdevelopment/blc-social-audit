@@ -10,6 +10,11 @@ from bs4 import BeautifulSoup, Tag
 
 JsonDict = dict[str, Any]
 
+# Useful search-result length ranges (characters). Exposed as facts so the report can
+# state the baseline a "length is outside the ideal range" finding was judged against.
+TITLE_IDEAL_MIN_LENGTH, TITLE_IDEAL_MAX_LENGTH = 30, 65
+META_DESCRIPTION_IDEAL_MIN_LENGTH, META_DESCRIPTION_IDEAL_MAX_LENGTH = 70, 160
+
 
 def _get_page_value(page: object, key: str, default: Any = None) -> Any:
     if isinstance(page, Mapping):
@@ -137,13 +142,23 @@ def extract_seo_facts_for_page(page: object) -> JsonDict:
             "text": title_text,
             "length": len(title_text or ""),
             "present": title_text is not None,
-            "is_reasonable_length": 30 <= len(title_text or "") <= 65,
+            "is_reasonable_length": (
+                TITLE_IDEAL_MIN_LENGTH <= len(title_text or "") <= TITLE_IDEAL_MAX_LENGTH
+            ),
+            "ideal_min_length": TITLE_IDEAL_MIN_LENGTH,
+            "ideal_max_length": TITLE_IDEAL_MAX_LENGTH,
         },
         "meta_description": {
             "text": description,
             "length": len(description or ""),
             "present": description is not None,
-            "is_reasonable_length": 70 <= len(description or "") <= 160,
+            "is_reasonable_length": (
+                META_DESCRIPTION_IDEAL_MIN_LENGTH
+                <= len(description or "")
+                <= META_DESCRIPTION_IDEAL_MAX_LENGTH
+            ),
+            "ideal_min_length": META_DESCRIPTION_IDEAL_MIN_LENGTH,
+            "ideal_max_length": META_DESCRIPTION_IDEAL_MAX_LENGTH,
         },
         "canonical": canonical,
         "headings": {

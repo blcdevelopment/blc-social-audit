@@ -252,3 +252,124 @@ def test_plan_is_grounding_safe_on_real_fixture() -> None:
     # The weak fixture must actually produce findings, or the invariant above is vacuous.
     content = CommentaryContent.model_validate(sanitized["content"])
     assert content.seo.findings or content.uxui.findings
+
+
+def test_recommendation_title_states_the_fix_not_the_problem() -> None:
+    """A recommendation headline must describe the FIX, never restate the finding.
+
+    Regression: report cards showed the same sentence as both the problem and the
+    recommendation (e.g. "Pages do not use a single clear H1 heading" twice).
+    """
+    plan = _plan(
+        _breakdown(
+            [
+                _rule(
+                    "seo.h1.present_once",
+                    "fail",
+                    weight=9,
+                    impact="medium",
+                    tier="quick_win",
+                    label="Pages do not use a single clear H1 heading",
+                )
+            ]
+        )
+    )
+    finding = plan.seo.findings[0]
+    rec = plan.seo.recommendations[0]
+    assert finding.title == "Pages do not use a single clear H1 heading"
+    assert rec.title == "Give every page one clear H1 heading"
+    assert rec.title != finding.title
+
+
+def test_every_surfaceable_rubric_rule_has_an_action_title() -> None:
+    """No surfacing rule may fall back to restating its problem as the fix."""
+    import yaml
+
+    from apps.worker.stages.content_plan import _ACTION_TITLES
+
+    root = Path(__file__).resolve().parents[2]
+    for name in ("seo.yaml", "uxui.yaml"):
+        data = yaml.safe_load((root / "rubrics" / name).read_text())
+        for rule in data["rules"]:
+            if rule.get("surface_as_finding") is False:
+                continue
+            assert rule["id"] in _ACTION_TITLES, f"{name}: no action title for {rule['id']}"
+
+
+def test_action_titles_carry_no_grounding_strippable_numbers() -> None:
+    """Numeric claims in a title get stripped/flagged by grounding; titles must be
+    number-free (the exact targets live in the grounding-exempt remediation)."""
+    import re
+
+    from apps.worker.stages.content_plan import _ACTION_TITLES
+
+    # Mirror grounding_validator.NUMERIC_RE: a digit not preceded by a letter
+    # (so "H1" is fine, "30-65" is not).
+    numeric = re.compile(r"(?<![A-Za-z])[-+]?\d")
+    offenders = {rid: title for rid, title in _ACTION_TITLES.items() if numeric.search(title)}
+    assert not offenders, f"numeric titles will be grounding-stripped: {offenders}"
+
+
+def test_range_finding_states_measured_value_and_baseline() -> None:
+    """A "length is outside the ideal range" finding must state the measured value AND
+    the baseline range it was judged against — and every number must survive grounding."""
+    from apps.worker.stages.grounding_validator import validate_commentary_grounding
+
+    seo_facts = {
+        "status": "complete",
+        "pages": [
+            {
+                "url": "https://x.test/",
+                "meta_description": {
+                    "length": 240,
+                    "ideal_min_length": 70,
+                    "ideal_max_length": 160,
+                    "is_reasonable_length": False,
+                },
+            }
+        ],
+    }
+    rule = _rule(
+        "seo.homepage_meta_description.reasonable_length",
+        "fail",
+        weight=8,
+        impact="medium",
+        tier="quick_win",
+        label="Homepage meta description length is outside the ideal range",
+        fact_path="seo.pages[0].meta_description.is_reasonable_length",
+        value=False,
+    )
+    plan = build_content_plan(
+        audit_context={"url": "https://x.test", "niche": None, "target_audience": None},
+        seo_facts=seo_facts,
+        uxui_facts={},
+        psi_facts={},
+        score_breakdown=_breakdown([rule]),
+        settings=_settings(),
+    )
+
+    meaning = plan.seo.findings[0].meaning
+    assert "240 characters" in meaning
+    assert "70 to 160 characters" in meaning
+    assert "longer than" in meaning
+
+    # The measured value and the baseline bounds are all stored facts, so grounding keeps them.
+    commentary = {
+        "status": "deterministic",
+        "provider": "deterministic",
+        "model": "deterministic",
+        "content": plan.model_dump(mode="json"),
+    }
+    sanitized, log = validate_commentary_grounding(
+        commentary,
+        fact_sources={
+            "seo_facts": seo_facts,
+            "uxui_facts": {},
+            "psi_facts": {},
+            # _breakdown() scores the plan at 40; the grounding sources must agree, or the
+            # summary's own score numbers are (correctly) flagged.
+            "scores": {"seo": 40, "uxui": 40, "lead_gen": 40},
+        },
+    )
+    assert log["unsupported_claim_count"] == 0
+    assert "240 characters" in sanitized["content"]["seo"]["findings"][0]["meaning"]

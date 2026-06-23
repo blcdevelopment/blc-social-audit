@@ -49,7 +49,17 @@ from apps.worker.stages.technical_crawl_common import empty_summary, issues_from
 JsonDict = dict[str, Any]
 
 SITE_HEALTH_SOURCE = "site_health_sweep"
-_RETRY_GET_STATUSES = {403, 405, 501}
+_RETRY_GET_STATUSES = {403, 405, 406, 429, 501}
+# Outbound links are checked by a server-side bot, which cannot distinguish a
+# genuinely broken external link from a host that simply blocks automated
+# traffic. Big platforms (Spotify, social networks, anything behind Cloudflare)
+# routinely return 401/403/405/406/408/409/421/429/451 to a bot while serving a
+# real browser a 200, so those statuses are INCONCLUSIVE and must never be
+# reported as a broken link. Only the unambiguous "this page is gone" codes
+# count as a broken outbound link; everything else is dropped rather than
+# over-claimed. (Internal URLs are the client's own site and stay reliable, so
+# every 4xx there is still surfaced.)
+_BROKEN_EXTERNAL_CLIENT_STATUSES = {404, 410}
 _MAX_REDIRECTS = 10
 
 
@@ -123,7 +133,13 @@ async def _collect(
     async with httpx.AsyncClient(
         follow_redirects=False,
         verify=False,
-        headers={"User-Agent": settings.crawler_user_agent},
+        headers={
+            "User-Agent": settings.crawler_user_agent,
+            # Send the headers a real browser sends so hosts that vary their
+            # response on them (and bot-wall a bare request) answer truthfully.
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        },
         timeout=settings.site_health_request_timeout_seconds,
     ) as client:
         sitemap_urls, sitemap_status = await _sitemap_urls(
@@ -181,6 +197,7 @@ async def _collect(
             "sitemap_status": sitemap_status,
             "internal_urls_checked": checks["internal_checked"],
             "external_urls_checked": checks["external_checked"],
+            "inconclusive_external_urls": checks["inconclusive_external"],
             "blocked_urls": checks["blocked"],
             "rendered_pages_excluded": len(rendered_urls),
         },
@@ -405,7 +422,13 @@ async def _sweep(
         # Never run past the whole-audit deadline, even if the sweep's own budget is
         # larger than the time the pipeline has left.
         deadline = min(deadline, global_deadline)
-    counters = {"internal_checked": 0, "external_checked": 0, "blocked": 0, "skipped_budget": 0}
+    counters = {
+        "internal_checked": 0,
+        "external_checked": 0,
+        "blocked": 0,
+        "skipped_budget": 0,
+        "inconclusive_external": 0,
+    }
     lock = asyncio.Lock()
 
     async def check(url: str, *, internal: bool) -> None:
@@ -443,14 +466,29 @@ async def _sweep(
                     # outbound hosts are often bot-blocking and would over-claim.
                     _example(examples, "unreachable_internal_urls", url)
                 return
-            if status_code is not None and 400 <= status_code <= 499:
-                key = "client_error_internal_urls" if internal else "client_error_external_urls"
-                _count(summary, examples, key, url)
-            elif status_code is not None and status_code >= 500:
-                key = "server_error_internal_urls" if internal else "server_error_external_urls"
-                _count(summary, examples, key, url)
-            elif internal and x_robots and "noindex" in x_robots.lower():
-                _count(summary, examples, "non_indexable_internal_urls", url)
+            if status_code is None:
+                return
+            if internal:
+                # The client's own site: every error is a reliable, actionable
+                # signal because we control the request.
+                if 400 <= status_code <= 499:
+                    _count(summary, examples, "client_error_internal_urls", url)
+                elif status_code >= 500:
+                    _count(summary, examples, "server_error_internal_urls", url)
+                elif x_robots and "noindex" in x_robots.lower():
+                    _count(summary, examples, "non_indexable_internal_urls", url)
+                return
+            # Outbound link: only count statuses we can trust from a server-side
+            # bot. 404/410 means the destination page is genuinely gone and a 5xx
+            # is a real server error; auth/forbidden/rate-limit/legal codes are
+            # bot-blocking noise (the link works for real visitors), so they are
+            # tallied for QA but never reported as broken.
+            if status_code in _BROKEN_EXTERNAL_CLIENT_STATUSES:
+                _count(summary, examples, "client_error_external_urls", url)
+            elif status_code >= 500:
+                _count(summary, examples, "server_error_external_urls", url)
+            elif 400 <= status_code <= 499:
+                counters["inconclusive_external"] += 1
 
     await asyncio.gather(
         *(check(url, internal=True) for url in internal_urls),
