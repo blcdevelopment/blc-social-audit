@@ -57,7 +57,7 @@ P1-E5 internal operator UI, and the Epic P1-E6 QA, packaging, and handoff work:
   rendered PDF.
 - Standalone Social audit (`apps/worker/stages/social/`): paste an Instagram, Facebook, or
   YouTube profile link (or `@handle`) — no login, OAuth, or account connection — and the pipeline
-  reads the profile via Apify (Instagram Scraper + Facebook Pages Scraper, free tier) and/or the
+  reads the profile via Apify (Instagram Scraper + Facebook Pages & Posts Scrapers, free tier) and/or the
   free YouTube Data API v3 (`youtube_provider.py`),
   normalizes the payload into `social.*` facts, scores it against `rubrics/social.yaml`
   (`phase2-social-v1`) into a standalone 0–100 Social Score via `scoring.score_social_audit()`,
@@ -67,8 +67,9 @@ P1-E5 internal operator UI, and the Epic P1-E6 QA, packaging, and handoff work:
   its own branded PDF (`templates/social_report.html`). It is fully independent of the website
   audit: `tasks.run_collection_audit` branches on `audit_type`, social results store
   `social_score` + `social_facts`, and the website composite (`{seo, uxui}`) is unchanged.
-  Facebook returns page metadata only (no posts), so cadence/recency/engagement rules skip
-  for FB and rescale rather than penalize; Instagram has full post data.
+  Facebook page metadata (Pages scraper) is augmented with recent posts (Posts scraper), so FB
+  now yields cadence/recency/engagement like Instagram; if the Posts scraper returns nothing those
+  rules skip and rescale rather than penalize. Instagram and YouTube carry full post/upload data.
 - Clerk authentication (opt-in): the `/audits/*` router and most Google routes require
   a verified Clerk session when `CLERK_ISSUER` is set; with `CLERK_ISSUER` empty the API
   is open, which is how local dev, the QA harness, and tests run unauthenticated.
