@@ -1,8 +1,10 @@
 from celery import Celery
 
 from apps.shared.config import get_settings
+from apps.shared.observability import init_sentry
 
 settings = get_settings()
+init_sentry(settings, component="worker")
 
 celery_app = Celery(
     "blc_website_audit_worker",

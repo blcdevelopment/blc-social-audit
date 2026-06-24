@@ -14,20 +14,23 @@ from apps.shared.config import Settings, get_settings
 from apps.shared.database import SessionLocal
 from apps.shared.models import AuditJob, AuditResult
 from apps.worker.celery_app import celery_app
-from apps.worker.stages.commentary import generate_commentary
+from apps.worker.stages.commentary import generate_commentary, generate_social_commentary
 from apps.worker.stages.crawler import CrawlResult, crawl_site_sync
 from apps.worker.stages.docx_renderer import DocxRenderResult, render_audit_docx
 from apps.worker.stages.external_seo import collect_external_seo_facts, empty_external_seo_facts
 from apps.worker.stages.extractor_seo import extract_seo_facts
 from apps.worker.stages.extractor_uxui import extract_uxui_facts
 from apps.worker.stages.grounding_validator import validate_commentary_grounding
-from apps.worker.stages.pdf_renderer import PdfRenderResult, render_audit_pdf
+from apps.worker.stages.pdf_renderer import PdfRenderResult, render_audit_pdf, render_social_pdf
 from apps.worker.stages.psi_client import collect_pagespeed_facts
-from apps.worker.stages.scoring import score_audit
+from apps.worker.stages.scoring import score_audit, score_social_audit
+from apps.worker.stages.social.collector import collect_social_facts
+from apps.worker.stages.social.report import compose_social_report_payload
 
 JsonDict = dict[str, Any]
 CrawlerFunc = Callable[[str, Settings, str | None], CrawlResult]
 PsiCollectorFunc = Callable[[Sequence[str], Settings], JsonDict]
+SocialCollectorFunc = Callable[[Settings, "dict[str, str] | None"], JsonDict]
 
 
 # Seconds held back after external enrichment for scoring, commentary, grounding,
@@ -202,11 +205,102 @@ def _page_urls_from_crawled_pages(crawled_pages: JsonDict, fallback_url: str) ->
     return urls or [fallback_url]
 
 
+def _upsert_social_result(
+    db: Session,
+    job: AuditJob,
+    social_facts: JsonDict,
+    social_result: JsonDict,
+) -> AuditResult:
+    rubric_version = str(social_result.get("rubric_version") or "phase2-social")
+    result = job.result
+    if result is None:
+        result = AuditResult(
+            job_id=job.id,
+            seo_score=None,
+            uxui_score=None,
+            lead_gen_score=None,
+            crawled_pages={},
+            seo_facts={},
+            uxui_facts={},
+            psi_facts={},
+            external_seo_facts={},
+            score_breakdown={},
+            commentary={},
+            validation_log={},
+            report_metadata={},
+            pdf_path=None,
+            rubric_version=rubric_version,
+            llm_model="deterministic",
+        )
+        db.add(result)
+
+    result.seo_score = None
+    result.uxui_score = None
+    result.lead_gen_score = None
+    result.social_score = social_result.get("score")
+    result.social_facts = social_facts
+    result.score_breakdown = social_result
+    result.report_metadata = {
+        "status": "pending_pdf_render",
+        "renderer": "weasyprint",
+        "report_kind": "social",
+    }
+    result.pdf_path = None
+    result.rubric_version = rubric_version
+    result.llm_model = "deterministic"
+    db.commit()
+    db.refresh(result)
+    db.refresh(job)
+    return result
+
+
+def _run_social_pipeline(
+    db: Session,
+    job: AuditJob,
+    settings: Settings,
+    social_collector: SocialCollectorFunc,
+) -> None:
+    _mark_job(db, job, AuditStatus.CRAWLING, "Collecting social profiles", 40)
+    social_facts = social_collector(settings, job.social_handles)
+
+    _mark_job(db, job, AuditStatus.SCORING, "Scoring social profiles", 80)
+    social_result = score_social_audit(social_facts, settings)
+
+    result = _upsert_social_result(db, job, social_facts, social_result)
+
+    _mark_job(db, job, AuditStatus.COMMENTING, "Writing social commentary", 88)
+    baseline = compose_social_report_payload(job, result)
+    commentary = generate_social_commentary(
+        audit_context={"handles": job.social_handles, "niche": job.niche},
+        social_facts=social_facts,
+        score=baseline.get("score"),
+        findings=baseline.get("findings") or [],
+        settings=settings,
+    )
+    result.commentary = commentary
+    result.llm_model = commentary.get("model") or result.llm_model
+    db.commit()
+    db.refresh(result)
+
+    _mark_job(db, job, AuditStatus.RENDERING, "Rendering social report", 95)
+    pdf_result = render_social_pdf(job, result, settings)
+    result.report_metadata = {
+        **pdf_result.report_metadata,
+        "exports": {"pdf": pdf_result.report_metadata},
+    }
+    result.pdf_path = pdf_result.pdf_path
+    db.commit()
+    db.refresh(result)
+
+    _mark_job(db, job, AuditStatus.COMPLETE, "Social audit complete", 100)
+
+
 def run_collection_audit(
     job_id: str,
     *,
     crawler: CrawlerFunc = crawl_site_sync,
     psi_collector: PsiCollectorFunc = collect_pagespeed_facts,
+    social_collector: SocialCollectorFunc = collect_social_facts,
 ) -> None:
     settings = get_settings()
     task_started = time.monotonic()
@@ -218,6 +312,10 @@ def run_collection_audit(
             return
 
         try:
+            if (job.audit_type or "website") == "social":
+                _run_social_pipeline(db, job, settings, social_collector)
+                return
+
             _mark_job(db, job, AuditStatus.CRAWLING, "Rendering website pages", 15)
             crawl_result = crawler(job.url, settings, str(job.id))
 

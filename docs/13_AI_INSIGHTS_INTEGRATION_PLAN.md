@@ -1,5 +1,13 @@
 # 13 - AI Insights Integration Plan
 
+> **⛔ PARKED / DEFERRED (2026-06-23):** This entire plan is **on hold**. It is **blocked on an
+> unpurchased paid vendor subscription** (Rank Prompt API Starter $99/mo; live billing
+> unverified — see [14_AI_VISIBILITY_VENDOR_SELECTION.md](14_AI_VISIBILITY_VENDOR_SELECTION.md)).
+> **Phase 2 is proceeding WITHOUT AI Insights.** Deferring was **verified safe**: no Phase-2 task
+> depends on AI Insights (it depends only on the shipped Phase-1 spine and on its own vendor
+> trial). **To be resumed once the subscription is sorted.** The body below is retained as the
+> as-planned reference.
+
 **Status:** Planning document. Nothing in here is built yet.
 **Date:** 2026-06-17
 **Canonical doc:** This file is the single AI insights plan. The previous separate AI SEO tooling plan has been merged here.

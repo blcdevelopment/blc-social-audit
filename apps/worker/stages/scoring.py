@@ -41,7 +41,10 @@ class Rubric(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     version: str
-    category: Literal["seo", "uxui"]
+    # "social" is allowed for the STANDALONE social audit rubric. It does NOT enter the
+    # website CompositeRubric (whose weights stay exactly {seo, uxui}); the Social Score
+    # is computed on its own via score_social_audit().
+    category: Literal["seo", "uxui", "social"]
     max_score: int = Field(default=100, gt=0)
     normalization: NormalizationMode = "rescale_to_max"
     rules: list[RubricRule] = Field(min_length=1)
@@ -134,6 +137,32 @@ def score_audit(
             "uxui": uxui_breakdown,
         },
         "composite": lead_gen,
+    }
+
+
+def score_social_audit(social_facts: JsonDict, settings: Settings) -> JsonDict:
+    """Standalone Social Score for the Phase-2 social audit.
+
+    Scores ``rubrics/social.yaml`` against the social facts bundle (from
+    ``stages.social.extractor``). This is independent of the website audit — it never
+    touches the website composite, so website scores are unaffected. Returns no score
+    when collection was skipped/failed (status not complete/partial)."""
+    rubric = load_rubric(settings.rubric_social_path)
+    status = social_facts.get("status") if isinstance(social_facts, dict) else None
+    if status not in {"complete", "partial"}:
+        return {
+            "status": status or "skipped",
+            "rubric_version": rubric.version,
+            "score": None,
+            "category": None,
+        }
+
+    breakdown = score_category({"social": social_facts}, rubric)
+    return {
+        "status": "complete",
+        "rubric_version": rubric.version,
+        "score": breakdown["score"],
+        "category": breakdown,
     }
 
 

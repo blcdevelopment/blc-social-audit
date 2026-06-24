@@ -10,10 +10,46 @@ interface ApiRequestInit extends RequestInit {
   authToken?: string | null;
 }
 
+export interface BrandOverrides {
+  name?: string | null;
+  short_name?: string | null;
+  primary_color?: string | null;
+  accent_color?: string | null;
+  logo_url?: string | null;
+}
+
 export interface AuditCreateRequest {
-  url: string;
+  url?: string | null;
+  audit_type?: "website" | "social";
   niche?: string | null;
   target_audience?: string | null;
+  brand_overrides?: BrandOverrides | null;
+  social_handles?: Record<string, string> | null;
+}
+
+export interface SocialReportFinding {
+  id: string;
+  label: string;
+  remediation: string | null;
+  impact: string;
+  tier: string;
+  result: string;
+  narrative?: string;
+}
+
+export interface SocialReport {
+  version: string;
+  score: number | null;
+  status: string;
+  handles: Record<string, string>;
+  generated_date: string;
+  platforms_audited: number;
+  summary: Record<string, unknown>;
+  platforms: Record<string, unknown>[];
+  executive_summary?: string;
+  commentary_provider?: string;
+  findings: SocialReportFinding[];
+  roadmap: Record<string, SocialReportFinding[]>;
 }
 
 export interface AuditCreateResponse {
@@ -22,9 +58,17 @@ export interface AuditCreateResponse {
   status_url: string;
 }
 
+export interface AuditShareResponse {
+  job_id: string;
+  share_token: string;
+  share_expires_at: string;
+  report_path: string;
+}
+
 export interface AuditListItem {
   job_id: string;
   url: string;
+  audit_type: string;
   status: string;
   current_stage: string | null;
   progress_pct: number;
@@ -33,6 +77,7 @@ export interface AuditListItem {
   seo_score: number | null;
   uxui_score: number | null;
   lead_gen_score: number | null;
+  social_score: number | null;
   report_available: boolean;
 }
 
@@ -204,8 +249,10 @@ export interface ReportPayload {
 export interface AuditDetail {
   job_id: string;
   url: string;
+  audit_type: string;
   niche: string | null;
   target_audience: string | null;
+  social_handles?: Record<string, string> | null;
   status: string;
   current_stage: string | null;
   progress_pct: number;
@@ -214,7 +261,12 @@ export interface AuditDetail {
   started_at: string | null;
   completed_at: string | null;
   report_available: boolean;
+  seo_score?: number | null;
+  uxui_score?: number | null;
+  lead_gen_score?: number | null;
+  social_score?: number | null;
   report: ReportPayload | null;
+  social_report?: SocialReport | null;
 }
 
 export class ApiError extends Error {
@@ -330,6 +382,31 @@ export function rerunAuditEnrichment(
     method: "POST",
     authToken,
   });
+}
+
+export function shareAudit(
+  jobId: string,
+  authToken?: string | null,
+): Promise<AuditShareResponse> {
+  return request<AuditShareResponse>(`/audits/${jobId}/share`, {
+    method: "POST",
+    authToken,
+  });
+}
+
+export function revokeShare(
+  jobId: string,
+  authToken?: string | null,
+): Promise<{ job_id: string; shared: boolean }> {
+  return request(`/audits/${jobId}/share`, {
+    method: "DELETE",
+    authToken,
+  });
+}
+
+// Builds the absolute, login-free report URL from the API's relative report_path.
+export function shareUrlFromPath(reportPath: string): string {
+  return `${API_BASE_URL}${reportPath}`;
 }
 
 function filenameFromDisposition(disposition: string | null, fallback: string): string {

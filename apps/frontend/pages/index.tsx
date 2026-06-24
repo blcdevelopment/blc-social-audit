@@ -125,7 +125,7 @@ export default function SubmitAuditPage() {
               id="niche"
               name="niche"
               type="text"
-              placeholder="e.g. custom home builder"
+              placeholder="e.g. coffee shop, law firm, gym"
               value={niche}
               maxLength={255}
               onChange={(event) => setNiche(event.target.value)}
@@ -139,7 +139,7 @@ export default function SubmitAuditPage() {
               id="target_audience"
               name="target_audience"
               type="text"
-              placeholder="e.g. homeowners planning a renovation"
+              placeholder="e.g. customers in your area"
               value={targetAudience}
               maxLength={255}
               onChange={(event) => setTargetAudience(event.target.value)}

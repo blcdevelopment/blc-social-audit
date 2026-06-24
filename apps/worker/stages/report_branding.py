@@ -82,3 +82,28 @@ def load_brand_config(path: Path) -> BrandConfig:
     if not isinstance(payload, dict):
         raise ValueError(f"Brand config {path} must contain a YAML object.")
     return BrandConfig.model_validate(payload)
+
+
+def apply_brand_overrides(context: JsonDict, overrides: JsonDict | None) -> JsonDict:
+    """Merge per-audit white-label overrides over a brand template context. Only known,
+    validated fields are applied; anything missing or malformed is ignored so a bad
+    override can never break rendering. ``logo_url`` (http/https) replaces the logo with a
+    remote image WeasyPrint fetches at render time."""
+    if not overrides or not isinstance(overrides, dict):
+        return context
+
+    merged = dict(context)
+    for key in ("name", "short_name"):
+        value = overrides.get(key)
+        if isinstance(value, str) and value.strip():
+            merged[key] = " ".join(value.split())
+    for key in ("primary_color", "accent_color"):
+        value = overrides.get(key)
+        if isinstance(value, str) and HEX_COLOR_RE.match(value.strip()):
+            merged[key] = value.strip()
+    logo_url = overrides.get("logo_url")
+    if isinstance(logo_url, str) and logo_url.strip().lower().startswith(("http://", "https://")):
+        merged["logo_uri"] = logo_url.strip()
+        merged["logo_path"] = None
+        merged["logo_exists"] = True
+    return merged

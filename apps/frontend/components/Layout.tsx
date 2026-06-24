@@ -10,7 +10,8 @@ interface LayoutProps {
 }
 
 const NAV_LINKS = [
-  { href: "/", label: "New Audit" },
+  { href: "/", label: "Website Audit" },
+  { href: "/social", label: "Social Audit" },
   { href: "/audits", label: "Audit History" },
 ];
 

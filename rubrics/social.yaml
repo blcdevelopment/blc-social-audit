@@ -1,0 +1,139 @@
+# Social Media audit rubric (standalone Social Score — NOT folded into the website composite).
+#
+# Scored by the same engine as seo.yaml/uxui.yaml via scoring.score_social_audit(); facts
+# come from apps/worker/stages/social/extractor.py (fact_path values are social.*).
+# Calibrated against tests/fixtures/social_instagram_{strong,weak}.json (strong scores high,
+# weak scores low — see tests/unit/test_social_scoring.py). Tune thresholds against real
+# example accounts in the niche being audited before treating scores as authoritative.
+version: "phase2-social-v1"
+category: social
+max_score: 100
+normalization: rescale_to_max
+
+rules:
+  - id: social.collection.complete
+    description: Social data collection completed for the requested handles.
+    weight: 1
+    fact_path: social.status
+    evaluator: exact_match
+    params:
+      full_credit: complete
+    impact: high
+    tier: quick_win
+    finding_label: Social data could not be fully collected
+    remediation: Re-run the audit; confirm the handles are public and spelled correctly.
+    surface_as_finding: false
+
+  - id: social.profile.complete
+    description: Profiles have a complete bio, website link, and name.
+    weight: 10
+    fact_path: social.summary.profiles_complete_pct
+    evaluator: threshold
+    params:
+      min: 100
+      partial_min: 60
+    impact: high
+    tier: quick_win
+    finding_label: Incomplete social profiles
+    remediation: Fill in the bio, website link, contact button, and business category on every profile.
+
+  - id: social.posting.cadence
+    description: Accounts post consistently (posts per month).
+    weight: 9
+    fact_path: social.summary.avg_posts_per_month
+    evaluator: threshold
+    params:
+      min: 8
+      partial_min: 4
+    skip_if_missing: true
+    impact: high
+    tier: mid_term
+    finding_label: Infrequent posting
+    remediation: Publish on a steady cadence (aim for ~2+ posts/week) to stay visible in feeds.
+
+  - id: social.posting.recency
+    description: Accounts posted recently (days since the last post; lower is better).
+    weight: 8
+    fact_path: social.summary.days_since_last_post
+    evaluator: threshold
+    params:
+      max: 14
+      partial_max: 30
+    skip_if_missing: true
+    impact: high
+    tier: quick_win
+    finding_label: Stale social presence
+    remediation: Resume regular posting; a dormant feed signals an inactive business to prospects.
+
+  - id: social.engagement.rate
+    description: Posts earn meaningful engagement relative to follower count (%).
+    weight: 9
+    fact_path: social.summary.avg_engagement_rate_pct
+    evaluator: threshold
+    params:
+      min: 2
+      partial_min: 1
+    skip_if_missing: true
+    impact: medium
+    tier: mid_term
+    finding_label: Low engagement
+    remediation: Post engaging content and Reels; ask questions and reply to comments to lift engagement.
+
+  - id: social.link_in_bio
+    description: At least one profile links out to the website or a lead-capture page.
+    weight: 8
+    fact_path: social.summary.profiles_with_link_in_bio
+    evaluator: threshold
+    params:
+      min: 1
+    impact: high
+    tier: quick_win
+    finding_label: No link in bio
+    remediation: Add a link in bio to the website or a lead-capture/contact page on each profile.
+
+  - id: social.cta.present
+    description: Profiles include a clear call-to-action (book, call, message, quote).
+    weight: 7
+    fact_path: social.summary.profiles_with_cta
+    evaluator: threshold
+    params:
+      min: 1
+    impact: medium
+    tier: quick_win
+    finding_label: No call-to-action on profiles
+    remediation: Enable a contact/booking action button and state a clear CTA in the bio.
+
+  - id: social.content.visual_mix
+    description: Accounts publish video/Reels content, not only static images.
+    weight: 5
+    fact_path: social.summary.has_video_content
+    evaluator: boolean
+    impact: low
+    tier: mid_term
+    finding_label: No video content
+    remediation: Publish short-form video/Reels; video typically drives the most reach and discovery.
+
+  - id: social.coverage.platforms
+    description: The brand maintains a presence on more than one relevant platform.
+    weight: 6
+    fact_path: social.summary.platforms_audited
+    evaluator: threshold
+    params:
+      min: 2
+      partial_min: 1
+    impact: medium
+    tier: mid_term
+    finding_label: Limited platform coverage
+    remediation: Maintain a presence on the platforms where your audience is active (e.g. Instagram and Facebook).
+
+  - id: social.branding.avatar
+    description: Profiles use a consistent logo/brand avatar.
+    weight: 5
+    fact_path: social.summary.profiles_with_logo_avatar
+    evaluator: threshold
+    params:
+      min: 1
+    impact: low
+    tier: quick_win
+    finding_label: Inconsistent profile branding
+    remediation: Use the same logo, handle, and brand colors across every profile for recognizability.

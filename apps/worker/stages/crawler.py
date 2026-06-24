@@ -136,6 +136,82 @@ def assert_crawlable_url(url: str, allow_private_hosts: bool) -> None:
         )
 
 
+async def _host_blocked_for_subrequest(
+    host: str | None,
+    settings: Settings,
+    resolve_cache: dict[str, bool],
+) -> bool:
+    """Decide whether a sub-resource/redirect request to ``host`` should be aborted by
+    the request-level SSRF guard. This mirrors ``assert_crawlable_url`` but runs per
+    request during rendering, closing the gap where the page-level check covers only the
+    navigation target. Returns False (allow) when interception is off or the crawler is
+    explicitly permitted to reach private hosts (local dev / QA crawls)."""
+    if settings.crawler_allow_private_hosts or not settings.crawler_intercept_requests:
+        return False
+    if not host:
+        return False
+    host = host.lower().rstrip(".")
+    # Cheap literal check first (no DNS): IP literals, localhost, *.local.
+    if _hostname_is_private(host):
+        return True
+    if host in resolve_cache:
+        return resolve_cache[host]
+    # DNS resolution is blocking; run it off the event loop and memoize per crawl so a
+    # page with many sub-resources doesn't re-resolve the same host each time.
+    loop = asyncio.get_running_loop()
+    try:
+        resolved = await loop.run_in_executor(None, _resolve_host_ips, host)
+    except OSError:
+        # An unresolvable sub-resource will fail at the network layer anyway; don't let
+        # the guard itself block it (the navigation target was already validated).
+        resolve_cache[host] = False
+        return False
+    blocked = bool(resolved) and any(_ip_is_blocked(ip_address) for ip_address in resolved)
+    resolve_cache[host] = blocked
+    return blocked
+
+
+def _make_ssrf_route_guard(settings: Settings, resolve_cache: dict[str, bool]):
+    """Build a Playwright route handler that aborts requests to blocked hosts and lets
+    everything else through. Every intercepted request MUST be resolved (continue/abort)
+    exactly once or the page hangs, so the handler is written to never raise."""
+
+    async def _guard(route: playwright_api.Route) -> None:
+        block = False
+        try:
+            host = urlparse(route.request.url).hostname
+            block = await _host_blocked_for_subrequest(host, settings, resolve_cache)
+        except Exception:
+            block = False
+        with suppress(Exception):
+            if block:
+                await route.abort("blockedbyclient")
+            else:
+                await route.continue_()
+
+    return _guard
+
+
+async def _new_crawl_context(
+    browser: playwright_api.Browser,
+    settings: Settings,
+    resolve_cache: dict[str, bool],
+) -> playwright_api.BrowserContext:
+    """Create a browser context with the standard crawl options and, unless private
+    hosts are allowed, the request-level SSRF guard attached."""
+    context = await browser.new_context(
+        ignore_https_errors=True,
+        service_workers="block",
+        user_agent=settings.crawler_user_agent,
+        viewport={"width": 1280, "height": 720},
+    )
+    context.set_default_timeout(settings.crawler_page_timeout_seconds * 1000)
+    context.set_default_navigation_timeout(settings.crawler_page_timeout_seconds * 1000)
+    if settings.crawler_intercept_requests and not settings.crawler_allow_private_hosts:
+        await context.route("**/*", _make_ssrf_route_guard(settings, resolve_cache))
+    return context
+
+
 def is_failed_http_status(status_code: int | None) -> bool:
     return status_code is not None and status_code >= 400
 
@@ -506,18 +582,14 @@ async def crawl_site(url: str, settings: Settings, audit_id: str | None = None) 
     skipped_pages: list[dict[str, Any]] = []
     discovered_links: list[LinkCandidate] = []
     pages: list[CrawledPage] = []
+    # Shared across every context so the request-level SSRF guard memoizes DNS
+    # resolution per host for the whole crawl.
+    resolve_cache: dict[str, bool] = {}
 
     async with playwright_api.async_playwright() as playwright:
         browser = await _launch_chromium(playwright, settings)
         try:
-            context = await browser.new_context(
-                ignore_https_errors=True,
-                service_workers="block",
-                user_agent=settings.crawler_user_agent,
-                viewport={"width": 1280, "height": 720},
-            )
-            context.set_default_timeout(settings.crawler_page_timeout_seconds * 1000)
-            context.set_default_navigation_timeout(settings.crawler_page_timeout_seconds * 1000)
+            context = await _new_crawl_context(browser, settings, resolve_cache)
             try:
                 homepage = await _render_page(context, start_url, settings, audit_id)
             finally:
@@ -552,16 +624,7 @@ async def crawl_site(url: str, settings: Settings, audit_id: str | None = None) 
 
             async def crawl_candidate(candidate: LinkCandidate) -> CrawledPage | None:
                 async with semaphore:
-                    child_context = await browser.new_context(
-                        ignore_https_errors=True,
-                        service_workers="block",
-                        user_agent=settings.crawler_user_agent,
-                        viewport={"width": 1280, "height": 720},
-                    )
-                    child_context.set_default_timeout(settings.crawler_page_timeout_seconds * 1000)
-                    child_context.set_default_navigation_timeout(
-                        settings.crawler_page_timeout_seconds * 1000
-                    )
+                    child_context = await _new_crawl_context(browser, settings, resolve_cache)
                     try:
                         return await _render_page(
                             child_context,

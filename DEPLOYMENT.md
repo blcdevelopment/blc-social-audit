@@ -1,8 +1,18 @@
 # Deployment Guide — BLC Website Audit
 
 > **Status (2026-06-10): ✅ Build-verified, ready to deploy.** *(Last verified against the
-> code: 2026-06-16 — stack, Caddy routing, CI/CD flow, and the `deploy/deploy.sh` `/health`
-> gate all still match.)*
+> code: 2026-06-23 — stack, Caddy routing, CI/CD flow, and the `deploy/deploy.sh` `/health`
+> gate all still match. This pass added: migration head `20260623_0003`, the new env vars
+> (Apify / Sentry / retention / share-link), the storage-retention cron, and the public
+> token-gated share endpoints.)*
+>
+> **Update (2026-06-23):** the **standalone Social audit is now BUILT and runnable** (not just a
+> data layer). Ops impact: migration head is now **`20260623_0004`** (additive; auto-runs on
+> deploy) and **`APIFY_API_TOKEN` is required on the box for social audits** (blank ⇒ social
+> collection is skipped; website audits unaffected). The provider is **Apify** with **two
+> actors** — Instagram Scraper (`apify~instagram-scraper`) + Facebook Pages Scraper
+> (`apify~facebook-pages-scraper`) — and a social audit renders its **own separate branded PDF**
+> (no DOCX). Website auditing is untouched.
 > All three production images (`api`, `frontend`, `worker`) build cleanly and the
 > auth/architecture has been reviewed end-to-end. The remaining work is **operator-side
 > only** (secrets, the box, and the Clerk dashboard) — no code changes are required.
@@ -35,8 +45,14 @@ branded PDF (DOCX on demand) → expose it through a Next.js operator UI.
 **Auth:** Clerk gates the UI (sign-in required) and the API (every `/audits` endpoint
 verifies a Clerk session token). See [§7](#7-security).
 
-**Out of scope (Phase 2, not built):** social-media auditing, object storage, multi-tenant
-auth/roles, benchmarking/analytics. See [§9 Roadmap](#9-roadmap).
+**Out of scope here:** multi-tenant auth/roles, benchmarking/analytics. Object
+storage was evaluated and **removed by decision** (reports stay on the local filesystem). See
+[§9 Roadmap](#9-roadmap).
+
+> **Update (2026-06-23):** social-media auditing is **no longer out of scope** — the standalone
+> Social audit type ships and is runnable from the browser (its own report + Social Score,
+> independent of the website composite). Its one ops dependency is `APIFY_API_TOKEN` (see
+> [§4](#4-the-server--prerequisites) / [§5 step 4](#step-4--create-the-production-env-on-the-box)).
 
 ---
 
@@ -221,6 +237,15 @@ CLERK_AUTHORIZED_PARTIES=https://ai.builderleadconverter.com
 # --- Optional (safe to leave blank; app degrades gracefully) ---
 OPENAI_API_KEY=          # Phase-1 commentary is fully deterministic; this is dormant scaffolding
 GOOGLE_PSI_API_KEY=
+APIFY_API_TOKEN=         # REQUIRED for social audits (Apify IG + FB-pages actors); blank ⇒ social collection is skipped
+# APIFY_TIMEOUT_SECONDS=120  # per-actor sync-run timeout (default 120, min 10)
+SENTRY_DSN=              # optional error reporting; blank ⇒ disabled (mirrors the Clerk opt-in)
+SENTRY_TRACES_SAMPLE_RATE=0.0
+
+# These have sensible defaults and can be omitted entirely:
+# STORAGE_RETENTION_DAYS=90        # cleanup_storage.py prunes artifacts older than this; 0 disables
+# SHARE_LINK_TTL_DAYS=7            # defaults-only (NOT in .env.template); lifetime of a share link
+# CRAWLER_INTERCEPT_REQUESTS=true  # aborts sub-resource/redirect fetches to private/metadata IPs
 ```
 > `CLERK_ISSUER` is mandatory: empty → compose **aborts** (intended fail-fast); a wrong
 > slug/scheme → **every** audit request returns 401. Verify the slug matches your
@@ -230,6 +255,17 @@ GOOGLE_PSI_API_KEY=
 > (no key), while Google Search Console (`GOOGLE_OAUTH_*` / `GSC_*`) and the licensed
 > Screaming Frog CLI (`SCREAMING_FROG_*`) stay disabled unless configured. See
 > [.env.template](.env.template) for the full list; leaving them blank is a supported path.
+>
+> **`APIFY_API_TOKEN`** powers the **runnable Social audit** via two Apify actors — Instagram
+> Scraper (`apify~instagram-scraper`) and Facebook Pages Scraper (`apify~facebook-pages-scraper`).
+> It is **required for social audits**; without it social collection is skipped (the job degrades
+> gracefully) and **website audits are entirely unaffected** (they never call Apify). Tune the
+> per-actor sync-run timeout with `APIFY_TIMEOUT_SECONDS` (default `120`). **`SENTRY_DSN`** is a
+> no-op unless set *and* `sentry-sdk` is installed (it ships in the prod images via
+> `pyproject.toml`).
+> **`STORAGE_RETENTION_DAYS`** (default `90`, `0` disables), **`SHARE_LINK_TTL_DAYS`**
+> (default `7`; defaults-only — not listed in `.env.template`), and
+> **`CRAWLER_INTERCEPT_REQUESTS`** (default `true`) all default sensibly and rarely need setting.
 
 ### Step 5 — Build & launch
 ```bash
@@ -243,8 +279,17 @@ docker compose -f docker-compose.prod.yml build frontend
 docker compose -f docker-compose.prod.yml up -d
 docker compose -f docker-compose.prod.yml ps
 ```
-On first boot the API runs `alembic upgrade head`, and Caddy requests the TLS cert
-automatically (allow ~30 s).
+> **Dependency note:** the prod images install from **`pyproject.toml`** (via `uv`), so the
+> newly-added `sentry-sdk` is already picked up at build time. `poetry.lock` has **not** yet been
+> regenerated — run `poetry lock` (laptop) and commit it before the next build so the lock and
+> `requirements.txt` mirror match `pyproject.toml`. This is a dev-sync chore, not a deploy blocker.
+On first boot the API runs `alembic upgrade head` (current head **`20260623_0004`** — chain
+`0001 → 0002 → 0003 → 0004`; `0004` adds the `audit_type` discriminator + `social_handles` to
+`audit_jobs`, `social_score` + `social_facts` to `audit_results`, and makes the website
+`seo_score` / `uxui_score` / `lead_gen_score` columns nullable so a social result can leave them
+empty — all **additive and safe** to apply over an existing DB; `0003` added `share_token` /
+`share_expires_at` / `brand_overrides`), and Caddy requests the TLS cert automatically
+(allow ~30 s).
 
 ### Step 6 — Clerk dashboard
 - **Restrictions → invitation-only.** Disable open sign-up and invite your 2–3 teammates
@@ -395,11 +440,25 @@ docker compose -f docker-compose.prod.yml exec postgres \
 
 # Reclaim disk (build cache grows fast):
 docker builder prune -f
+
+# Prune old reports/screenshots/tool-exports (see Storage note below):
+docker compose -f docker-compose.prod.yml exec api python scripts/cleanup_storage.py --dry-run
+docker compose -f docker-compose.prod.yml exec api python scripts/cleanup_storage.py
 ```
 
-**Storage:** PDFs/screenshots accumulate unbounded in the `storage` volume (no retention
-policy — known limitation). Watch `df -h` and prune `~/blc-social-audit` storage paths or the
-volume contents periodically.
+**Storage:** reports stay on the **local filesystem** in the shared `storage` volume — object
+storage (S3) was evaluated and **removed by decision** (single internal VM, ~5–10 users).
+`scripts/cleanup_storage.py` deletes reports / screenshots / tool-exports older than
+`STORAGE_RETENTION_DAYS` (default 90; `0` disables). There is **no in-app scheduler** — run it
+from cron on the host. Add a daily job (runs inside the `api` container, which mounts the
+`storage` volume):
+
+```bash
+# crontab -e  (on the box)
+0 3 * * *  cd ~/blc-social-audit && docker compose -f docker-compose.prod.yml exec -T api \
+             python scripts/cleanup_storage.py >> ~/blc-cleanup.log 2>&1
+```
+Still watch `df -h` — the build cache and Postgres data grow independently of report retention.
 
 ---
 
@@ -412,6 +471,7 @@ volume contents periodically.
 | **SSH hardening** | Move to SSH keys, then disable password auth (`PasswordAuthentication no`). |
 | **`CLERK_AUTHORIZED_PARTIES`** | Set to the domain so the `azp` check is active (else it's a no-op). |
 | **API auth boundary** | ✅ Every `/audits` endpoint requires a valid Clerk token (`require_user`). |
+| **Public share links** | ℹ️ **By design.** `GET /shared/{token}` and `GET /shared/{token}/report` are **unauthenticated** (mounted outside the `require_user` router) so clients can view/download a report without an account; they are reachable through Caddy's `/api/*` route (i.e. `/api/shared/{token}`). Access needs a 32-byte URL-safe token that is **time-limited** (`SHARE_LINK_TTL_DAYS`, default 7) and **operator-revocable** (`DELETE /audits/{id}/share` nulls the token). Expired → 410, missing/revoked → 404. |
 | **Secrets in images** | ✅ `.dockerignore` keeps `.env` out of all images; frontend never sees the DB/OpenAI secrets. |
 | **TLS** | ✅ Caddy auto-issues + auto-renews Let's Encrypt; `caddy_data` volume persists certs. |
 | **SSRF** | Crawler blocks private/loopback/metadata IPs pre-navigation and re-validates the post-redirect host; the external-SEO site-health sweep re-validates **every** redirect hop. The page crawler's mid-crawl sub-resource interception is still **not** done (known limitation — see docs/06). |
@@ -421,8 +481,12 @@ volume contents periodically.
 ## 8. Known limitations (operational)
 
 - **Single worker, `--concurrency=1`** — correctly tuned for 4 GB; audits run one at a time.
-- **No retention/cleanup** for `storage/` PDFs + screenshots.
-- **No observability / no retry-DLQ** beyond Celery time limits.
+- **Storage retention is cron-driven, not automatic** — `scripts/cleanup_storage.py` exists and
+  closes the old "no cleanup" gap, but there is **no in-app scheduler**; you must wire the host
+  cron job (see [§6](#6-day-2-operations)) or artifacts still accumulate.
+- **Observability is opt-in and minimal** — optional Sentry error reporting via `SENTRY_DSN`
+  (no-op when unset); **no metrics/alerts/dashboards and no Celery retry-DLQ** beyond Celery
+  time limits (still TODO).
 - **Dev Clerk instance** — rate-limited, ~100-user cap, shows a dev banner; fine for internal
   use, not ideal for production (see roadmap).
 - **`depends_on` is start-order, not readiness** — expect a brief 502 warm-up on the very first
@@ -436,8 +500,8 @@ volume contents periodically.
 ### Near-term hardening (do soon after go-live)
 1. **Restrict Clerk sign-up** + invite the team (security — do at deploy).
 2. **Rotate secrets** + move SSH to keys, disable password login.
-3. **Automated Postgres backups** (cron `pg_dump` → off-box) + a **storage retention job**
-   (delete reports/screenshots older than N days).
+3. **Automated Postgres backups** (cron `pg_dump` → off-box). The **storage retention job** now
+   exists (`scripts/cleanup_storage.py`) — just wire it into host cron (see [§6](#6-day-2-operations)).
 4. **Disk + uptime monitoring** (the 4 GB box has no headroom to spare).
 5. **Smoke-test checklist** added to CI or a runbook for every deploy.
 
@@ -449,14 +513,27 @@ volume contents periodically.
    SSHes in and runs [deploy/deploy.sh](deploy/deploy.sh) (`up -d --build`) on merge to `main`.
    Still builds *on the box*; building off-box is item 9 below.
 9. **Build images off-box** (registry) so the 4 GB box never runs `next build`.
-10. **Observability** — structured logs aggregation, a Celery retry/DLQ, health/metrics endpoints.
-11. **Object storage** for reports (S3-compatible) — removes the local-filesystem limitation and
-    enables horizontal scaling of the worker.
+10. **Observability** — optional **Sentry** error reporting is now wired (set `SENTRY_DSN`); still
+    TODO: structured log aggregation, a Celery retry/DLQ, and metrics/alerts.
+11. ~~**Object storage** for reports (S3-compatible).~~ **Removed by decision** — for a single
+    internal VM (~5–10 users) reports stay on the **local filesystem**; the cron retention job
+    (item 3) handles disk pressure instead.
 
 ### Phase 2 (product)
-12. **Social-media auditing** — the second audit type. The pipeline already has the seam: add a
-    `social` fact bundle + `social.yaml` rubric and extend the typed composite category set
-    (`Literal["seo","uxui"]` → add `"social"`). See [docs/08_PHASE2_PLAN.md](docs/08_PHASE2_PLAN.md).
+12. ✅ **Social-media auditing** *(done — 2026-06-23)* — the second audit type, designed
+    **standalone** (its own `audit_type`, its own report, its own Social Score — *not* folded into
+    the website composite, which is untouched and still `{seo, uxui}`). **Now fully built and
+    runnable from the browser:** the Apify-backed `social` fact extractor + collector under
+    [apps/worker/stages/social/](apps/worker/stages/social/) (two actors — Instagram Scraper +
+    Facebook Pages Scraper), `rubrics/social.yaml` (`phase2-social-v1`) scored by
+    `scoring.score_social_audit()` into a standalone 0–100 Social Score, deterministic
+    rule-derived findings (no LLM), a separate branded PDF (`templates/social_report.html` via
+    `render_social_pdf`, PDF only — no DOCX), the `audit_type` discriminator + migration
+    `20260623_0004`, a social branch in `run_collection_audit` (`_run_social_pipeline`), and a
+    Social Audit tab + submit/detail UI. Ops dependency: `APIFY_API_TOKEN`. **FB limitation:** the
+    Facebook pages actor returns page metadata, not posts, so cadence/recency/engagement rules
+    *skip* for FB (rescaled, never penalized); IG has full post data. See
+    [docs/08_PHASE2_PLAN.md](docs/08_PHASE2_PLAN.md).
 13. **Multi-tenant / roles, benchmarking, analytics** — planning docs only (docs/08–10).
 
 ---

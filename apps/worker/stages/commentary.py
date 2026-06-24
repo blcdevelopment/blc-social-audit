@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from string import Template
 from typing import Any, Literal
@@ -217,3 +218,222 @@ def _compact_category_breakdown(category: JsonDict) -> JsonDict:
 
 def _to_json(payload: Any) -> str:
     return json.dumps(payload, indent=2, sort_keys=True, default=str)
+
+
+# --- Social audit commentary: optional LLM polish over the deterministic, rule-derived ---
+# --- findings. No key => deterministic baseline (identical to today). With a key, the LLM ---
+# --- only REPHRASES the given findings; a grounding backstop replaces any narrative that ---
+# --- introduces a fabricated percentage or large count with the vetted deterministic text. ---
+
+
+class SocialCommentaryFinding(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    title: str
+    narrative: str
+
+
+class SocialCommentaryContent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    executive_summary: str
+    findings: list[SocialCommentaryFinding]
+
+
+# Flags a likely-fabricated factual claim: a percentage, or a number with 3+ digits (a count
+# or year). Small numbers (cadence like "2-3 posts/week", "30 days") are advice, not claims.
+_RISKY_NUM_RE = re.compile(r"\d[\d,]*(?:\.\d+)?%|\b\d[\d,]{2,}(?:\.\d+)?\b")
+_ANY_NUM_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
+
+
+def _norm_num(value: Any) -> str:
+    if isinstance(value, bool):
+        return ""
+    if isinstance(value, int | float):
+        number = float(value)
+    else:
+        digits = re.sub(r"[^\d.]", "", str(value)).rstrip(".")
+        if not digits:
+            return ""
+        try:
+            number = float(digits)
+        except ValueError:
+            return digits
+    return str(int(number)) if number.is_integer() else str(round(number, 2))
+
+
+def _known_social_numbers(*payloads: Any) -> set[str]:
+    found: set[str] = set()
+
+    def walk(value: Any) -> None:
+        if isinstance(value, bool):
+            return
+        if isinstance(value, dict):
+            for item in value.values():
+                walk(item)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item)
+        elif isinstance(value, int | float):
+            norm = _norm_num(value)
+            if norm:
+                found.add(norm)
+        elif isinstance(value, str):
+            for match in _ANY_NUM_RE.findall(value):
+                norm = _norm_num(match)
+                if norm:
+                    found.add(norm)
+
+    for payload in payloads:
+        walk(payload)
+    return found
+
+
+def _has_ungrounded_claim(text: str, known: set[str]) -> bool:
+    return any(_norm_num(match) not in known for match in _RISKY_NUM_RE.findall(text))
+
+
+def _social_band(score: int | None) -> str:
+    if score is None:
+        return "not scored"
+    if score >= 75:
+        return "strong"
+    if score >= 50:
+        return "fair"
+    return "needs work"
+
+
+def _deterministic_social_commentary(*, score: int | None, findings: list[JsonDict]) -> JsonDict:
+    if score is None:
+        summary = "Social data could not be fully collected, so a Social Score is not available."
+    else:
+        summary = f"This social presence scored {score}/100 ({_social_band(score)})."
+        if findings:
+            count = len(findings)
+            noun = "opportunity" if count == 1 else "opportunities"
+            summary += f" The audit flagged {count} {noun} to strengthen lead generation."
+    return {
+        "executive_summary": summary,
+        "findings": [
+            {
+                "id": finding.get("id") or "",
+                "title": finding.get("label") or finding.get("id") or "",
+                "narrative": finding.get("remediation") or "",
+            }
+            for finding in findings
+        ],
+    }
+
+
+def generate_social_commentary(
+    *,
+    audit_context: JsonDict,
+    social_facts: JsonDict,
+    score: int | None,
+    findings: list[JsonDict],
+    settings: Settings,
+) -> JsonDict:
+    """Return social commentary (executive summary + per-finding narrative).
+
+    Deterministic baseline by default; if an OpenAI key is set, the LLM rephrases the
+    rule-derived findings into client-ready prose, then a grounding backstop swaps any
+    narrative that introduces a fabricated stat back to the vetted deterministic text.
+    """
+    baseline = _deterministic_social_commentary(score=score, findings=findings)
+    api_key = settings.openai_api_key.get_secret_value() if settings.openai_api_key else ""
+    if not api_key or not findings:
+        return {
+            "status": "deterministic",
+            "provider": "deterministic",
+            "model": "deterministic",
+            "content": baseline,
+        }
+    try:
+        content = _call_openai_social(
+            api_key=api_key,
+            audit_context=audit_context,
+            social_facts=social_facts,
+            score=score,
+            findings=findings,
+            settings=settings,
+        )
+    except Exception:
+        # Any LLM/network failure => keep the deterministic report (never fail the audit).
+        return {
+            "status": "deterministic_fallback",
+            "provider": "deterministic",
+            "model": "deterministic",
+            "content": baseline,
+        }
+    known = _known_social_numbers(social_facts, findings)
+    return {
+        "status": "llm",
+        "provider": "openai",
+        "model": settings.openai_model,
+        "content": _ground_social_commentary(content, baseline, known),
+    }
+
+
+def _ground_social_commentary(
+    content: SocialCommentaryContent, baseline: JsonDict, known: set[str]
+) -> JsonDict:
+    llm = {finding.id: finding for finding in content.findings}
+    summary = content.executive_summary.strip()
+    if not summary or _has_ungrounded_claim(summary, known):
+        summary = baseline["executive_summary"]
+    merged: list[JsonDict] = []
+    for base in baseline["findings"]:
+        polished = llm.get(base["id"])
+        narrative = polished.narrative.strip() if polished else ""
+        if not narrative or _has_ungrounded_claim(narrative, known):
+            narrative = base["narrative"]
+        title = polished.title.strip() if polished and polished.title.strip() else base["title"]
+        merged.append({"id": base["id"], "title": title, "narrative": narrative})
+    return {"executive_summary": summary, "findings": merged}
+
+
+def _call_openai_social(
+    *,
+    api_key: str,
+    audit_context: JsonDict,
+    social_facts: JsonDict,
+    score: int | None,
+    findings: list[JsonDict],
+    settings: Settings,
+) -> SocialCommentaryContent:
+    from openai import OpenAI
+
+    client = OpenAI(api_key=api_key, timeout=settings.openai_timeout_seconds)
+    system_prompt = _read_prompt(settings.commentary_social_system_prompt_path)
+    template = Template(_read_prompt(settings.commentary_social_user_prompt_path))
+    user_prompt = template.safe_substitute(
+        handles=_to_json(audit_context.get("handles") or {}),
+        score="not scored" if score is None else str(score),
+        status=social_facts.get("status") or "unknown",
+        summary_json=_to_json(social_facts.get("summary") or {}),
+        findings_json=_to_json(
+            [
+                {
+                    "id": finding.get("id"),
+                    "label": finding.get("label"),
+                    "result": finding.get("result"),
+                    "impact": finding.get("impact"),
+                    "remediation": finding.get("remediation"),
+                }
+                for finding in findings
+            ]
+        ),
+    )
+    response = client.responses.parse(
+        model=settings.openai_model,
+        instructions=system_prompt,
+        input=user_prompt,
+        text_format=SocialCommentaryContent,
+        max_output_tokens=settings.openai_max_tokens,
+        temperature=settings.openai_temperature,
+    )
+    parsed = getattr(response, "output_parsed", None)
+    if isinstance(parsed, SocialCommentaryContent):
+        return parsed
+    raise ValueError("OpenAI response did not include parsed structured social commentary.")

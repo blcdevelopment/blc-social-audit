@@ -1091,3 +1091,93 @@ h1 {
   font-size: 13px;
   color: var(--muted);
 }
+
+/* Audit history dashboard: search / filter / sort toolbar. */
+.history-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.history-search,
+.history-select {
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 14px;
+  font-family: inherit;
+  color: var(--ink);
+  background: #fff;
+}
+
+.history-search {
+  flex: 1 1 240px;
+  min-width: 200px;
+}
+
+.history-search:focus,
+.history-select:focus {
+  outline: none;
+  border-color: var(--blc-primary);
+  box-shadow: 0 0 0 3px rgb(31 116 183 / 18%);
+}
+
+.history-count {
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* Per-client white-label fields on the new-audit form. */
+.brand-overrides {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 18px;
+}
+
+.brand-overrides summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.field-hint {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 8px 0 12px;
+}
+
+.brand-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+/* Read-only share-link panel on the audit detail page. */
+.share-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.share-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.share-link-input {
+  flex: 1 1 320px;
+  min-width: 220px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--ink);
+  background: #fff;
+}

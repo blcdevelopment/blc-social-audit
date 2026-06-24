@@ -7,6 +7,12 @@
 **Supersedes:** docs/13 originally named **Surfer** for this section. This document resets the
 pick to **Rank Prompt** based on 2026-06-22 vendor research.
 
+> **PARKED (2026-06-23).** This vendor selection is **on hold**. The Rank Prompt API Starter
+> subscription ($99/mo) has **not been purchased**, so live billing remains unverified and the
+> §10 trial cannot run. Per operator decision, **AI Insights (docs/13 + this doc) is deferred**
+> and **Phase 2 proceeds without it** — no Phase-2 task depends on AI Insights. The body below is
+> retained as-is for reference; **resume this vendor pick once the subscription is sorted.**
+
 > **Confidence convention used throughout this doc.** Read it carefully — it is the whole point.
 > - **CONFIRMED** = verified against Rank Prompt's published pages/schema (still a documentation
 >   claim, not a live API call).
