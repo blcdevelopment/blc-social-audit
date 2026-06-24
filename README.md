@@ -50,6 +50,11 @@ P1-E5 internal operator UI, and the Epic P1-E6 QA, packaging, and handoff work:
   (run from cron on the host — there is no in-app scheduler).
 - Optional Sentry error reporting for the API and worker, enabled only when `SENTRY_DSN`
   is set and `sentry-sdk` is installed (no-op otherwise, mirroring the Clerk opt-in pattern).
+- Lightweight operational observability (no Prometheus stack): a gated `GET /metrics` JSON
+  endpoint (audit counts by status, 24h throughput, in-flight/oldest job, avg duration, storage
+  usage), a cron health-alert script (`scripts/health_alert.py` → `ALERT_WEBHOOK_URL` on
+  failed-audit/stuck-job thresholds), and a cron PostgreSQL backup script
+  (`scripts/backup_db.py` → timestamped `.sql.gz` with retention).
 - Read-only share links: generate a random, time-limited token (default 7 days) so a
   client can view or download a report without an account, plus revoke support.
 - Per-client white-label branding: optional brand overrides (name, short name, primary/
@@ -170,6 +175,7 @@ P1-E5 internal operator UI, and the Epic P1-E6 QA, packaging, and handoff work:
 ## API Endpoints
 
 - `GET /health`
+- `GET /metrics` (gated; aggregate audit counts by status, 24h throughput, in-flight/oldest, avg duration, and local report-storage usage as JSON)
 - `GET /` (redirects to `/docs`)
 - `GET /docs`, `GET /redoc`, `GET /openapi.json`
 - `POST /audits` (create + enqueue, 201; body takes `audit_type` `website` (default) | `social` plus `social_handles` — website requires `url`, social requires ≥1 handle and `url` is optional)
@@ -242,6 +248,12 @@ These settings are all optional and ship with safe defaults (most are documented
 - `YOUTUBE_API_KEY` (empty by default) / `YOUTUBE_TIMEOUT_SECONDS` (default `30`) — the free
   YouTube Data API v3 backend for the social audit (a plain API key, no OAuth). Empty key ⇒ the
   YouTube backend skips gracefully, like Apify.
+- `ALERT_WEBHOOK_URL` (empty by default) / `ALERT_FAILED_AUDITS_THRESHOLD` (default `5`) /
+  `ALERT_STUCK_AUDIT_MINUTES` (default `60`) — operational alerting for `scripts/health_alert.py`
+  (cron). Empty webhook ⇒ it only logs findings; otherwise posts a Slack/Discord/generic
+  `{"text": …}` message when failed-audit or stuck-job thresholds are breached.
+- `BACKUP_STORAGE_DIR` (default `./storage/backups`) / `BACKUP_RETENTION_DAYS` (default `14`) /
+  `PG_DUMP_PATH` (default `pg_dump`) — PostgreSQL backups for `scripts/backup_db.py` (cron).
 
 ## Common Commands
 
@@ -263,6 +275,8 @@ A few maintenance/exploration scripts are run directly:
 
 ```bash
 python scripts/cleanup_storage.py [--dry-run] [--days N]   # prune old reports/screenshots/exports (run from cron on the host)
+python scripts/health_alert.py [--dry-run]                 # check audit health vs thresholds, alert via ALERT_WEBHOOK_URL (cron)
+python scripts/backup_db.py [--days N]                      # pg_dump the database to a timestamped .sql.gz + prune old backups (cron)
 python scripts/run_social_audit.py <handle_or_url>         # standalone Social audit end-to-end (Apify scrape -> Social Score), no DB/web app
 python scripts/check_apify_social.py [handle_or_url]        # live Apify social probe (Instagram/Facebook) for the social data layer
 ```

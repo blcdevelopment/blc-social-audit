@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
-from apps.api.routes import audits, google, health, shared
+from apps.api.routes import audits, google, health, metrics, shared
 from apps.shared.config import get_settings
 from apps.shared.observability import init_sentry
 
@@ -37,6 +37,7 @@ app.add_middleware(
 )
 
 app.include_router(health.router)
+app.include_router(metrics.router)
 app.include_router(audits.router)
 app.include_router(google.router)
 # Public, token-gated report sharing — intentionally NOT behind Clerk auth.

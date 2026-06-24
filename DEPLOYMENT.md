@@ -460,6 +460,21 @@ from cron on the host. Add a daily job (runs inside the `api` container, which m
 ```
 Still watch `df -h` — the build cache and Postgres data grow independently of report retention.
 
+**Observability (P2-10):** error reporting is Sentry (`SENTRY_DSN`). Two more cron jobs round it out
+(all run inside a container that has the DB URL / storage volume):
+
+```bash
+# Operational alerting — every 15 min; posts to ALERT_WEBHOOK_URL on failed-audit / stuck-job thresholds
+*/15 * * * *  cd ~/blc-social-audit && docker compose -f docker-compose.prod.yml exec -T api \
+                python scripts/health_alert.py >> ~/blc-alert.log 2>&1
+# PostgreSQL backup — nightly; pg_dump -> timestamped .sql.gz under BACKUP_STORAGE_DIR, pruned to BACKUP_RETENTION_DAYS
+30 2 * * *   cd ~/blc-social-audit && docker compose -f docker-compose.prod.yml exec -T api \
+                python scripts/backup_db.py >> ~/blc-backup.log 2>&1
+```
+Live metrics: `GET /metrics` (Clerk-gated) returns audit/storage stats as JSON. Note the API/worker
+images need PostgreSQL client tools (`pg_dump`) for `backup_db.py`; if absent, run it on the host or
+add `postgresql-client` to the image.
+
 ---
 
 ## 7. Security

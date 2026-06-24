@@ -18,6 +18,16 @@ class Settings(BaseSettings):
     sentry_dsn: SecretStr | None = None
     sentry_traces_sample_rate: float = Field(default=0.0, ge=0, le=1)
 
+    # Operational alerting (scripts/health_alert.py, run from cron). Empty webhook =>
+    # disabled. Posts a Slack/Discord/generic-webhook message when a threshold is breached.
+    alert_webhook_url: SecretStr | None = None
+    alert_failed_audits_threshold: int = Field(default=5, ge=1)
+    alert_stuck_audit_minutes: int = Field(default=60, ge=5)
+    # PostgreSQL backups (scripts/backup_db.py, run from cron) -> timestamped .sql.gz.
+    backup_storage_dir: Path = Path("./storage/backups")
+    backup_retention_days: int = Field(default=14, ge=0)
+    pg_dump_path: str = "pg_dump"
+
     api_host: str = "0.0.0.0"
     api_port: int = 8000
     api_base_url: str = "http://localhost:8000"
