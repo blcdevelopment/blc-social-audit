@@ -63,8 +63,9 @@ P1-E5 internal operator UI, and the Epic P1-E6 QA, packaging, and handoff work:
 - Standalone Social audit (`apps/worker/stages/social/`): paste an Instagram, Facebook, or
   YouTube profile link (or `@handle`) — no login, OAuth, or account connection — and the pipeline
   reads the profile via Apify (Instagram Scraper + Facebook Pages & Posts Scrapers, free tier) and/or the
-  free YouTube Data API v3 (`youtube_provider.py`),
-  normalizes the payload into `social.*` facts, scores it against `rubrics/social.yaml`
+  free YouTube Data API v3, each behind a uniform `SocialProvider` adapter + registry
+  (`social/providers.py`) the collector dispatches over,
+  normalizes the payload into a typed common fact schema (`social/schema.py`) of `social.*` facts, scores it against `rubrics/social.yaml`
   (`phase2-social-v1`) into a standalone 0–100 Social Score via `scoring.score_social_audit()`,
   derives deterministic findings/recommendations from the rubric rule metadata (optionally
   polished into client-ready prose by GPT-4o when `OPENAI_API_KEY` is set — grounded, with the

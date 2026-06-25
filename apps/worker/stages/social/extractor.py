@@ -11,7 +11,23 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
+from apps.worker.stages.social.schema import SocialProfileFacts, SocialSummary
+
 JsonDict = dict[str, Any]
+
+
+def _profile_facts(values: JsonDict) -> JsonDict:
+    """Validate a normalized profile against the common schema, return plain facts.
+
+    The single source of truth for the per-profile fact shape; ``extra="forbid"`` turns a
+    drifted/typo'd key into a hard error instead of a silently-missing rubric fact.
+    """
+    return SocialProfileFacts(**values).as_facts()
+
+
+def _summary_facts(values: JsonDict) -> JsonDict:
+    return SocialSummary(**values).as_facts()
+
 
 # Bio phrases that signal a call-to-action when a profile isn't a flagged business account.
 _CTA_RE = re.compile(
@@ -99,28 +115,30 @@ def normalize_instagram_profile(raw: JsonDict, handle: str, *, now: datetime) ->
     posts = [p for p in posts if isinstance(p, dict)] if isinstance(posts, list) else []
     times = sorted(t for t in (_parse_ts(p.get("timestamp")) for p in posts) if t)
 
-    return {
-        "platform": "instagram",
-        "handle": handle,
-        "url": _clean(raw.get("url")) or f"https://www.instagram.com/{handle.lstrip('@')}/",
-        "status": "complete",
-        "followers": followers,
-        "posts_count": _int(raw.get("postsCount")),
-        "verified": bool(raw.get("verified")),
-        "private": bool(raw.get("private")),
-        "is_business": is_business,
-        "category": _clean(raw.get("businessCategoryName")) or None,
-        "bio_present": bool(bio),
-        "link_in_bio": external or None,
-        "has_cta": is_business or bool(_CTA_RE.search(bio)),
-        "profile_complete": bool(bio and external and full_name),
-        "has_logo_avatar": bool(raw.get("profilePicUrl") or raw.get("profilePicUrlHD")),
-        "posts_sampled": len(posts),
-        "posts_per_month": _posts_per_month(times),
-        "days_since_last_post": (now - times[-1]).days if times else None,
-        "avg_engagement_rate_pct": _avg_engagement(posts, followers),
-        "has_video": _has_video(raw, posts),
-    }
+    return _profile_facts(
+        {
+            "platform": "instagram",
+            "handle": handle,
+            "url": _clean(raw.get("url")) or f"https://www.instagram.com/{handle.lstrip('@')}/",
+            "status": "complete",
+            "followers": followers,
+            "posts_count": _int(raw.get("postsCount")),
+            "verified": bool(raw.get("verified")),
+            "private": bool(raw.get("private")),
+            "is_business": is_business,
+            "category": _clean(raw.get("businessCategoryName")) or None,
+            "bio_present": bool(bio),
+            "link_in_bio": external or None,
+            "has_cta": is_business or bool(_CTA_RE.search(bio)),
+            "profile_complete": bool(bio and external and full_name),
+            "has_logo_avatar": bool(raw.get("profilePicUrl") or raw.get("profilePicUrlHD")),
+            "posts_sampled": len(posts),
+            "posts_per_month": _posts_per_month(times),
+            "days_since_last_post": (now - times[-1]).days if times else None,
+            "avg_engagement_rate_pct": _avg_engagement(posts, followers),
+            "has_video": _has_video(raw, posts),
+        }
+    )
 
 
 def normalize_facebook_profile(raw: JsonDict, handle: str, *, now: datetime) -> JsonDict:
@@ -149,30 +167,32 @@ def normalize_facebook_profile(raw: JsonDict, handle: str, *, now: datetime) -> 
     ]
     times = sorted(t for t in (_parse_ts(p.get("timestamp")) for p in posts) if t)
 
-    return {
-        "platform": "facebook",
-        "handle": handle,
-        "url": _clean(raw.get("facebookUrl"))
-        or _clean(raw.get("pageUrl"))
-        or f"https://www.facebook.com/{handle.lstrip('@')}/",
-        "status": "complete",
-        "followers": followers,
-        "posts_count": len(raw_posts),
-        "verified": bool(raw.get("verified")),
-        "private": False,
-        "is_business": True,
-        "category": _clean(raw.get("category")) or None,
-        "bio_present": bool(intro),
-        "link_in_bio": website or None,
-        "has_cta": bool(messenger or email),
-        "profile_complete": bool(intro and website and name),
-        "has_logo_avatar": bool(raw.get("profilePhoto") or raw.get("profilePictureUrl")),
-        "posts_sampled": len(posts),
-        "posts_per_month": _posts_per_month(times),
-        "days_since_last_post": (now - times[-1]).days if times else None,
-        "avg_engagement_rate_pct": _avg_engagement(posts, followers),
-        "has_video": any(p.get("type") == "video" for p in posts),
-    }
+    return _profile_facts(
+        {
+            "platform": "facebook",
+            "handle": handle,
+            "url": _clean(raw.get("facebookUrl"))
+            or _clean(raw.get("pageUrl"))
+            or f"https://www.facebook.com/{handle.lstrip('@')}/",
+            "status": "complete",
+            "followers": followers,
+            "posts_count": len(raw_posts),
+            "verified": bool(raw.get("verified")),
+            "private": False,
+            "is_business": True,
+            "category": _clean(raw.get("category")) or None,
+            "bio_present": bool(intro),
+            "link_in_bio": website or None,
+            "has_cta": bool(messenger or email),
+            "profile_complete": bool(intro and website and name),
+            "has_logo_avatar": bool(raw.get("profilePhoto") or raw.get("profilePictureUrl")),
+            "posts_sampled": len(posts),
+            "posts_per_month": _posts_per_month(times),
+            "days_since_last_post": (now - times[-1]).days if times else None,
+            "avg_engagement_rate_pct": _avg_engagement(posts, followers),
+            "has_video": any(p.get("type") == "video" for p in posts),
+        }
+    )
 
 
 def normalize_youtube_channel(raw: JsonDict, handle: str, *, now: datetime) -> JsonDict:
@@ -217,43 +237,35 @@ def normalize_youtube_channel(raw: JsonDict, handle: str, *, now: datetime) -> J
     else:
         channel_url = f"https://www.youtube.com/@{bare_handle}"
 
-    return {
-        "platform": "youtube",
-        "handle": handle,
-        "url": channel_url,
-        "status": "complete",
-        "followers": followers,
-        "posts_count": video_count,
-        "verified": False,
-        "private": False,
-        "is_business": False,
-        "category": None,
-        "bio_present": bool(description),
-        "link_in_bio": link or None,
-        "has_cta": bool(link) or bool(_CTA_RE.search(description)),
-        "profile_complete": bool(description and title and (link or banner)),
-        "has_logo_avatar": bool(snippet.get("thumbnails")),
-        "posts_sampled": len(posts),
-        "posts_per_month": _posts_per_month(times),
-        "days_since_last_post": (now - times[-1]).days if times else None,
-        "avg_engagement_rate_pct": _avg_engagement(posts, followers),
-        "has_video": bool(videos) or video_count > 0,
-    }
+    return _profile_facts(
+        {
+            "platform": "youtube",
+            "handle": handle,
+            "url": channel_url,
+            "status": "complete",
+            "followers": followers,
+            "posts_count": video_count,
+            "verified": False,
+            "private": False,
+            "is_business": False,
+            "category": None,
+            "bio_present": bool(description),
+            "link_in_bio": link or None,
+            "has_cta": bool(link) or bool(_CTA_RE.search(description)),
+            "profile_complete": bool(description and title and (link or banner)),
+            "has_logo_avatar": bool(snippet.get("thumbnails")),
+            "posts_sampled": len(posts),
+            "posts_per_month": _posts_per_month(times),
+            "days_since_last_post": (now - times[-1]).days if times else None,
+            "avg_engagement_rate_pct": _avg_engagement(posts, followers),
+            "has_video": bool(videos) or video_count > 0,
+        }
+    )
 
 
 def _empty_summary() -> JsonDict:
-    return {
-        "platforms_audited": 0,
-        "total_followers": 0,
-        "profiles_complete_pct": 0,
-        "avg_posts_per_month": 0.0,
-        "days_since_last_post": None,
-        "avg_engagement_rate_pct": 0.0,
-        "profiles_with_link_in_bio": 0,
-        "profiles_with_cta": 0,
-        "has_video_content": False,
-        "profiles_with_logo_avatar": 0,
-    }
+    # The schema's defaults ARE the empty-audit summary (single source of truth).
+    return SocialSummary().as_facts()
 
 
 def summarize_profiles(profiles: list[JsonDict]) -> JsonDict:
@@ -267,23 +279,25 @@ def summarize_profiles(profiles: list[JsonDict]) -> JsonDict:
         for p in profiles
         if p.get("avg_engagement_rate_pct") is not None
     ]
-    return {
-        "platforms_audited": count,
-        "total_followers": sum(_int(p.get("followers")) for p in profiles),
-        "profiles_complete_pct": round(
-            sum(1 for p in profiles if p.get("profile_complete")) / count * 100
-        ),
-        # None (not 0) when no profile has post data, so the cadence/recency/engagement
-        # rules skip_if_missing and rescale out instead of unfairly failing (e.g. the
-        # Facebook pages actor returns no posts).
-        "avg_posts_per_month": round(sum(ppm) / len(ppm), 1) if ppm else None,
-        "days_since_last_post": min(dsp) if dsp else None,
-        "avg_engagement_rate_pct": round(sum(eng) / len(eng), 2) if eng else None,
-        "profiles_with_link_in_bio": sum(1 for p in profiles if p.get("link_in_bio")),
-        "profiles_with_cta": sum(1 for p in profiles if p.get("has_cta")),
-        "has_video_content": any(p.get("has_video") for p in profiles),
-        "profiles_with_logo_avatar": sum(1 for p in profiles if p.get("has_logo_avatar")),
-    }
+    return _summary_facts(
+        {
+            "platforms_audited": count,
+            "total_followers": sum(_int(p.get("followers")) for p in profiles),
+            "profiles_complete_pct": round(
+                sum(1 for p in profiles if p.get("profile_complete")) / count * 100
+            ),
+            # None (not 0) when no profile has post data, so the cadence/recency/engagement
+            # rules skip_if_missing and rescale out instead of unfairly failing (e.g. the
+            # Facebook pages actor returns no posts).
+            "avg_posts_per_month": round(sum(ppm) / len(ppm), 1) if ppm else None,
+            "days_since_last_post": min(dsp) if dsp else None,
+            "avg_engagement_rate_pct": round(sum(eng) / len(eng), 2) if eng else None,
+            "profiles_with_link_in_bio": sum(1 for p in profiles if p.get("link_in_bio")),
+            "profiles_with_cta": sum(1 for p in profiles if p.get("has_cta")),
+            "has_video_content": any(p.get("has_video") for p in profiles),
+            "profiles_with_logo_avatar": sum(1 for p in profiles if p.get("has_logo_avatar")),
+        }
+    )
 
 
 def extract_social_facts(fetched: list[JsonDict], *, now: datetime | None = None) -> JsonDict:

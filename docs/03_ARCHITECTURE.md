@@ -240,8 +240,10 @@ breakdown explaining every contribution.
 | `GET /docs`, `GET /redoc`, `GET /openapi.json` | Interactive API docs |
 
 `compose_report_payload(job, result)` (`apps/worker/stages/report_payload.py`,
-`REPORT_PAYLOAD_VERSION` `phase1-report-v2`) is **pure** and imported by both the worker
-(to render) and the API (to build the detail response) — keep it pure.
+`REPORT_PAYLOAD_VERSION` `phase1-report-v3`) is **pure** and imported by both the worker
+(to render) and the API (to build the detail response) — keep it pure. The standalone Social
+audit has its own analogous pure seam, `social/report.py::compose_social_report_payload`
+(`SOCIAL_REPORT_VERSION` `phase2-social-report-v1`).
 
 **Authentication is Clerk, opt-in by env** (see §5 and `apps/api/auth.py`). When
 `CLERK_ISSUER` is set, the whole `/audits/*` router and the Google routes (except the
@@ -255,7 +257,7 @@ in `main.py`: if `*` is in `API_CORS_ORIGINS`, `allow_credentials` is forced off
 
 ## 8. Tests & verification
 
-There are **18** unit test files in `tests/unit/` and they run on every commit
+There are **30** unit test files in `tests/unit/` (~189 tests) and they run on every commit
 (pre-commit + CI). `tests/integration/` exists but is empty (`.gitkeep` only); there is
 no `conftest.py`. Highlights:
 

@@ -10,16 +10,26 @@ _Last reconciled: 2026-06-16._
 
 ## 1. Scope (intentionally out)
 
-These are out of scope for Phase 1 by design (see [`docs/01_REQUIREMENTS.md`](01_REQUIREMENTS.md)):
+These were out of scope for **Phase 1** by design (see [`docs/01_REQUIREMENTS.md`](01_REQUIREMENTS.md)).
 
-- **Social media audits** (Instagram/Facebook/LinkedIn/YouTube).
+> **Phase-2 as-built update (2026-06-25):** several items below have since SHIPPED — the
+> standalone **Social audit** (Instagram + Facebook via Apify, YouTube via the YouTube Data API),
+> **public token-gated share links**, **white-label brand overrides** on the PDF, and **production
+> hosting** (Linode + Caddy + CI/CD). They are annotated below; the rest remain out of scope.
+> Trust [`CLAUDE.md`](../CLAUDE.md) for as-built truth.
+
+- ~~**Social media audits** (Instagram/Facebook/LinkedIn/YouTube).~~ **SHIPPED (Phase 2)** as a
+  standalone audit type — Instagram + Facebook + YouTube (LinkedIn still out of scope). See
+  `CLAUDE.md` §5.
 - **Multi-tenancy.** The UI/API is still an internal shared tool, not a tenant-aware
   SaaS product.
 - **Competitor benchmarking** (SEMrush/Ahrefs/Similarweb).
 - **Full analytics integrations** (GA4, Microsoft Clarity, CRM attribution). Search
   Console enrichment exists, but only for verified properties connected through Google OAuth.
-- **Public share links / white-label self-service.**
-- **Hosted/AWS production infrastructure** (packaging is prepared, hosting is not).
+- ~~**Public share links / white-label self-service.**~~ **SHIPPED (Phase 2):** token-gated
+  `/shared/{token}` report links + per-client white-label brand overrides on the PDF.
+- ~~**Hosted/AWS production infrastructure.**~~ **SHIPPED (Phase 2):** live on Linode + Caddy +
+  CI/CD (AWS specifically was not used). See `DEPLOYMENT.md`.
 
 ---
 
@@ -158,10 +168,11 @@ These are out of scope for Phase 1 by design (see [`docs/01_REQUIREMENTS.md`](01
 
 ## 10. Recommended Next Steps (later phases)
 
-1. Harden the now-live Clerk auth: move to a Clerk production instance, close open
-   sign-up (invitation-only), and complete request-level SSRF interception in the
-   page crawler.
+1. Harden the now-live Clerk auth: move to a Clerk **production** instance and close open
+   sign-up (invitation-only). _(Request-level SSRF interception in the crawler is now DONE —
+   `crawler_intercept_requests`.)_
 2. Encrypt Google OAuth/refresh tokens at rest (or move them into a secrets manager).
-3. Add data retention/cleanup for `storage/` and old audit rows.
-4. Begin the deferred scope (social audits, competitor benchmarking, analytics)
-   as separate phases.
+3. ~~Add data retention/cleanup for `storage/` and old audit rows.~~ **DONE** —
+   `cleanup_storage` + `STORAGE_RETENTION_DAYS` (cron on the host).
+4. Continue the deferred scope (competitor benchmarking, analytics) as separate phases.
+   _(Social audits already SHIPPED in Phase 2.)_

@@ -4,7 +4,59 @@ from pathlib import Path
 from apps.shared.config import Settings
 from apps.worker.stages.extractor_seo import extract_seo_facts
 from apps.worker.stages.extractor_uxui import extract_uxui_facts
-from apps.worker.stages.scoring import load_composite_rubric, load_rubric, score_audit
+from apps.worker.stages.scoring import (
+    Rubric,
+    RubricRule,
+    load_composite_rubric,
+    load_rubric,
+    score_audit,
+    score_category,
+)
+
+
+def test_data_sufficient_distinguishes_all_skip_from_genuine_zero() -> None:
+    # Every rule skips (fact absent + skip_if_missing): score is 0 only because nothing was
+    # scorable, so data_sufficient must be False (not indistinguishable from a real 0).
+    all_skip = Rubric(
+        version="t-skip",
+        category="seo",
+        max_score=100,
+        normalization="rescale_to_max",
+        rules=[
+            RubricRule(
+                id="seo.absent",
+                description="needs a fact that is absent",
+                weight=10,
+                fact_path="seo.summary.absent",
+                evaluator="boolean",
+                skip_if_missing=True,
+            )
+        ],
+    )
+    out = score_category({"seo": {"summary": {}}}, all_skip)
+    assert out["score"] == 0
+    assert out["data_sufficient"] is False
+
+    # A scorable rule => data_sufficient True and a real score.
+    scored = Rubric(
+        version="t-ok",
+        category="seo",
+        max_score=100,
+        normalization="rescale_to_max",
+        rules=[
+            RubricRule(
+                id="seo.present",
+                description="present fact",
+                weight=10,
+                fact_path="seo.summary.present",
+                evaluator="boolean",
+            )
+        ],
+    )
+    out2 = score_category({"seo": {"summary": {"present": True}}}, scored)
+    assert out2["score"] == 100
+    assert out2["data_sufficient"] is True
+
 
 FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures"
 

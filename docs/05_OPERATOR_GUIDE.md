@@ -60,6 +60,29 @@ rejects the request.
 
 ---
 
+## 3a. Submitting a Social Audit
+
+The **Social Audit** is a separate, standalone audit type — its own tab, its own
+**Social Score (0–100)**, and its own PDF. It does **not** touch the website audit
+or its scores.
+
+On the **Social Audit** page (`/social`):
+
+1. Enter at least one **handle or profile URL** — **Instagram**, **Facebook**,
+   and/or **YouTube** (e.g. `@acmebuilders`, a profile link, or a channel URL).
+2. (Optional) **Niche** — helps the optional commentary speak to the right audience.
+3. Click **Submit**. You'll be taken to the same progress page.
+
+What runs: Instagram + Facebook are fetched via **Apify** (needs `APIFY_API_TOKEN`
+on the server) and YouTube via the free **YouTube Data API** (`YOUTUBE_API_KEY`). A
+platform with no configured key is **skipped gracefully** — it never fails the audit.
+The profiles are normalized, scored against `rubrics/social.yaml`, and an optional
+GPT-4o pass (only if `OPENAI_API_KEY` is set) rephrases the rule-derived findings —
+the scores themselves are always deterministic. The result is a **PDF only** (no DOCX
+for social).
+
+---
+
 ## 4. Watching Progress
 
 The progress/result page (`/audit/{id}`) auto-refreshes (it polls every 2.5s) and

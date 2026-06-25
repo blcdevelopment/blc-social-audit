@@ -1,8 +1,26 @@
+from pathlib import Path
+
+from apps.worker.stages.pdf_renderer import _render_css
 from apps.worker.stages.report_branding import BrandConfig, apply_brand_overrides
+
+_REPORT_CSS = Path(__file__).resolve().parents[2] / "templates" / "report.css"
 
 
 def _base_context() -> dict:
     return BrandConfig().template_context()
+
+
+def test_running_header_uses_white_label_brand_name() -> None:
+    # The interior-page running header must carry the (white-labeled) brand name, not a hardcode.
+    ctx = apply_brand_overrides(_base_context(), {"name": "Acme Builders"})
+    css = _render_css(css_path=_REPORT_CSS, brand_context=ctx)
+    assert '"Acme Builders" " · Website Audit · "' in css
+    assert "Builder Lead Converter" not in css  # no hardcoded leak on a white-labeled report
+
+
+def test_running_header_defaults_to_blc_without_override() -> None:
+    css = _render_css(css_path=_REPORT_CSS, brand_context=_base_context())
+    assert '"Builder Lead Converter" " · Website Audit · "' in css
 
 
 def test_overrides_apply_name_colors_and_logo_url() -> None:

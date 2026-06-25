@@ -343,6 +343,12 @@ def run_collection_audit(
         if job is None:
             return
 
+        # Idempotency: a redelivered task (worker crash + acks_late re-queue) must not re-run and
+        # overwrite an audit that already finished. Re-running a queued/in-progress job is fine —
+        # that is the crash recovery acks_late buys us.
+        if (job.status or "") == AuditStatus.COMPLETE.value:
+            return
+
         try:
             if (job.audit_type or "website") == "social":
                 _run_social_pipeline(db, job, settings, social_collector)
@@ -440,6 +446,21 @@ def run_collection_audit(
             _store_export_results(db, result, pdf_result, docx_result, docx_error)
 
             _mark_job(db, job, AuditStatus.COMPLETE, "Audit report complete", 100)
+        except SoftTimeLimitExceeded:
+            # The soft time limit fired: mark the job FAILED with an honest reason (not an empty
+            # exception repr), then re-raise so Celery records + acks it (no redelivery loop).
+            db.rollback()
+            timed_out = db.get(AuditJob, parsed_job_id)
+            if timed_out is not None:
+                _mark_job(
+                    db,
+                    timed_out,
+                    AuditStatus.FAILED,
+                    "Audit timed out",
+                    timed_out.progress_pct or 0,
+                    "Audit exceeded the time limit and was stopped before completing.",
+                )
+            raise
         except Exception as exc:
             db.rollback()
             failed_job = db.get(AuditJob, parsed_job_id)

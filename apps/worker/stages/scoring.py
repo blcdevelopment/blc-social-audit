@@ -190,7 +190,12 @@ def score_category(facts: JsonDict, rubric: Rubric) -> JsonDict:
     skipped_weight = sum(rule["weight"] for rule in rule_results if rule["result"] == "skipped")
     awarded_points = sum(rule["points_awarded"] for rule in evaluated_rules)
 
-    if not evaluated_rules or evaluated_weight <= 0:
+    # When EVERY rule skipped (no scorable facts) the score is 0 only because there was nothing
+    # to score — which reads identically to a genuine 0. Surface ``data_sufficient`` so consumers
+    # can tell "no data" apart from "scored zero". (Effectively unreachable for the website audit,
+    # whose core rules never skip; defensive, and keeps the numeric score unchanged.)
+    data_sufficient = bool(evaluated_rules) and evaluated_weight > 0
+    if not data_sufficient:
         score = 0
     elif rubric.normalization == "sum_of_weights":
         score = _round_score(awarded_points, rubric.max_score)
@@ -205,6 +210,7 @@ def score_category(facts: JsonDict, rubric: Rubric) -> JsonDict:
         "score": score,
         "max_score": rubric.max_score,
         "normalization": rubric.normalization,
+        "data_sufficient": data_sufficient,
         "weights": {
             "configured": round(sum(rule.weight for rule in rubric.rules), 4),
             "evaluated": round(evaluated_weight, 4),

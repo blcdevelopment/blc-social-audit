@@ -1,4 +1,8 @@
-from apps.worker.stages.grounding_validator import validate_commentary_grounding
+from apps.worker.stages.grounding_validator import (
+    collect_social_known_numbers,
+    social_text_has_ungrounded,
+    validate_commentary_grounding,
+)
 
 
 def _commentary(summary: str) -> dict:
@@ -140,3 +144,21 @@ def test_grounding_validator_keeps_timeframe_language() -> None:
     # Timeframe numbers are rhetorical, not measured facts, so the sentence is preserved.
     assert log["unsupported_claim_count"] == 0
     assert sanitized["content"]["executive_summary"] == summary
+
+
+# --- Shared social grounding (same module backs the social commentary backstop, SMWA-76) ---
+
+
+def test_social_grounding_collects_known_numbers() -> None:
+    known = collect_social_known_numbers({"summary": {"total_followers": 5000}})
+    assert "5000" in known
+
+
+def test_social_grounding_flags_fabricated_but_keeps_grounded_and_advice() -> None:
+    known = collect_social_known_numbers({"summary": {"total_followers": 5000}})
+    # A fabricated percentage not in the facts is flagged.
+    assert social_text_has_ungrounded("Studies show 80% ignore inactive pages.", known) is True
+    # A real follower count from the facts is kept.
+    assert social_text_has_ungrounded("With 5000 followers you have real reach.", known) is False
+    # Small advice numbers (cadence) are not claims, so they are never flagged.
+    assert social_text_has_ungrounded("Post 2-3 times per week.", known) is False

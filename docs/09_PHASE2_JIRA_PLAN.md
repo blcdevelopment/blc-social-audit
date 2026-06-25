@@ -1,5 +1,26 @@
 # Phase 2 Jira Plan & Tracking Board
 
+> **UPDATE 2026-06-25 — Epic P2-E4 / SMWA-70 board reconciliation.** The Jira board still shows
+> SMWA-71…77 as **TO DO**, but the epic is **SHIPPED** (the board is the stale artifact, not the
+> code). Resolution of each story against the working tree:
+> - **P2-19/SMWA-71** (Provider Adapter + YouTube) — **DONE.** Formalized 2026-06-25 with a
+>   `SocialProvider` Protocol + registry (`social/providers.py`); the collector now dispatches
+>   over the registry instead of a hardcoded `if/elif`. YouTube backend already present.
+> - **P2-20/SMWA-72** (Apify IG/FB) — **DONE** (`social/apify_provider.py`, incl. the Posts actor).
+> - **P2-21/SMWA-73** (IG Business Discovery shortcut) — **CLOSED, won't-do.** The Apify Instagram
+>   Scraper already covers IG; Business Discovery needs a Facebook Graph app + token + app review
+>   (high cost, low marginal value). Decision confirmed with the maintainer 2026-06-25.
+> - **P2-22/SMWA-74** (Fact Extractors + Common Schema + Fixtures) — **DONE.** Common schema
+>   formalized 2026-06-25 as typed `SocialProfileFacts`/`SocialSummary` (`social/schema.py`);
+>   IG/FB/YouTube fixtures present.
+> - **P2-23/SMWA-75 & P2-25/SMWA-77** ("…Lead-Gen update / Updated Lead-Gen Score") — the rubric +
+>   scoring + report/PDF/dashboard are **DONE**, but the **"fold social into the website Lead-Gen
+>   composite"** sub-scope is **SUPERSEDED**: the Social audit is deliberately **standalone** (own
+>   Social Score, own PDF; website composite untouched). Decision confirmed 2026-06-25.
+> - **P2-24/SMWA-76** (Commentary Prompts + Grounding-Validator Extension) — **DONE.** The social
+>   grounding backstop was unified 2026-06-25 into one shared `NumericGrounding` in
+>   `grounding_validator.py` (used by both the website and social paths).
+>
 > **UPDATE 2026-06-24 — YouTube RE-ADDED.** The "YouTube is dropped" notes in P2-2 / P2-19 / the
 > banner / P2-E4 done-criteria are **superseded**. The P2-19 provider adapter now has a YouTube
 > Data API v3 backend (`youtube_provider.py`) alongside the Apify IG/FB backends; provisioning adds

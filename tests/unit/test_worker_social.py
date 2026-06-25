@@ -70,3 +70,47 @@ def test_social_audit_runs_end_to_end(tmp_path, monkeypatch) -> None:
         # A real branded PDF was rendered to local storage.
         assert result.pdf_path and Path(result.pdf_path).exists()
         assert Path(result.pdf_path).read_bytes().startswith(b"%PDF")
+
+
+def test_complete_job_is_not_rerun(tmp_path, monkeypatch) -> None:
+    # Idempotency: a redelivered task (acks_late re-queue after a worker crash) must NOT re-run
+    # and overwrite an audit that already finished.
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+        future=True,
+    )
+    Base.metadata.create_all(engine)
+    TestingSession = sessionmaker(
+        bind=engine, autoflush=False, autocommit=False, expire_on_commit=False
+    )
+    monkeypatch.setattr(tasks, "SessionLocal", TestingSession)
+    monkeypatch.setattr(
+        tasks, "get_settings", lambda: Settings(local_report_storage_dir=tmp_path / "reports")
+    )
+
+    def boom_collector(settings, handles):
+        raise AssertionError("collector must not run for an already-complete job")
+
+    with TestingSession() as db:
+        job = AuditJob(
+            url="https://www.instagram.com/acme/",
+            audit_type="social",
+            social_handles={"instagram": "acme"},
+            status="complete",
+            current_stage="Social audit complete",
+            progress_pct=100,
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        job_id = str(job.id)
+
+    # Must be a silent no-op, not a re-run (boom_collector would raise if invoked).
+    tasks.run_collection_audit(job_id, social_collector=boom_collector)
+
+    with TestingSession() as db:
+        job = db.get(AuditJob, UUID(job_id))
+        assert job.status == "complete"
+        assert job.progress_pct == 100

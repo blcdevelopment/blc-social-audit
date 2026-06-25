@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from string import Template
 from typing import Any, Literal
@@ -9,6 +8,10 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from apps.shared.config import Settings
+from apps.worker.stages.grounding_validator import (
+    collect_social_known_numbers,
+    social_text_has_ungrounded,
+)
 
 JsonDict = dict[str, Any]
 
@@ -241,59 +244,6 @@ class SocialCommentaryContent(BaseModel):
     findings: list[SocialCommentaryFinding]
 
 
-# Flags a likely-fabricated factual claim: a percentage, or a number with 3+ digits (a count
-# or year). Small numbers (cadence like "2-3 posts/week", "30 days") are advice, not claims.
-_RISKY_NUM_RE = re.compile(r"\d[\d,]*(?:\.\d+)?%|\b\d[\d,]{2,}(?:\.\d+)?\b")
-_ANY_NUM_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
-
-
-def _norm_num(value: Any) -> str:
-    if isinstance(value, bool):
-        return ""
-    if isinstance(value, int | float):
-        number = float(value)
-    else:
-        digits = re.sub(r"[^\d.]", "", str(value)).rstrip(".")
-        if not digits:
-            return ""
-        try:
-            number = float(digits)
-        except ValueError:
-            return digits
-    return str(int(number)) if number.is_integer() else str(round(number, 2))
-
-
-def _known_social_numbers(*payloads: Any) -> set[str]:
-    found: set[str] = set()
-
-    def walk(value: Any) -> None:
-        if isinstance(value, bool):
-            return
-        if isinstance(value, dict):
-            for item in value.values():
-                walk(item)
-        elif isinstance(value, list):
-            for item in value:
-                walk(item)
-        elif isinstance(value, int | float):
-            norm = _norm_num(value)
-            if norm:
-                found.add(norm)
-        elif isinstance(value, str):
-            for match in _ANY_NUM_RE.findall(value):
-                norm = _norm_num(match)
-                if norm:
-                    found.add(norm)
-
-    for payload in payloads:
-        walk(payload)
-    return found
-
-
-def _has_ungrounded_claim(text: str, known: set[str]) -> bool:
-    return any(_norm_num(match) not in known for match in _RISKY_NUM_RE.findall(text))
-
-
 def _social_band(score: int | None) -> str:
     if score is None:
         return "not scored"
@@ -366,7 +316,7 @@ def generate_social_commentary(
             "model": "deterministic",
             "content": baseline,
         }
-    known = _known_social_numbers(social_facts, findings)
+    known = collect_social_known_numbers(social_facts, findings)
     return {
         "status": "llm",
         "provider": "openai",
@@ -380,13 +330,13 @@ def _ground_social_commentary(
 ) -> JsonDict:
     llm = {finding.id: finding for finding in content.findings}
     summary = content.executive_summary.strip()
-    if not summary or _has_ungrounded_claim(summary, known):
+    if not summary or social_text_has_ungrounded(summary, known):
         summary = baseline["executive_summary"]
     merged: list[JsonDict] = []
     for base in baseline["findings"]:
         polished = llm.get(base["id"])
         narrative = polished.narrative.strip() if polished else ""
-        if not narrative or _has_ungrounded_claim(narrative, known):
+        if not narrative or social_text_has_ungrounded(narrative, known):
             narrative = base["narrative"]
         title = polished.title.strip() if polished and polished.title.strip() else base["title"]
         merged.append({"id": base["id"], "title": title, "narrative": narrative})
