@@ -148,6 +148,22 @@ class Settings(BaseSettings):
     crawler_intercept_requests: bool = True
     crawler_chromium_executable_path: Path | None = None
 
+    # Optional advisory accessibility pass (axe-core). Default OFF; mirrors
+    # screaming_frog_enabled. When enabled, axe runs DURING the crawl (inside the live
+    # page-render window, before the page closes) and its findings are stored separately
+    # and rendered as an ADVISORY report section. The results NEVER feed the deterministic
+    # scoring path (score_audit reads only seo/uxui/psi/external_seo), so scores stay
+    # byte-for-byte reproducible whether this is on or off. When disabled, or if axe.min.js
+    # is missing / the scan errors / it times out, the audit completes normally with no
+    # advisory section (graceful skip, like a missing PSI key).
+    accessibility_advisory_enabled: bool = False
+    accessibility_axe_script_path: Path = Path("./vendor/axe-core/axe.min.js")
+    accessibility_axe_timeout_seconds: int = Field(default=30, ge=5, le=120)
+    accessibility_max_examples_per_issue: int = Field(default=5, ge=1, le=50)
+    # color-contrast is the most expensive and least reproducible axe rule (it reads
+    # computed styles); ops can disable it while keeping the structural advisory checks.
+    accessibility_run_contrast: bool = True
+
     rubric_seo_path: Path = Path("./rubrics/seo.yaml")
     rubric_uxui_path: Path = Path("./rubrics/uxui.yaml")
     rubric_composite_path: Path = Path("./rubrics/composite.yaml")

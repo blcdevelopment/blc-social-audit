@@ -14,12 +14,12 @@ _Last reconciled: 2026-06-16._
 
 | File | `version` | Category | Rules |
 |---|---|---|---|
-| `rubrics/seo.yaml` | `phase1-seo-v4` | `seo` | 23 |
+| `rubrics/seo.yaml` | `phase2-seo-v11` | `seo` | 48 |
 | `rubrics/uxui.yaml` | `phase1-uxui-v2` | `uxui` | 14 |
 | `rubrics/composite.yaml` | `phase1-composite-v1` | (weights) | — |
 
 The combined `rubric_version` stored on each result is
-`phase1-seo-v4+phase1-uxui-v2+phase1-composite-v1`. **Bump a version whenever you
+`phase2-seo-v11+phase1-uxui-v2+phase1-composite-v1`. **Bump a version whenever you
 change a rubric** so historical results remain interpretable.
 
 The SEO rubric grew from the original 13 on-page rules to 23 by adding two rule
@@ -100,7 +100,27 @@ or `skipped`. Points awarded = `weight × ratio`.
 | Family | `fact_path` prefix | Evaluator | `skip_if_missing` | Source stage |
 |---|---|---|---|---|
 | On-page SEO | `seo.*` | mixed (`boolean`, `presence`, `threshold`, …) | mostly `false` | `extractor_seo.py` |
+| Answer-engine readiness (AEO) | `seo.summary.*_heading_*`, `seo.summary.has_extractable_structure` | `boolean`, `threshold` | `false` | `extractor_seo.py` (`_extract_aeo`) |
+| Local-SEO | `seo.summary.has_complete_nap_schema`, `…has_service_area_markup`, `…has_map_or_gbp_link`, `…has_visible_address` | `boolean` | `false` | `extractor_seo.py` (`_extract_local`) |
+| Accessibility (a11y) | `seo.summary.all_pages_have_lang`, `…all_pages_have_main_landmark`, `…viewport_allows_zoom`, `…total_positive_tabindex`, `…unlabeled_form_controls`, `…empty_links`, `…empty_buttons`, `…duplicate_referenced_ids` | `boolean`, `threshold` | mixed (element-dependent rules `true`) | `extractor_seo.py` (`_extract_a11y`) |
 | UX/UI | `uxui.*` | mixed | `false` | `extractor_uxui.py` |
+
+> **Scope of the static accessibility module (P2-15).** The `seo.a11y.*` rules are a
+> *static-HTML accessibility screen*: every check is computed deterministically from the
+> stored, server-rendered markup with an HTML parser — no browser, no JavaScript, no computed
+> CSS, no extra fetch (so **axe-core is deliberately not used**; it needs a live rendered DOM,
+> which would break the deterministic-from-stored-facts invariant). It covers only the
+> low-false-positive, structural checks that are also the highest-prevalence real failures
+> (WebAIM Million): language declaration, zoom permission, a main landmark, programmatic labels
+> for forms / links / buttons, the positive-tabindex anti-pattern, and duplicated *referenced*
+> IDs. It deliberately does **not** evaluate anything render-dependent — colour/text contrast,
+> computed ARIA state, whether a labelled-by target is actually visible, keyboard focus order
+> and visibility, reflow/zoom behaviour, touch-target size, or JS/CSS-injected content. The
+> element-dependent count rules (`form_controls_labeled`, `links_have_name`, `buttons_have_name`,
+> `unique_referenced_ids`, `viewport_zoom`) are `skip_if_missing`, so a page with no
+> forms/buttons/links/id-references/viewport-meta rescales rather than being vacuously credited.
+> Automated tooling of any kind reliably detects only roughly **a third to a half** of WCAG
+> success criteria; absence of detected issues here is **not** a proof of conformance.
 | PageSpeed | `psi.summary.avg_*_performance` | `linear_scale` | **`true`** | `psi_client.py` |
 | Technical crawl | `external_seo.technical_crawl.summary.*` | `threshold` (lower-is-better) | **`true`** | `external_seo.py` / `site_health.py` |
 | Search Console | `external_seo.gsc.summary.*` | `threshold` (lower-is-better) | **`true`** | `google_search_console.py` |

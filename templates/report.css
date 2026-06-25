@@ -634,6 +634,68 @@ td span {
   border-left-color: #98a2b3;
 }
 
+/* axe-core impact levels (advisory accessibility section) reuse the severity card pattern. */
+.severity-critical {
+  border-left-color: #b42318;
+}
+
+.severity-serious {
+  border-left-color: #dc6803;
+}
+
+.severity-moderate {
+  border-left-color: #2e90fa;
+}
+
+.severity-minor {
+  border-left-color: #98a2b3;
+}
+
+.sev-critical {
+  background: #fdecea;
+  color: #b42318;
+}
+
+.sev-serious {
+  background: #fbf1dc;
+  color: #b06a00;
+}
+
+.sev-moderate {
+  background: #e7f0fa;
+  color: #1f74b7;
+}
+
+.sev-minor {
+  background: #eef1f5;
+  color: #5c697a;
+}
+
+.a11y-disclaimer {
+  background: #f8f9fb;
+  border: 1px solid #e4e7ec;
+  border-left: 4px solid #98a2b3;
+  border-radius: 9px;
+  padding: 0.13in 0.16in;
+  margin: 0.1in 0;
+}
+
+.a11y-disclaimer p {
+  color: #475467;
+  font-size: 9.5pt;
+  margin: 0 0 0.05in;
+}
+
+.a11y-disclaimer p:last-child {
+  margin-bottom: 0;
+}
+
+.wcag-ref {
+  color: #5c697a;
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 8pt;
+}
+
 .finding-head,
 .technical-issue-head {
   align-items: center;

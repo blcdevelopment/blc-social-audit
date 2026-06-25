@@ -104,6 +104,21 @@ TECHNICAL_ISSUE_GUIDANCE: dict[str, dict[str, str]] = {
         ),
         "location_label": "Non-indexable page",
     },
+    "redirect_chain_internal_urls": {
+        "summary": _sentence(
+            "These internal links go through two or more redirects before reaching",
+            "the final page.",
+        ),
+        "why_it_matters": _sentence(
+            "Each extra hop wastes crawl budget, slows the page for visitors,",
+            "and can dilute the link's ranking signal.",
+        ),
+        "recommended_fix": _sentence(
+            "Update the internal link to point straight at the final destination URL",
+            "so there are no intermediate redirect hops.",
+        ),
+        "location_label": "Internal link with a redirect chain",
+    },
     "missing_titles": {
         "summary": _sentence(
             "These pages are missing a title tag, which is the main title",
@@ -493,6 +508,37 @@ class SearchPerformanceSection(BaseModel):
     url_inspection_items: list[JsonDict] = Field(default_factory=list)
 
 
+class AccessibilityIssue(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    rule_id: str
+    impact: str
+    wcag_criteria: list[str] = Field(default_factory=list)
+    help: str = ""
+    help_url: str = ""
+    instances: int = 0
+    example_selectors: list[str] = Field(default_factory=list)
+    example_pages: list[str] = Field(default_factory=list)
+    failure_summary: str = ""
+
+
+class AccessibilityAdvisorySection(BaseModel):
+    """Optional advisory accessibility section (axe-core). Advisory-only — populated only when
+    the opt-in pass ran; NEVER derived from or affecting the scored sections."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: str = "skipped"
+    status_label: str = "Not collected"
+    disclaimer: str = ""
+    axe_version: str = ""
+    pages_scanned: int = 0
+    impact_counts: dict[str, int] = Field(default_factory=dict)
+    needs_review_count: int = 0
+    issues: list[AccessibilityIssue] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
 class CrawlSummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -527,6 +573,12 @@ class ReportPayload(BaseModel):
     external_seo_summary: ExternalSeoSummary
     technical_seo_section: TechnicalSeoSection
     search_performance_section: SearchPerformanceSection
+    # Optional advisory accessibility section (default empty/"skipped" => not rendered). Like
+    # core_web_vitals, this is default-factory so old stored results stay valid and the
+    # REPORT_PAYLOAD_VERSION is unchanged.
+    accessibility_advisory_section: AccessibilityAdvisorySection = Field(
+        default_factory=AccessibilityAdvisorySection
+    )
     crawl_summary: CrawlSummary
     appendix: Appendix
 
@@ -573,6 +625,9 @@ def compose_report_payload(job: Any, result: Any) -> ReportPayload:
         external_seo_summary=_external_seo_summary(external_seo_facts),
         technical_seo_section=_technical_seo_section(external_seo_facts),
         search_performance_section=_search_performance_section(external_seo_facts),
+        accessibility_advisory_section=_accessibility_advisory_section(
+            _dict(getattr(result, "accessibility_facts", None))
+        ),
         crawl_summary=_crawl_summary(crawled_pages),
         appendix=_appendix(score_breakdown),
     )
@@ -1361,6 +1416,43 @@ def _domain(url: str) -> str:
     parsed = urlparse(url)
     hostname = parsed.hostname or url
     return hostname.removeprefix("www.")
+
+
+def _accessibility_issue(issue: JsonDict) -> AccessibilityIssue:
+    return AccessibilityIssue(
+        rule_id=_text(issue.get("rule_id"), "unknown"),
+        impact=_text(issue.get("impact"), "minor"),
+        wcag_criteria=[str(value) for value in _list(issue.get("wcag_criteria"))],
+        help=_text(issue.get("help"), ""),
+        help_url=_text(issue.get("help_url"), ""),
+        instances=int(issue.get("instances") or 0),
+        example_selectors=[str(value) for value in _list(issue.get("example_selectors"))],
+        example_pages=[str(value) for value in _list(issue.get("example_pages"))],
+        failure_summary=_text(issue.get("failure_summary"), ""),
+    )
+
+
+def _accessibility_advisory_section(facts: JsonDict) -> AccessibilityAdvisorySection:
+    """Compose the optional advisory accessibility section from the stored advisory facts.
+    Pure presentation: it reads only ``accessibility_facts`` and never touches scores."""
+    status = str(facts.get("status") or "skipped")
+    if status != "complete":
+        return AccessibilityAdvisorySection(status=status, status_label=status_label(status))
+    impact_counts = {
+        level: int(_dict(facts.get("impact_counts")).get(level) or 0)
+        for level in ("critical", "serious", "moderate", "minor")
+    }
+    return AccessibilityAdvisorySection(
+        status="complete",
+        status_label=status_label("complete"),
+        disclaimer=_text(facts.get("disclaimer"), ""),
+        axe_version=_text(facts.get("axe_version"), "unknown"),
+        pages_scanned=int(facts.get("pages_scanned") or 0),
+        impact_counts=impact_counts,
+        needs_review_count=int(facts.get("needs_review_count") or 0),
+        issues=[_accessibility_issue(_dict(item)) for item in _list(facts.get("issues"))],
+        notes=[str(note) for note in _list(facts.get("notes"))],
+    )
 
 
 def _dict(value: Any) -> JsonDict:

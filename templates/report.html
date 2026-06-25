@@ -92,6 +92,9 @@
         <li><a href="#technical-seo">Technical SEO</a></li>
         <li><a href="#search-performance">Search Performance</a></li>
         <li><a href="#uxui">UX/UI Findings</a></li>
+        {% if payload.accessibility_advisory_section.status == "complete" %}
+        <li><a href="#accessibility">Accessibility (Advisory)</a></li>
+        {% endif %}
         <li><a href="#roadmap">Roadmap</a></li>
         <li><a href="#appendix">Appendix</a></li>
         <li><a href="#visual-analytics">Visual Analytics</a></li>
@@ -504,6 +507,82 @@
         </p>
       {% endif %}
     </section>
+
+    {% if payload.accessibility_advisory_section.status == "complete" %}
+    {% set a11y = payload.accessibility_advisory_section %}
+    <section class="page-section" id="accessibility">
+      <p class="eyebrow">Accessibility (Advisory)</p>
+      <h2>Automated accessibility scan</h2>
+
+      <div class="a11y-disclaimer">
+        <p><strong>About this section — advisory, not a compliance verdict.</strong></p>
+        <p>{{ a11y.disclaimer }}</p>
+      </div>
+
+      <dl class="metric-list">
+        <div><dt>Tool</dt><dd>axe-core {{ a11y.axe_version }}</dd></div>
+        <div><dt>Pages scanned</dt><dd>{{ a11y.pages_scanned }}</dd></div>
+        <div><dt>Critical</dt><dd>{{ a11y.impact_counts.get("critical", 0) }}</dd></div>
+        <div><dt>Serious</dt><dd>{{ a11y.impact_counts.get("serious", 0) }}</dd></div>
+        <div><dt>Moderate</dt><dd>{{ a11y.impact_counts.get("moderate", 0) }}</dd></div>
+        <div><dt>Minor</dt><dd>{{ a11y.impact_counts.get("minor", 0) }}</dd></div>
+      </dl>
+
+      {% for note in a11y.notes %}
+      <p class="muted">{{ note }}</p>
+      {% endfor %}
+
+      {% if a11y.issues %}
+      <div class="technical-issue-list">
+        {% for issue in a11y.issues %}
+        <article class="technical-issue severity-{{ issue.impact }}">
+          <div class="technical-issue-head">
+            <span class="sev-pill sev-{{ issue.impact }}">{{ issue.impact }}</span>
+            {% if issue.wcag_criteria %}
+            <span class="wcag-ref">{{ issue.wcag_criteria | join(", ") }}</span>
+            {% endif %}
+            <span class="count-chip">{{ issue.instances }} affected</span>
+          </div>
+          <h4 class="issue-title">{{ issue.help or issue.rule_id }}</h4>
+          {% if issue.failure_summary %}
+          <div class="issue-guidance">
+            <p>{{ issue.failure_summary }}</p>
+          </div>
+          {% endif %}
+          {% if issue.example_selectors %}
+          <div class="issue-locations">
+            <p class="location-label">Example elements:</p>
+            <ul class="url-list">
+              {% for selector in issue.example_selectors %}
+              <li><code>{{ selector }}</code></li>
+              {% endfor %}
+            </ul>
+          </div>
+          {% endif %}
+          {% if issue.example_pages %}
+          <p class="muted">Seen on: {{ issue.example_pages | join(", ") }}.</p>
+          {% endif %}
+          {% if issue.help_url %}
+          <p class="muted">How to fix: {{ issue.help_url }}</p>
+          {% endif %}
+        </article>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="muted">
+        The automated scan flagged no additional issues beyond the accessibility checks already
+        covered in the scored SEO section. Manual review is still recommended.
+      </p>
+      {% endif %}
+
+      {% if a11y.needs_review_count > 0 %}
+      <p class="muted">
+        {{ a11y.needs_review_count }} item(s) could not be determined automatically and need
+        manual review.
+      </p>
+      {% endif %}
+    </section>
+    {% endif %}
 
     <section class="page-section" id="roadmap">
       <p class="eyebrow">Action Roadmap</p>

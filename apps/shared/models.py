@@ -114,6 +114,10 @@ class AuditResult(Base):
     uxui_facts: Mapped[JsonDict] = mapped_column(json_type(), nullable=False, default=dict)
     psi_facts: Mapped[JsonDict] = mapped_column(json_type(), nullable=False, default=dict)
     external_seo_facts: Mapped[JsonDict] = mapped_column(json_type(), nullable=False, default=dict)
+    # Advisory-only axe-core accessibility findings (P2-15b). Nullable; populated only when the
+    # opt-in pass runs. NEVER read by scoring — kept in its own column so it can't be confused
+    # with the trust-gated, scored external_seo_facts.
+    accessibility_facts: Mapped[JsonDict | None] = mapped_column(json_type())
     score_breakdown: Mapped[JsonDict] = mapped_column(json_type(), nullable=False, default=dict)
     commentary: Mapped[JsonDict] = mapped_column(json_type(), nullable=False, default=dict)
     validation_log: Mapped[JsonDict] = mapped_column(json_type(), nullable=False, default=dict)

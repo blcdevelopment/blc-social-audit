@@ -230,6 +230,32 @@ h1 {
   margin-top: 4px;
 }
 
+/* White-label branding disclosure on the new-audit form (P2-11). */
+.brand-panel {
+  display: grid;
+  gap: 14px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fafbfc;
+}
+
+.brand-panel > summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--ink);
+  list-style-position: inside;
+}
+
+.brand-panel > summary + * {
+  margin-top: 2px;
+}
+
+.brand-panel[open] > summary {
+  margin-bottom: 2px;
+}
+
 /* ---------- Buttons ---------- */
 .btn {
   display: inline-flex;

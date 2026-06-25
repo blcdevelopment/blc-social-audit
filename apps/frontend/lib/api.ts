@@ -232,6 +232,32 @@ export interface ReportMetadata {
   llm_model: string;
 }
 
+export interface AccessibilityIssue {
+  rule_id: string;
+  impact: string;
+  wcag_criteria: string[];
+  help: string;
+  help_url: string;
+  instances: number;
+  example_selectors: string[];
+  example_pages: string[];
+  failure_summary: string;
+}
+
+// Advisory-only axe-core accessibility section (never affects the score). Optional in the
+// payload, mirroring the Pydantic default-factory.
+export interface AccessibilityAdvisorySection {
+  status: string;
+  status_label: string;
+  disclaimer: string;
+  axe_version: string;
+  pages_scanned: number;
+  impact_counts: Record<string, number>;
+  needs_review_count: number;
+  issues: AccessibilityIssue[];
+  notes: string[];
+}
+
 export interface ReportPayload {
   version: string;
   metadata: ReportMetadata;
@@ -244,6 +270,7 @@ export interface ReportPayload {
   external_seo_summary: ExternalSeoSummary;
   technical_seo_section: TechnicalSeoSection;
   search_performance_section: SearchPerformanceSection;
+  accessibility_advisory_section?: AccessibilityAdvisorySection;
 }
 
 export interface AuditDetail {

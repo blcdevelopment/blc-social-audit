@@ -226,8 +226,8 @@ rewriting it**.
 | Epic | Name | Track | Tasks | Status |
 |---|---|---|---|---|
 | P2-E1 | Phase 2.0 Discovery & Scope Lock | — | P2-1 … P2-5 | ⬜ |
-| P2-E2 | Productionization & Platform | A | P2-6 … P2-11 | ⬜ |
-| P2-E3 | Deepen the Website Audit | D | P2-12 … P2-18 | ⬜ |
+| P2-E2 | Productionization & Platform | A | P2-6 … P2-11 | ✅ Done (code) — metrics/alerts/backups remain VM ops |
+| P2-E3 | Deepen the Website Audit | D | P2-12 … P2-18 | ✅ Done (2026-06-25) |
 | P2-E4 | Social Media Audit | B | P2-19 … P2-25 | ✅ Done (2026-06-23) |
 | P2-E5 | Enrichment (v3) | C | P2-26 … P2-28 | ⛔ v3 |
 
@@ -245,14 +245,14 @@ rewriting it**.
 | P2-8 | Complete Request-Level SSRF Interception | Task | P2-E2 | ✅ Done (shipped 2026-06-23) | Request-level interception live (`crawler.py` `_host_blocked_for_subrequest` + Playwright route guard; `crawler_intercept_requests`); closes Known-Limitations §2 |
 | P2-9 | Managed Hosting + CI/CD Deploy | Task | P2-E2 | ✅ Done (shipped ahead of plan, 2026-06-16) | Live on Linode + Caddy (TLS); CI/CD auto-deploy on merge to main (see `DEPLOYMENT.md`) |
 | P2-10 | Observability: Sentry, Metrics, Alerts, Backups, Retention | Task | P2-E2 | 🟡 Partly Done (2026-06-23) | **Retention DONE** (`retention.py` + `cleanup_storage.py` + `storage_retention_days`, cron-run) + **env-gated Sentry DONE** (`observability.py` + `SENTRY_DSN`); metrics/alerts/backups = VM ops (not code) |
-| P2-11 | Web Dashboard + History/Re-run/Share + White-Label | Story | P2-E2 | ⬜ | Reuses report payload |
-| P2-12 | Structured-Data (JSON-LD) Extractor + Schema Rubric Rules | Task | P2-E3 | ⬜ | |
-| P2-13 | AEO/GEO Readiness Signals | Task | P2-E3 | ⬜ | `llms.txt`, AI-crawler access |
-| P2-14 | CrUX Field Core Web Vitals (LCP/INP/CLS) | Task | P2-E3 | ⬜ | |
-| P2-15 | axe-core Accessibility Pass + Rubric Rules | Task | P2-E3 | ⬜ | Reuses Playwright browser |
-| P2-16 | Crawlability/Indexability + Link-Health + Redirect Checks | Task | P2-E3 | ⬜ | |
-| P2-17 | Local-SEO Signals (NAP, GBP, Location Pages, Local Schema) | Task | P2-E3 | ⬜ | High value for niche |
-| P2-18 | Trust/Conversion UX Signals + Security-Hygiene Checks | Task | P2-E3 | ⬜ | |
+| P2-11 | Web Dashboard + History/Re-run/Share + White-Label | Story | P2-E2 | ✅ Done (2026-06-25) | On-screen report (`pages/audit/[id].tsx` `ScoreCards`/sections/roadmap), history filter/sort + one-click re-run (`rerunAuditEnrichment`), token-gated share links (`shareAudit`/`/shared`), and **white-label controls on the new-audit form** (`pages/index.tsx` `brand_overrides` → `report_branding.apply_brand_overrides`) |
+| P2-12 | Structured-Data (JSON-LD) Extractor + Schema Rubric Rules | Task | P2-E3 | ✅ Done (2026-06-25) | `_extract_schema_types` (shared `_collect_jsonld`); `seo.schema.{present,business_identity,valid_json_ld,breadcrumb}` |
+| P2-13 | AEO/GEO Readiness Signals | Task | P2-E3 | ✅ Done (2026-06-25) | `_extract_aeo`; `seo.aeo.{heading_hierarchy,question_headings,extractable_structure}`. **Research-vetted: `llms.txt` DROPPED** (off-page fetch + near-zero 2026 evidence) |
+| P2-14 | CrUX Field Core Web Vitals (LCP/INP/CLS) | Task | P2-E3 | ✅ Done (2026-06-25) | `psi_client` CrUX origin field data → `seo.cwv.{lcp,inp,cls}` (skip_if_missing) |
+| P2-15 | ~~axe-core~~ **Static-HTML** Accessibility Pass + Rubric Rules | Task | P2-E3 | ✅ Done (2026-06-25) | **Research-driven deviation: NO axe-core** (needs live DOM, breaks deterministic-from-stored-HTML invariant). `_extract_a11y` deterministic WCAG A/AA subset → `seo.a11y.*` (lang/zoom/landmark/labels/link+button names/tabindex/dup-referenced-ids); see docs/04 §3 known-limitation |
+| P2-16 | Crawlability/Indexability + Link-Health + Redirect Checks | Task | P2-E3 | ✅ Done (2026-06-25) | `site_health` redirect-hop tracking; `seo.technical_crawl.{canonicals,redirect_chains}` |
+| P2-17 | Local-SEO Signals (NAP, GBP, Location Pages, Local Schema) | Task | P2-E3 | ✅ Done (2026-06-25) | `_extract_local`; `seo.local.{nap_schema,service_area,map_or_gbp,visible_address}` |
+| P2-18 | Trust/Conversion UX Signals + Security-Hygiene Checks | Task | P2-E3 | ✅ Done (2026-06-25) | Security-hygiene: `_extract_security` → `seo.security.{https,no_mixed_content}`; trust/conversion UX already covered by Phase-1 `uxui.trust.*` |
 | P2-19 | Social Data Provider Adapter (Interface + ~~YouTube~~ **Apify IG/FB** Backend) | Task | P2-E4 | ✅ Done (2026-06-23) | **Apify provider shipped:** `apps/worker/stages/social/apify_provider.py` (IG actor `apify~instagram-scraper`, FB actor `apify~facebook-pages-scraper`) + `collector.py` (`collect_social_facts`, injectable, graceful skip); no YouTube |
 | P2-20 | ~~Bright Data~~ **Apify** Backend for IG/FB | Task | P2-E4 | ✅ Done (2026-06-23) | Apify free-tier IG+FB backend live (folded with P2-19 in `apify_provider.py`); ~~gated on P2-3~~ — P2-3 removed, no paid gate (legal ✅ given). Live IG+FB runs verified |
 | P2-21 | ~~Instagram Business Discovery Shortcut~~ | Task | P2-E4 | ❌ Dropped | No account approvals (BLC); ~~Bright Data~~ **Apify** covers IG |

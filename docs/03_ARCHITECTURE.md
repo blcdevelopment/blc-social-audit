@@ -186,9 +186,13 @@ read for backward compat). This is the seam Phase 2 plugs the social audit into 
 `scoring.py` is a pure, config-driven rubric engine:
 
 - `load_rubric` validates each `rubrics/*.yaml` (Pydantic, `extra="forbid"`). Phase 1:
-  `seo.yaml` (`phase1-seo-v4`, 23 rules), `uxui.yaml` (`phase1-uxui-v2`, 14 rules),
-  `composite.yaml` (`phase1-composite-v1`, weights only). The combined `rubric_version`
-  stored on the result is `phase1-seo-v4+phase1-uxui-v2+phase1-composite-v1`.
+  `seo.yaml` (`phase2-seo-v11`, 48 rules — incl. P2-12 JSON-LD/schema, P2-14 CrUX Core Web
+  Vitals, P2-16 canonical + redirect-chain, P2-18 HTTPS + mixed-content security, P2-13
+  answer-engine (AEO) content-structure, P2-17 local-SEO (NAP/service-area/GBP/address), and
+  P2-15 static-HTML accessibility (lang/zoom/landmark/labels/link+button names/tabindex/dup-ids)
+  rules), `uxui.yaml` (`phase1-uxui-v2`, 14 rules), `composite.yaml` (`phase1-composite-v1`,
+  weights only). The combined `rubric_version` stored on the result is
+  `phase2-seo-v11+phase1-uxui-v2+phase1-composite-v1`.
 - Each rule has a `weight`, a `fact_path`, and an `evaluator`
   (`boolean`, `presence`, `range`, `exact_match`, `threshold`, `linear_scale`),
   optionally `skip_if_missing` (used for PSI rules with `linear_scale` so a missing API

@@ -67,6 +67,35 @@ def _collect_external_seo_safely(**kwargs: Any) -> JsonDict:
         return facts
 
 
+def _collect_accessibility_advisory_safely(
+    crawl_result: CrawlResult, settings: Settings
+) -> JsonDict:
+    """Normalize the advisory axe-core results gathered during the crawl. Advisory-only and
+    must never abort an audit (mirrors external SEO). Returns ``{}`` when the pass is disabled,
+    when no page produced a result, or on any normalization error. NEVER feeds scoring."""
+    if not settings.accessibility_advisory_enabled:
+        return {}
+    try:
+        from apps.worker.stages.accessibility import normalize_accessibility_facts, read_axe_version
+
+        per_page = [
+            {"url": page.final_url or page.url, "result": page.axe_results}
+            for page in crawl_result.pages
+            if getattr(page, "axe_results", None)
+        ]
+        if not per_page:
+            return {}
+        return normalize_accessibility_facts(
+            per_page,
+            max_examples=settings.accessibility_max_examples_per_issue,
+            axe_version=read_axe_version(settings.accessibility_axe_script_path),
+        )
+    except SoftTimeLimitExceeded:
+        raise
+    except Exception:
+        return {}
+
+
 def _mark_job(
     db: Session,
     job: AuditJob,
@@ -104,6 +133,7 @@ def _upsert_audit_result(
     score_breakdown: JsonDict,
     commentary: JsonDict,
     validation_log: JsonDict,
+    accessibility_facts: JsonDict | None = None,
 ) -> AuditResult:
     result = job.result
     if result is None:
@@ -135,6 +165,8 @@ def _upsert_audit_result(
     result.uxui_facts = uxui_facts
     result.psi_facts = psi_facts
     result.external_seo_facts = external_seo_facts
+    # Advisory-only; stored separately from the scored facts. Empty => NULL => no report section.
+    result.accessibility_facts = accessibility_facts or None
     result.score_breakdown = score_breakdown
     result.commentary = commentary
     result.validation_log = validation_log
@@ -331,6 +363,10 @@ def run_collection_audit(
             _mark_job(db, job, AuditStatus.EXTRACTING, "Extracting SEO and UX/UI facts", 70)
             seo_facts = extract_seo_facts(crawl_result.pages)
             uxui_facts = extract_uxui_facts(crawl_result.pages)
+            # Advisory-only; computed from axe results gathered during the crawl. Deliberately
+            # NOT passed to score_audit / generate_commentary below, so scores are identical
+            # whether this opt-in pass ran or not.
+            accessibility_facts = _collect_accessibility_advisory_safely(crawl_result, settings)
 
             _mark_job(db, job, AuditStatus.EXTRACTING, "Collecting external SEO insights", 76)
             external_seo_facts = _collect_external_seo_safely(
@@ -395,6 +431,7 @@ def run_collection_audit(
                 score_breakdown,
                 commentary,
                 validation_log,
+                accessibility_facts=accessibility_facts,
             )
 
             _mark_job(db, job, AuditStatus.RENDERING, "Rendering report exports", 98)

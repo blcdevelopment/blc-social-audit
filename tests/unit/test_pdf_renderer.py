@@ -78,6 +78,72 @@ def test_render_report_pdf_qa_variants(
         assert "Timed out rendering" in text
 
 
+def test_render_report_pdf_includes_advisory_accessibility_section(tmp_path) -> None:
+    result = _result(
+        extra_items=0,
+        psi_facts=_complete_psi(),
+        crawled_pages=_crawled_pages(failed_pages=False),
+    )
+    result.accessibility_facts = {
+        "status": "complete",
+        "axe_version": "4.10.2",
+        "pages_scanned": 3,
+        "impact_counts": {"critical": 1, "serious": 2, "moderate": 0, "minor": 0},
+        "needs_review_count": 4,
+        "disclaimer": (
+            "This is an automated accessibility scan (axe-core), provided as advisory guidance "
+            "rather than a compliance verdict."
+        ),
+        "notes": ["Document language and labels are evaluated in the scored checks above."],
+        "issues": [
+            {
+                "rule_id": "color-contrast",
+                "impact": "serious",
+                "wcag_criteria": ["wcag143", "wcag2aa"],
+                "help": "Elements must meet minimum colour contrast ratio thresholds",
+                "help_url": "https://dequeuniversity.com/rules/axe/4.10/color-contrast",
+                "instances": 12,
+                "example_selectors": [".hero .tagline"],
+                "example_pages": ["https://example.com/"],
+                "failure_summary": "Fix the contrast ratio.",
+            }
+        ],
+    }
+    output_path = tmp_path / "a11y.pdf"
+
+    render_report_pdf(
+        compose_report_payload(_job(), result),
+        settings=_settings(tmp_path),
+        output_path=output_path,
+    )
+
+    text = " ".join((page.extract_text() or "") for page in PdfReader(str(output_path)).pages)
+    normalized = " ".join(text.split())
+    assert "Automated accessibility scan" in normalized
+    assert "advisory guidance rather than a compliance verdict" in normalized
+    assert "axe-core 4.10.2" in normalized
+    assert "minimum colour contrast" in normalized
+    # The advisory section does not disturb the scored content.
+    assert "Formula: round((SEO 81 * 45%)" in normalized
+
+
+def test_render_report_pdf_omits_advisory_section_when_skipped(tmp_path) -> None:
+    payload = compose_report_payload(
+        _job(),
+        _result(
+            extra_items=0,
+            psi_facts=_complete_psi(),
+            crawled_pages=_crawled_pages(failed_pages=False),
+        ),
+    )
+    output_path = tmp_path / "noa11y.pdf"
+
+    render_report_pdf(payload, settings=_settings(tmp_path), output_path=output_path)
+
+    text = " ".join((page.extract_text() or "") for page in PdfReader(str(output_path)).pages)
+    assert "Automated accessibility scan" not in text
+
+
 def _settings(tmp_path) -> Settings:
     return Settings(
         _env_file=None,

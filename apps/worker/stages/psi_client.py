@@ -212,6 +212,24 @@ def _page_average(page: JsonDict) -> int | None:
     return _average(scores)
 
 
+def _origin_field_data(pages: list[JsonDict]) -> JsonDict | None:
+    """The whole-site CrUX field data ("this origin") — identical across pages/strategies and
+    more reliably present than per-URL field data, so it is the basis for the Core Web Vitals
+    rules. Returns the first one found, or None when no page carries origin field data."""
+    for page in pages:
+        for strategy in PSI_STRATEGIES:
+            field = page.get(strategy, {}).get("field_data", {})
+            origin = field.get("origin") if isinstance(field, dict) else None
+            if isinstance(origin, dict):
+                return origin
+    return None
+
+
+def _field_p75(field: JsonDict | None, key: str) -> float | None:
+    metric = field.get(key) if isinstance(field, dict) else None
+    return metric.get("p75") if isinstance(metric, dict) else None
+
+
 def _summarize_pages(pages: list[JsonDict]) -> JsonDict:
     mobile_scores = [
         score for page in pages if (score := _performance_score(page, "mobile")) is not None
@@ -233,12 +251,25 @@ def _summarize_pages(pages: list[JsonDict]) -> JsonDict:
         key=lambda value: value["average_performance"],
     )
 
+    # Real-user Core Web Vitals (75th-percentile) from the whole-site CrUX origin record,
+    # in real units (LCP/INP in ms, CLS unitless). None when the site has no field data —
+    # the CWV rules carry skip_if_missing so that never penalizes the score.
+    origin = _origin_field_data(pages)
+    crux = {
+        "has_field_data": origin is not None,
+        "overall_category": origin.get("overall_category") if origin else None,
+        "lcp_p75_ms": _field_p75(origin, "largest_contentful_paint_ms"),
+        "inp_p75_ms": _field_p75(origin, "interaction_to_next_paint_ms"),
+        "cls_p75": _field_p75(origin, "cumulative_layout_shift"),
+    }
+
     return {
         "avg_mobile_performance": _average(mobile_scores),
         "avg_desktop_performance": _average(desktop_scores),
         "complete_mobile_pages": len(mobile_scores),
         "complete_desktop_pages": len(desktop_scores),
         "slowest_pages": slowest_pages[:3],
+        "crux": crux,
     }
 
 

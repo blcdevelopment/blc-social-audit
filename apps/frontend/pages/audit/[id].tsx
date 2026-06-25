@@ -151,6 +151,57 @@ function ctrText(record: Record<string, unknown>): string {
   return typeof value === "number" ? `${(value * 100).toFixed(1)}%` : "N/A";
 }
 
+function AccessibilityBlock({ report }: { report: NonNullable<AuditDetail["report"]> }) {
+  const a11y = report.accessibility_advisory_section;
+  if (!a11y || a11y.status !== "complete") {
+    return null;
+  }
+  const impactLevels = ["critical", "serious", "moderate", "minor"];
+  return (
+    <section className="card">
+      <div className="section-head">
+        <h3>Accessibility (advisory)</h3>
+        <span className="pill">axe-core {a11y.axe_version}</span>
+      </div>
+      <p className="muted">{a11y.disclaimer}</p>
+      <div className="meta-grid">
+        {impactLevels.map((level) => (
+          <div key={level}>
+            <h4>{level}</h4>
+            <p>{a11y.impact_counts[level] ?? 0}</p>
+          </div>
+        ))}
+      </div>
+      {a11y.notes.map((note) => (
+        <p className="muted" key={note}>
+          {note}
+        </p>
+      ))}
+      {a11y.issues.length > 0 ? (
+        <ul>
+          {a11y.issues.map((issue) => (
+            <li key={issue.rule_id}>
+              <strong>{issue.help || issue.rule_id}</strong>{" "}
+              <span className="muted">
+                ({issue.impact}, {issue.instances} affected
+                {issue.wcag_criteria.length > 0 ? ` · ${issue.wcag_criteria.join(", ")}` : ""})
+              </span>
+              {issue.failure_summary && <p className="muted">{issue.failure_summary}</p>}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="muted">
+          The scan flagged no issues beyond the accessibility checks already scored above.
+        </p>
+      )}
+      {a11y.needs_review_count > 0 && (
+        <p className="muted">{a11y.needs_review_count} item(s) need manual review.</p>
+      )}
+    </section>
+  );
+}
+
 function ExternalSeoBlock({
   report,
 }: {
@@ -755,6 +806,8 @@ export default function AuditDetailPage() {
                 {detail.report.sections.map((section) => (
                   <SectionBlock key={section.id} section={section} />
                 ))}
+
+                <AccessibilityBlock report={detail.report} />
 
                 <RoadmapBlock roadmap={detail.report.roadmap} />
 

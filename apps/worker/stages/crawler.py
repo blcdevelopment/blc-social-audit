@@ -245,6 +245,10 @@ class CrawledPage:
     link_score: float | None = None
     screenshot_path: str | None = None
     screenshot_error: str | None = None
+    # Raw axe-core result for the optional advisory accessibility pass (P2-15b). In-memory
+    # ONLY (deliberately NOT serialized in to_public_dict): it is consumed by the advisory
+    # normalizer in tasks.py right after the crawl, and never reaches the scoring path.
+    axe_results: dict[str, Any] | None = None
 
     def to_public_dict(self) -> dict[str, Any]:
         return {
@@ -546,6 +550,15 @@ async def _render_page(
             page.url,
         )
 
+        # Optional advisory accessibility pass (P2-15b). Runs only when enabled; the helper
+        # never raises (graceful per-page skip on missing asset / error / timeout), and the
+        # raw result is carried in-memory only and never reaches scoring.
+        axe_results = None
+        if settings.accessibility_advisory_enabled:
+            from apps.worker.stages.accessibility import run_axe_on_page
+
+            axe_results = await run_axe_on_page(page, settings)
+
         return CrawledPage(
             url=url,
             final_url=page.url,
@@ -558,6 +571,7 @@ async def _render_page(
             link_score=link_score,
             screenshot_path=screenshot_path,
             screenshot_error=screenshot_error,
+            axe_results=axe_results,
         )
     except playwright_api.TimeoutError as exc:
         raise CrawlerError(f"Timed out rendering {url}") from exc
