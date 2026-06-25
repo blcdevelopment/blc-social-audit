@@ -101,8 +101,9 @@ Jira epics/tasks + tracking board → [`docs/09_PHASE2_JIRA_PLAN.md`](09_PHASE2_
 >   `audit_jobs.social_handles` JSONB; `audit_results.social_score` (INT, nullable) +
 >   `social_facts` (JSONB); website scores (`seo_score`/`uxui_score`/`lead_gen_score`) made
 >   **nullable** so a social result leaves them empty. `apps/shared/models.py:71,73,110,111`;
->   migration head is **`20260623_0004`** (`migrations/versions/20260623_0004_add_social_audit_type.py`;
->   chain `0001→0002→0003→0004`).
+>   the social-audit migration is **`20260623_0004`** (current head is now **`20260625_0005`**;
+>   see CLAUDE.md §6) (`migrations/versions/20260623_0004_add_social_audit_type.py`;
+>   chain `0001→0002→0003→0004→0005`).
 > - **Provider = Apify (free tier).** `apps/worker/stages/social/apify_provider.py` wires **two
 >   actors**: Instagram Scraper (`apify~instagram-scraper`, `apify_provider.py:18`) and Facebook
 >   Pages Scraper (`apify~facebook-pages-scraper`, `apify_provider.py:22`) via the sync

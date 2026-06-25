@@ -37,8 +37,9 @@ commentary**, IG Business Discovery dropped in both.
 - **Social data layer (reusable):** `collect_social_facts` (graceful-skip, injectable as
   `social_collector=`) → `apify_provider` (IG + FB pages + FB posts) + `youtube_provider`
   (YouTube Data API) → `extractor` (per-platform normalize → shared `social.*` facts).
-- **Data model:** migration head **`20260623_0004`**. `audit_results.seo/uxui/lead_gen_score`
-  are **nullable**; `social_score` + `social_facts` columns exist; `audit_jobs.social_handles` exists.
+- **Data model:** migration head **`20260625_0005`**. `audit_results.seo/uxui/lead_gen_score`
+  are **nullable**; `social_score` + `social_facts` columns exist; `audit_jobs.social_handles` exists;
+  `audit_results.accessibility_facts` (advisory axe-core findings, never scored) exists.
 
 ---
 

@@ -117,15 +117,15 @@ report — if the rerun fails. Exposed via `POST /audits/{job_id}/rerun-enrichme
 | Table | Key fields |
 |---|---|
 | `audit_jobs` | `id`, `url`, `niche`, `target_audience`, `status`, `current_stage`, `progress_pct`, `error_message`, timestamps |
-| `audit_results` | `job_id` (1:1, CASCADE, unique), `seo_score`, `uxui_score`, `lead_gen_score`, plus JSON blobs: `crawled_pages`, `seo_facts`, `uxui_facts`, `psi_facts`, `external_seo_facts`, `score_breakdown`, `commentary`, `validation_log`, `report_metadata`, `pdf_path`, `rubric_version`, `llm_model` |
+| `audit_results` | `job_id` (1:1, CASCADE, unique), `seo_score`, `uxui_score`, `lead_gen_score` (all NULLABLE — empty for a social audit), `social_score`, plus JSON blobs: `crawled_pages`, `seo_facts`, `uxui_facts`, `psi_facts`, `external_seo_facts`, `social_facts`, `accessibility_facts` (advisory axe-core findings; nullable, never scored), `score_breakdown`, `commentary`, `validation_log`, `report_metadata`, `pdf_path`, `rubric_version`, `llm_model` |
 | `google_search_console_connections` | Standalone (no FK to jobs/results), keyed by unique `account_email`; stores Google OAuth tokens (`access_token`, `refresh_token`, `token_expires_at`), `scopes` (JSON), `properties` (JSON), timestamps |
 
 JSON columns use PostgreSQL `JSONB` in production and portable `JSON` elsewhere; a
 `GUID` type decorator maps to Postgres UUID or `CHAR(36)`. This portability is what
 lets the hermetic QA harness run on SQLite. Migrations live in `migrations/`
-(`alembic upgrade head`; head = `20260611_0002`, which adds the `external_seo_facts`
-column and creates `google_search_console_connections`); the Compose `api` service
-runs them on start. Alembic targets PostgreSQL only (`CREATE EXTENSION pgcrypto`,
+(`alembic upgrade head`; head = `20260625_0005`, which adds the advisory
+`accessibility_facts` column — see CLAUDE.md §6 for the full additive chain); the
+Compose `api` service runs them on start. Alembic targets PostgreSQL only (`CREATE EXTENSION pgcrypto`,
 `JSONB`); SQLite tables are created via `Base.metadata.create_all` in tests/QA, never
 via Alembic.
 
@@ -193,6 +193,11 @@ read for backward compat). This is the seam Phase 2 plugs the social audit into 
   rules), `uxui.yaml` (`phase1-uxui-v2`, 14 rules), `composite.yaml` (`phase1-composite-v1`,
   weights only). The combined `rubric_version` stored on the result is
   `phase2-seo-v11+phase1-uxui-v2+phase1-composite-v1`.
+  - **Separate from scoring:** an **optional, opt-in axe-core advisory accessibility pass**
+    (`accessibility.py`, `accessibility_advisory_enabled`, default off) runs in the live crawl
+    browser and stores render-dependent findings (colour contrast, computed ARIA, …) in the
+    `accessibility_facts` column, rendered as an advisory report section. It is **never passed to
+    `score_audit`** — scores are byte-for-byte identical whether it ran or not (CLAUDE.md §5).
 - Each rule has a `weight`, a `fact_path`, and an `evaluator`
   (`boolean`, `presence`, `range`, `exact_match`, `threshold`, `linear_scale`),
   optionally `skip_if_missing` (used for PSI rules with `linear_scale` so a missing API

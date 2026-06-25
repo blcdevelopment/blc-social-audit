@@ -885,7 +885,8 @@ Social data access, costs, and legal posture in this plan were checked against c
 > **Update (2026-06-23) — Workstream B is now ✅ BUILT.** The standalone social audit shipped
 > end-to-end (Apify IG+FB, `rubrics/social.yaml` standalone Social Score, deterministic rule-derived
 > findings, separate `social_report.html` PDF, `audit_type` discriminator on `audit_jobs`, Alembic
-> head `20260623_0004`, a Social Audit UI tab/`/social` page) and is tested (119 unit tests; live
+> migration `20260623_0004` (current head `20260625_0005`), a Social Audit UI tab/`/social` page)
+> and is tested (119 unit tests; live
 > IG+FB runs). The website audit is untouched (its composite stays `{seo, uxui}`; QA 11/11). See the
 > top-of-doc **SHIPPED (2026-06-23)** banner and §5/§5.4 for as-built detail. **Remaining unbuilt:**
 > **Workstream D** (deepen the website audit, P2-E3) and **Workstream C** (enrichment, v3). AI
