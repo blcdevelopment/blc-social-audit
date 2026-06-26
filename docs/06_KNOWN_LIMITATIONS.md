@@ -4,7 +4,7 @@ An honest list of what Phase 1 does **not** do, plus important behavioral
 caveats. Phase 1 is a local-first website-audit MVP; several items below are
 deliberately deferred to later phases or to production hardening.
 
-_Last reconciled: 2026-06-16._
+_Last reconciled: 2026-06-26._
 
 ---
 
@@ -12,15 +12,23 @@ _Last reconciled: 2026-06-16._
 
 These were out of scope for **Phase 1** by design (see [`docs/01_REQUIREMENTS.md`](01_REQUIREMENTS.md)).
 
-> **Phase-2 as-built update (2026-06-25):** several items below have since SHIPPED — the
-> standalone **Social audit** (Instagram + Facebook via Apify, YouTube via the YouTube Data API),
+> **Phase-2 as-built update (2026-06-26):** several items below have since SHIPPED — the
+> **Social audit** (Instagram + Facebook via Apify, YouTube via the YouTube Data API), a new
+> **combined website+social audit** with a blended **Overall Lead-Gen Readiness** score,
 > **public token-gated share links**, **white-label brand overrides** on the PDF, and **production
 > hosting** (Linode + Caddy + CI/CD). They are annotated below; the rest remain out of scope.
 > Trust [`CLAUDE.md`](../CLAUDE.md) for as-built truth.
 
-- ~~**Social media audits** (Instagram/Facebook/LinkedIn/YouTube).~~ **SHIPPED (Phase 2)** as a
-  standalone audit type — Instagram + Facebook + YouTube (LinkedIn still out of scope). See
+- ~~**Social media audits** (Instagram/Facebook/LinkedIn/YouTube).~~ **SHIPPED (Phase 2)** —
+  Instagram + Facebook + YouTube (LinkedIn still out of scope). Two ways to run it: a standalone
+  social audit type, **and** a **combined** audit that runs the website pipeline then the social
+  audit into ONE report with an **Overall Lead-Gen Readiness** headline score (see §1.1). See
   `CLAUDE.md` §5.
+- ~~**No combined website + social score** (website and social are separate audits with separate
+  scores).~~ **SHIPPED (Phase 2):** the **combined** audit type blends the website Lead-Gen
+  composite and the Social Score into one **Overall Lead-Gen Readiness** number
+  (`0.70 * website + 0.30 * social`, config-driven via `rubrics/overall.yaml`,
+  `phase2-overall-v1`) appended at the end of a single combined report. See §1.1.
 - **Multi-tenancy.** The UI/API is still an internal shared tool, not a tenant-aware
   SaaS product.
 - **Competitor benchmarking** (SEMrush/Ahrefs/Similarweb).
@@ -30,6 +38,30 @@ These were out of scope for **Phase 1** by design (see [`docs/01_REQUIREMENTS.md
   `/shared/{token}` report links + per-client white-label brand overrides on the PDF.
 - ~~**Hosted/AWS production infrastructure.**~~ **SHIPPED (Phase 2):** live on Linode + Caddy +
   CI/CD (AWS specifically was not used). See `DEPLOYMENT.md`.
+
+### 1.1 Combined audit (website + social) — behavioral caveats
+
+The combined audit runs the (untouched) website pipeline first, then the social audit, and
+appends a **Social Media Audit** section + an **Overall Lead-Gen Readiness** score at the end of
+one report (PDF and DOCX). Known limits of that flow:
+
+- **A social-ONLY audit can no longer be created from the UI.** The standalone Social Audit page
+  (`pages/social.tsx`) and its nav tab were **removed**; everything now runs from the Website
+  Audit page (a website URL is required, social links are optional, and adding any handle makes
+  it a `combined` audit). The backend `audit_type="social"` still exists and past social-only
+  audits still render in history/detail — but you can't start a new social-only run without a URL
+  through the operator UI.
+- **The combined report needs `rubrics/overall.yaml` deployed.** Overall Lead-Gen Readiness is
+  config-driven (`compose_overall_readiness_score`). If `overall.yaml` is missing/unreadable or a
+  provider returns bad data, the social/overall step is caught and the audit **gracefully degrades
+  to a website-only report** — it never fails the whole combined job, but the appended sections
+  are silently absent.
+- **Combined social findings are deterministic (no LLM).** The appended Social Media Audit section
+  is rule-derived from `social.yaml`, like the standalone social report — there is no LLM-polish
+  pass in the combined flow.
+- **No new DB column for the headline score.** Overall Lead-Gen Readiness lives in the
+  `score_breakdown` JSON (`overall_readiness`), and `audit_type` is a free `String(20)` column —
+  there is **no new Alembic migration** (head is still `20260625_0005`).
 
 ---
 
@@ -44,6 +76,9 @@ These were out of scope for **Phase 1** by design (see [`docs/01_REQUIREMENTS.md
   `CLERK_AUTHORIZED_PARTIES` and the frontend Clerk keys. The Google OAuth callback
   (`GET /google/search-console/callback`) is intentionally unauthenticated because Google
   calls it; it is protected instead by an HMAC-signed, time-limited CSRF `state`.
+  _Hardened (2026-06-26):_ the `azp` check now rejects a token that simply **omits** the claim
+  (no longer slips past), and an optional `CLERK_ALLOWED_SUBJECTS` allowlist restricts access to
+  named Clerk user IDs on top of the issuer/party checks.
 - **Clerk is currently a DEV instance** (`pk_test_…`). **Open sign-up is a known security
   gap**: anyone can self-register on the dev instance, so invitation-only access is a manual
   operator step today. Switching to a Clerk production instance and locking down sign-up is
@@ -57,9 +92,14 @@ These were out of scope for **Phase 1** by design (see [`docs/01_REQUIREMENTS.md
   submitted URLs as untrusted input and harden the page crawler before exposing the service
   publicly.
 - Secrets live in `.env`; there is no secrets manager integration yet.
-- Google Search Console refresh tokens are stored in the application database for the
-  local-first implementation. Production should encrypt these fields or move them into a
-  managed secrets store before connecting real client accounts.
+- **White-label `logo_url` is now SSRF-vetted.** A remote logo URL supplied via brand overrides is
+  validated against the same private/loopback/metadata host rules as the crawler
+  (`report_branding._remote_logo_url_allowed`) **before** WeasyPrint fetches it at render time, so
+  the override can't point the server-side fetch at an internal host.
+- Google Search Console refresh tokens are stored **plaintext** in the application database. For
+  the single internal VM this is a **documented accepted risk** (single-tenant, internal-only DB);
+  encrypting these fields at rest (or moving them into a managed secrets store) is open
+  productionization work before connecting real external client accounts.
 
 ---
 
@@ -106,8 +146,9 @@ These were out of scope for **Phase 1** by design (see [`docs/01_REQUIREMENTS.md
 - The app uses official Google APIs. It does not scrape the Search Console Insights UI.
 - URL Inspection is quota-limited and only runs for a small priority URL set; runs with
   per-URL failures are reported as `partial` and never count toward the score.
-- Google OAuth/refresh tokens are stored **unencrypted** in the `google_search_console_connections`
-  table (single-tenant internal DB). Encrypting them at rest is open productionization work.
+- Google OAuth/refresh tokens are stored **plaintext** in the `google_search_console_connections`
+  table — a documented accepted risk for the single-tenant internal DB (see §2). Encrypting them
+  at rest is open productionization work.
 
 ---
 
@@ -170,7 +211,8 @@ These were out of scope for **Phase 1** by design (see [`docs/01_REQUIREMENTS.md
 
 1. Harden the now-live Clerk auth: move to a Clerk **production** instance and close open
    sign-up (invitation-only). _(Request-level SSRF interception in the crawler is now DONE —
-   `crawler_intercept_requests`.)_
+   `crawler_intercept_requests`; the `azp` check now rejects a missing claim and a
+   `CLERK_ALLOWED_SUBJECTS` allowlist is available — see §2.)_
 2. Encrypt Google OAuth/refresh tokens at rest (or move them into a secrets manager).
 3. ~~Add data retention/cleanup for `storage/` and old audit rows.~~ **DONE** —
    `cleanup_storage` + `STORAGE_RETENTION_DAYS` (cron on the host).

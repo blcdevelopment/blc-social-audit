@@ -99,10 +99,10 @@
         <li><a href="#roadmap">Roadmap</a></li>
         <li><a href="#appendix">Appendix</a></li>
         <li><a href="#visual-analytics">Visual Analytics</a></li>
-        {% if payload.social_audit %}
+        {% if payload.get('social_audit') %}
         <li><a href="#social-media">Social Media Audit</a></li>
         {% endif %}
-        {% if payload.overall_readiness %}
+        {% if payload.get('overall_readiness') %}
         <li><a href="#overall-readiness">Overall Lead-Gen Readiness</a></li>
         {% endif %}
       </ol>
@@ -1110,8 +1110,8 @@
     {# ----- Combined audit: appended social media + overall readiness sections ----- #}
     {# Rendered only for a combined audit (payload.social_audit / overall_readiness populated). #}
     {# A website-only report leaves both None, so nothing below renders and the PDF is unchanged. #}
-    {% if payload.social_audit %}
-    {% set social = payload.social_audit %}
+    {% if payload.get('social_audit') %}
+    {% set social = payload.get('social_audit') %}
     {% set sscore = social.score %}
     {% set sband = "strong" if (sscore is not none and sscore >= 75) else ("fair" if (sscore is not none and sscore >= 50) else "weak") %}
     {% set band_colors = {"strong": "#28864b", "fair": "#c98a16", "weak": "#b42318"} %}
@@ -1177,8 +1177,8 @@
     </section>
     {% endif %}
 
-    {% if payload.overall_readiness %}
-    {% set overall = payload.overall_readiness %}
+    {% if payload.get('overall_readiness') %}
+    {% set overall = payload.get('overall_readiness') %}
     {% set oscore = overall.score %}
     {% set oband_colors = {"strong": "#28864b", "fair": "#c98a16", "weak": "#b42318"} %}
     <section class="page-section" id="overall-readiness">

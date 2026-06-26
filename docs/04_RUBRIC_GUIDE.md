@@ -4,23 +4,29 @@ How the deterministic scoring rubrics work, and how to tune them safely without
 changing code. Scores come from these YAML files only — the LLM never scores.
 
 Engine: `apps/worker/stages/scoring.py`. Rubrics: `rubrics/seo.yaml`,
-`rubrics/uxui.yaml`, `rubrics/composite.yaml`.
+`rubrics/uxui.yaml`, `rubrics/composite.yaml` (website), plus `rubrics/social.yaml`
+(standalone Social Score) and `rubrics/overall.yaml` (combined-audit Overall Lead-Gen
+Readiness — see §5).
 
-_Last reconciled: 2026-06-16._
+_Last reconciled: 2026-06-26._
 
 ---
 
-## 1. The Three Rubrics
+## 1. The Rubrics
 
-| File | `version` | Category | Rules |
-|---|---|---|---|
-| `rubrics/seo.yaml` | `phase2-seo-v11` | `seo` | 48 |
-| `rubrics/uxui.yaml` | `phase1-uxui-v2` | `uxui` | 14 |
-| `rubrics/composite.yaml` | `phase1-composite-v1` | (weights) | — |
+| File | `version` | Category | Rules | Used by |
+|---|---|---|---|---|
+| `rubrics/seo.yaml` | `phase2-seo-v11` | `seo` | 48 | website + combined |
+| `rubrics/uxui.yaml` | `phase1-uxui-v2` | `uxui` | 14 | website + combined |
+| `rubrics/composite.yaml` | `phase1-composite-v1` | (weights) | — | website + combined |
+| `rubrics/social.yaml` | `phase2-social-v1` | `social` | 10 | social + combined |
+| `rubrics/overall.yaml` | `phase2-overall-v1` | (weights) | — | combined only |
 
-The combined `rubric_version` stored on each result is
-`phase2-seo-v11+phase1-uxui-v2+phase1-composite-v1`. **Bump a version whenever you
-change a rubric** so historical results remain interpretable.
+The first three are the **website** rubrics; their combined `rubric_version` stored on a
+website result is `phase2-seo-v11+phase1-uxui-v2+phase1-composite-v1`. `social.yaml` scores the
+standalone **Social Score** (§5a). `overall.yaml` blends the website Lead-Gen composite with the
+Social Score for a **combined** audit only (§5b). **Bump a version whenever you change a rubric**
+so historical results remain interpretable.
 
 The SEO rubric grew from the original 13 on-page rules to 23 by adding two rule
 families that read facts collected by the worker's later stages: **PageSpeed
@@ -164,7 +170,7 @@ per-rule audit trail surfaced in the report and the UI.
 
 ## 5. Lead Generation Readiness (composite)
 
-`rubrics/composite.yaml` combines the two category scores:
+`rubrics/composite.yaml` combines the two website category scores:
 
 ```yaml
 version: "phase1-composite-v1"
@@ -175,7 +181,54 @@ weights:
 ```
 
 `lead_gen = round(seo_score × 0.45 + uxui_score × 0.55)`. Weights must include
-exactly `seo` and `uxui` and **sum to 1.0** (validated on load).
+exactly `seo` and `uxui` and **sum to 1.0** (validated on load). This website composite
+is **untouched** by the social/combined work below — it is reused verbatim as one input
+to the Overall Readiness score (§5b).
+
+### 5a. Social Score (`rubrics/social.yaml`)
+
+The standalone **Social audit** is scored by the same rubric engine against
+`rubrics/social.yaml` (`version: phase2-social-v1`, `category: social`, 10 rules,
+`normalization: rescale_to_max`, `max_score: 100`). Facts come from
+`apps/worker/stages/social/extractor.py` and use `social.*` `fact_paths` (e.g.
+`social.status`, `social.summary.avg_posts_per_month`). It is scored by
+`scoring.score_social_audit()` into a **standalone Social Score (0–100)** and is **not** folded
+into the website composite. The `social` category was added to `Rubric.category`
+(`Literal["seo", "uxui", "social"]`) so the engine loads this rubric — see §7.
+
+### 5b. Overall Lead-Gen Readiness (`rubrics/overall.yaml`) — combined audits only
+
+A **combined** audit (one form: a website URL **plus** ≥1 social handle) runs the untouched
+website pipeline first, then the social audit, and appends an **Overall Lead-Gen Readiness**
+score to the end of the single report. That score blends the two pre-computed numbers via
+`rubrics/overall.yaml`:
+
+```yaml
+version: phase2-overall-v1
+max_score: 100
+website_weight: 0.70
+social_weight: 0.30
+```
+
+`overall = round(website_lead_gen × 0.70 + social_score × 0.30)`, computed by
+`scoring.compose_overall_readiness_score()` (validated by the `OverallRubric` Pydantic
+model: `website_weight + social_weight` must **sum to 1.0**). Both inputs are already-computed
+scores — the website Lead-Gen composite (§5) and the Social Score (§5a) — so this rubric only
+weights, it never re-evaluates rules. Half-up rounding, like the rest of the engine.
+
+**Weighting rationale:** the website is the bottom-of-funnel lead-capture surface (forms, calls,
+high-intent search traffic convert there) so it carries the majority weight; social media is
+top-of-funnel demand generation and nurture — meaningful but secondary.
+
+**Rescale when social is missing:** if the social audit produced no score, the readiness
+**rescales to the website Lead-Gen score alone** (`status: website_only`, the social weight
+drops out) — so a combined audit whose social step degraded still gets a sensible headline
+number from the website alone (and a website-only result has `website_lead_gen=None` →
+`status: skipped`, `score: None`). The result is stored in `score_breakdown["overall_readiness"]`
+(JSON) — there is **no** new DB column.
+
+Config knob: `RUBRIC_OVERALL_PATH` (`Settings.rubric_overall_path`, default
+`./rubrics/overall.yaml`), documented in `.env.template`.
 
 ---
 
@@ -214,20 +267,25 @@ exactly `seo` and `uxui` and **sum to 1.0** (validated on load).
 
 ## 7. Validation Rules (schema)
 
-Rubrics are validated by Pydantic models on load (`Rubric`, `CompositeRubric`):
+Rubrics are validated by Pydantic models on load (`Rubric`, `CompositeRubric`,
+`OverallRubric`):
 
 - Unknown keys are rejected (`extra="forbid"`).
 - `weight > 0`, `max_score > 0`.
-- `category` must be `seo` or `uxui`; `evaluator` must be one of the six above.
+- `category` must be `seo`, `uxui`, or `social`; `evaluator` must be one of the six above.
 - `impact` ∈ `{high, medium, low}`; `tier` ∈ `{quick_win, mid_term, long_term}`
   (both default-valued, so omitting them still validates).
 - `normalization` is `rescale_to_max` or `sum_of_weights`.
 - Composite weights must be exactly `{seo, uxui}` and sum to 1.0.
+- Overall weights (`website_weight`, `social_weight`) must each be in `[0, 1]` and sum to 1.0.
 
 A malformed rubric fails fast at load time rather than producing a wrong score.
 
-> **Adding a category (e.g. `social`) is not YAML-only.** The category set is a
-> typed `Literal["seo", "uxui"]` in `scoring.py` — both on `Rubric.category` and on
-> the composite `weights` dict. Introducing a third category in Phase 2 therefore
-> requires a typed **code** change (widen the `Literal`, extend the composite
-> validation) in addition to the new `social.yaml` rubric.
+> **`social` is now a real category, scored standalone.** `Rubric.category` is the typed
+> `Literal["seo", "uxui", "social"]` in `scoring.py`, so `rubrics/social.yaml` loads and scores
+> into its own Social Score (§5a) — it is **deliberately not** folded into the website composite,
+> whose `weights` dict stays the typed `Literal["seo", "uxui"]`. The combined audit instead
+> blends the website composite and the Social Score one level up, via `OverallRubric` /
+> `rubrics/overall.yaml` (§5b). Adding a *further* website composite category would still require
+> a typed code change (widen the composite `Literal`, extend the composite validation); adding a
+> new social backend does not touch the rubrics.

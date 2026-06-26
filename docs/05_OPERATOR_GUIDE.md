@@ -3,7 +3,7 @@
 For the BLC operator running website audits through the UI. No coding required —
 just the running stack.
 
-> **Last reconciled: 2026-06-16.**
+> **Last reconciled: 2026-06-26.**
 
 ---
 
@@ -53,33 +53,47 @@ On the home page (`/`):
 2. **Niche** — optional (e.g. "custom home builder"). Helps the commentary speak
    to the right audience.
 3. **Target audience** — optional (e.g. "homeowners planning a renovation").
-4. Click **Submit**. You'll be taken to the progress page for that audit.
+4. **Social media (optional — runs a combined audit)** — expand this panel to paste
+   **Instagram**, **Facebook**, and/or **YouTube** profile links or `@handles`.
+   Adding **any** of these turns the submission into a **combined audit**: the
+   website audit runs first, then the social audit, and you get **one report** with a
+   Social Media Audit section and an Overall Lead-Gen Readiness score appended at the
+   end (see §3a). Leave them blank for a website-only audit.
+5. **White-label branding (optional)** — override the report logo, name, and colours
+   for a prospect-facing PDF (see §9).
+6. Click **Start audit**. You'll be taken to the progress page for that audit.
 
 The form validates the URL and shows an error if the API is unreachable or
 rejects the request.
 
 ---
 
-## 3a. Submitting a Social Audit
+## 3a. Combined Audits (website + social, one report)
 
-The **Social Audit** is a separate, standalone audit type — its own tab, its own
-**Social Score (0–100)**, and its own PDF. It does **not** touch the website audit
-or its scores.
+There is **no separate Social Audit tab** — social media is audited from the same
+**Website Audit** page (`/`). Whenever you paste at least one social link in the
+**Social media** panel (§3 step 4), the submission becomes a **combined audit**:
 
-On the **Social Audit** page (`/social`):
+1. The **website audit runs first**, exactly as it always has (SEO + UX/UI, same
+   scores, same sections — nothing about it changes).
+2. Then the **social audit runs**: Instagram + Facebook are fetched via **Apify**
+   (needs `APIFY_API_TOKEN` on the server) and YouTube via the free **YouTube Data
+   API** (`YOUTUBE_API_KEY`). A platform with no configured key is **skipped
+   gracefully** — it never fails the audit. Profiles are normalized and scored
+   against `rubrics/social.yaml` into a **Social Score (0–100)**; the social findings
+   in the combined report are **deterministic** (no LLM).
+3. You get **one combined report** — today's website report with a **Social Media
+   Audit** section and an **Overall Lead-Gen Readiness** score (§6) **appended at the
+   end**, in **both PDF and DOCX**.
 
-1. Enter at least one **handle or profile URL** — **Instagram**, **Facebook**,
-   and/or **YouTube** (e.g. `@acmebuilders`, a profile link, or a channel URL).
-2. (Optional) **Niche** — helps the optional commentary speak to the right audience.
-3. Click **Submit**. You'll be taken to the same progress page.
+**Graceful degradation:** if the social/overall step can't run (e.g. missing
+provider data), the audit still completes as a normal **website-only** report — the
+social problem never fails the whole job.
 
-What runs: Instagram + Facebook are fetched via **Apify** (needs `APIFY_API_TOKEN`
-on the server) and YouTube via the free **YouTube Data API** (`YOUTUBE_API_KEY`). A
-platform with no configured key is **skipped gracefully** — it never fails the audit.
-The profiles are normalized, scored against `rubrics/social.yaml`, and an optional
-GPT-4o pass (only if `OPENAI_API_KEY` is set) rephrases the rule-derived findings —
-the scores themselves are always deterministic. The result is a **PDF only** (no DOCX
-for social).
+A **social-only** audit (no website URL) is **no longer offered in the UI** — every
+audit from the form is either website-only or website+social. (The backend
+`social`-only audit type still exists, and any social audits run before this change
+still render in History and the detail view.)
 
 ---
 
@@ -98,10 +112,15 @@ queued → crawling (15%) → collecting_performance / PSI (45%)
 The **external-SEO** step (76%) runs the built-in site-health sweep and, if
 connected, pulls Google Search Console insights — see §5.
 
+For a **combined** audit, after the website result is saved an extra
+**"Auditing social profiles" (96%)** step runs the social audit and computes the
+Overall Lead-Gen Readiness score before the single combined report renders (98%).
+
 A typical audit takes from under a minute to a few minutes depending on site
 size and whether PageSpeed is enabled. When it reaches **complete**, the page
-shows the three scores, findings/recommendations, and **Download PDF** /
-**Download DOCX** buttons.
+shows the scores, findings/recommendations, and **Download PDF** /
+**Download DOCX** buttons. A combined audit additionally shows the Social Media
+Audit block and the Overall Lead-Gen Readiness block at the very end.
 
 If something goes wrong, the status becomes **failed** with an error message; the
 audit can simply be re-submitted.
@@ -142,6 +161,13 @@ Notes:
 | **UX/UI** | Conversion and usability signals: CTAs, lead forms, contact details, trust signals, navigation, etc. |
 | **Lead Generation Readiness** | A weighted blend (SEO 45% + UX/UI 55%) — the headline "how ready is this site to convert visitors" number. |
 
+On a **combined** audit two more numbers appear, appended after the website scores:
+
+| Score | Meaning |
+|---|---|
+| **Social Score** | The standalone social-media score (0–100) from the Instagram / Facebook / YouTube profiles, scored against `rubrics/social.yaml`. |
+| **Overall Lead-Gen Readiness** | The top-line combined number: **70% website Lead-Gen Readiness + 30% Social Score** (config-driven via `rubrics/overall.yaml`). The website dominates because it is the bottom-of-funnel lead-capture surface while social is top-of-funnel demand generation / nurture. If the social audit produced no score, this rescales to the website Lead-Gen score alone. |
+
 Each score has a **per-rule breakdown** (pass / partial / fail / skipped) with the
 evidence behind it. Skipped rules — e.g. PageSpeed without an API key, or an
 external source (technical crawl / Search Console) that wasn't available — do not
@@ -168,13 +194,22 @@ result and report are restored automatically — the audit stays **complete** wi
 its prior report, and an error message is shown. (It needs a finished audit with a
 stored result; the action is unavailable otherwise.)
 
+For a **combined** audit, the rerun is combined-aware: it re-attaches the stored
+social section and recomputes the Overall Lead-Gen Readiness from the freshly
+re-scored website Lead-Gen plus the stored Social Score, so the social and overall
+sections stay in the re-rendered report (it does **not** re-fetch the social
+profiles).
+
 ---
 
 ## 8. Audit History
 
 The history page (`/audits`) lists recent audits with status, created date,
 scores, and quick links to the detail view and the report downloads. Failed or
-incomplete audits are labeled so you can spot and re-run them.
+incomplete audits are labeled so you can spot and re-run them. A combined audit is
+tagged with a **"Full"** badge and shows its **Overall** Lead-Gen Readiness score in
+the scores column (older standalone social audits still appear with their Social
+Score).
 
 ---
 
@@ -190,6 +225,11 @@ From the result page or history, download the branded report in two formats:
 The report is the prospect-facing deliverable: cover page, executive summary,
 score overview, SEO and UX/UI sections with the rule trail, the external-SEO /
 Search Console findings, a recommendations roadmap, and an appendix.
+
+For a **combined** audit, the **same** PDF and DOCX additionally carry a **Social
+Media Audit** section and an **Overall Lead-Gen Readiness** section appended at the
+end — there is no separate social file. A website-only report is byte-for-byte
+unchanged (those sections are simply absent).
 
 ---
 
@@ -210,6 +250,16 @@ client demo:
    curl -X POST http://localhost:8000/audits \
      -H 'Content-Type: application/json' \
      -d '{"url": "https://example-builder.com", "niche": "custom home builder"}'
+   ```
+
+   For a **combined** audit, send `audit_type: "combined"` with **both** the `url`
+   and at least one social handle:
+
+   ```bash
+   curl -X POST http://localhost:8000/audits \
+     -H 'Content-Type: application/json' \
+     -d '{"url": "https://example-builder.com", "audit_type": "combined",
+          "social_handles": {"instagram": "acmebuilders"}}'
    ```
 
 4. Poll status until `complete`:

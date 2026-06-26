@@ -2,7 +2,7 @@
 
 Local-first Phase 1 repository for the Builder Lead Converter website audit MVP.
 
-The Phase 1 build focuses on a website audit pipeline: URL submission, Playwright crawling, PageSpeed data collection, SEO and UX/UI extraction, deterministic scoring, deterministic grounded commentary, branded PDF/DOCX generation, and an internal operator UI (Clerk-gated).
+The Phase 1 build focuses on a website audit pipeline: URL submission, Playwright crawling, PageSpeed data collection, SEO and UX/UI extraction, deterministic scoring, deterministic grounded commentary, branded PDF/DOCX generation, and an internal operator UI (Clerk-gated). The Website Audit page also accepts optional social profile links: when one or more is provided the run becomes a **combined audit** that appends a Social Media Audit section and an Overall Lead-Gen Readiness score to the same report.
 
 The application is deployed and live at https://ai.builderleadconverter.com. See [DEPLOYMENT.md](DEPLOYMENT.md) for the authoritative production deployment reference (Linode VM, Docker Compose, Caddy TLS, and GitHub Actions CI/CD).
 
@@ -37,10 +37,14 @@ P1-E5 internal operator UI, and the Epic P1-E6 QA, packaging, and handoff work:
 - Branded WeasyPrint/Jinja2 PDF rendering with the BLC logo asset and text fallback.
 - Local PDF/DOCX output in `storage/reports/` and download support through
   `GET /audits/{job_id}/report` and `GET /audits/{job_id}/docx`.
-- Operator UI screens: audit submission with validation and error handling, an
+- Operator UI screens: a single Website Audit submission page (with optional Instagram /
+  Facebook / YouTube fields — providing any handle makes the run a combined audit), an
   auto-polling progress + result page (stage stepper, percentage, scores, findings,
-  PDF download), and an audit history dashboard with client-side search, status filter,
-  and sort (loads up to 100 audits).
+  PDF download; for combined audits it appends a Social Media Audit block and an Overall
+  Lead-Gen Readiness block at the end), and an audit history dashboard with client-side
+  search, status filter, and sort (loads up to 100 audits; combined rows show a "Full" badge
+  and an Overall score). The top nav is just **Website Audit** and **Audit History** — the
+  separate Social Audit tab/page was removed.
 - Request-level SSRF hardening: each crawl browser context attaches a Playwright route
   guard that aborts sub-resource and redirect requests resolving to private/loopback/
   link-local/reserved/metadata IPs (`CRAWLER_INTERCEPT_REQUESTS`, on by default; auto-
@@ -60,22 +64,37 @@ P1-E5 internal operator UI, and the Epic P1-E6 QA, packaging, and handoff work:
 - Per-client white-label branding: optional brand overrides (name, short name, primary/
   accent color, logo URL) on the create form merge over the default BLC branding in the
   rendered PDF.
-- Standalone Social audit (`apps/worker/stages/social/`): paste an Instagram, Facebook, or
-  YouTube profile link (or `@handle`) — no login, OAuth, or account connection — and the pipeline
-  reads the profile via Apify (Instagram Scraper + Facebook Pages & Posts Scrapers, free tier) and/or the
-  free YouTube Data API v3, each behind a uniform `SocialProvider` adapter + registry
-  (`social/providers.py`) the collector dispatches over,
-  normalizes the payload into a typed common fact schema (`social/schema.py`) of `social.*` facts, scores it against `rubrics/social.yaml`
-  (`phase2-social-v1`) into a standalone 0–100 Social Score via `scoring.score_social_audit()`,
-  derives deterministic findings/recommendations from the rubric rule metadata (optionally
-  polished into client-ready prose by GPT-4o when `OPENAI_API_KEY` is set — grounded, with the
-  deterministic version as the no-key fallback), and renders
-  its own branded PDF (`templates/social_report.html`). It is fully independent of the website
-  audit: `tasks.run_collection_audit` branches on `audit_type`, social results store
-  `social_score` + `social_facts`, and the website composite (`{seo, uxui}`) is unchanged.
-  Facebook page metadata (Pages scraper) is augmented with recent posts (Posts scraper), so FB
-  now yields cadence/recency/engagement like Instagram; if the Posts scraper returns nothing those
-  rules skip and rescale rather than penalize. Instagram and YouTube carry full post/upload data.
+- Combined audit (the headline flow): from the same Website Audit page, paste a URL **and** any
+  optional Instagram / Facebook / YouTube links and the run becomes a combined audit
+  (`audit_type="combined"`). The unchanged website SEO/UX-UI pipeline runs **first**, then the
+  social audit runs, producing **one report** (PDF and DOCX) — today's website report with a
+  **Social Media Audit** section and an **Overall Lead-Gen Readiness** score appended at the end.
+  Overall Readiness = `0.70 × website Lead-Gen composite + 0.30 × Social Score`, computed by
+  `scoring.compose_overall_readiness_score()` from the config-driven `rubrics/overall.yaml`
+  (`phase2-overall-v1`; rescales to the website score alone when social is missing). It lives in
+  `score_breakdown["overall_readiness"]` — no new DB column or migration (Alembic head is still
+  `20260625_0005`; `audit_jobs.audit_type` is now `website | social | combined`). The combined
+  branch runs after the website result is committed and **degrades gracefully**: any failure in
+  the social/overall step completes the audit as a website-only report rather than failing the
+  whole job. Website scoring and the existing report sections are byte-for-byte unchanged.
+- Social audit data layer (`apps/worker/stages/social/`): reads an Instagram, Facebook, or
+  YouTube profile link (or `@handle`) — no login, OAuth, or account connection — via Apify
+  (Instagram Scraper + Facebook Pages & Posts Scrapers, free tier) and/or the free YouTube Data
+  API v3, each behind a uniform `SocialProvider` adapter + registry (`social/providers.py`) the
+  collector dispatches over, normalizes the payload into a typed common fact schema
+  (`social/schema.py`) of `social.*` facts, and scores it against `rubrics/social.yaml`
+  (`phase2-social-v1`) into a 0–100 Social Score via `scoring.score_social_audit()`. Findings and
+  recommendations are derived deterministically from the rubric rule metadata (in the standalone
+  social path, optionally polished into client-ready prose by GPT-4o when `OPENAI_API_KEY` is set
+  — grounded, with the deterministic version as the no-key fallback; the combined report's social
+  findings are deterministic, no LLM). Facebook page metadata (Pages scraper) is augmented with
+  recent posts (Posts scraper), so FB yields cadence/recency/engagement like Instagram; if the
+  Posts scraper returns nothing those rules skip and rescale rather than penalize. Instagram and
+  YouTube carry full post/upload data. The backend still supports a **standalone** Social audit
+  type (`audit_type="social"`, own `social_score` + `social_facts` and its own
+  `templates/social_report.html` PDF; the website composite `{seo, uxui}` is unchanged), but the
+  separate Social Audit UI page was removed — social now runs from the Website Audit page as part
+  of a combined audit. Past standalone social audits still render in history and detail.
 - Clerk authentication (opt-in): the `/audits/*` router and most Google routes require
   a verified Clerk session when `CLERK_ISSUER` is set; with `CLERK_ISSUER` empty the API
   is open, which is how local dev, the QA harness, and tests run unauthenticated.
@@ -179,9 +198,9 @@ P1-E5 internal operator UI, and the Epic P1-E6 QA, packaging, and handoff work:
 - `GET /metrics` (gated; aggregate audit counts by status, 24h throughput, in-flight/oldest, avg duration, and local report-storage usage as JSON)
 - `GET /` (redirects to `/docs`)
 - `GET /docs`, `GET /redoc`, `GET /openapi.json`
-- `POST /audits` (create + enqueue, 201; body takes `audit_type` `website` (default) | `social` plus `social_handles` — website requires `url`, social requires ≥1 handle and `url` is optional)
-- `GET /audits` (`limit` 1–100, default 25; `offset`; rows expose `audit_type` and `social_score`)
-- `GET /audits/{job_id}` (audit detail with scores; website audits return the composed `report` payload, social audits return a `social_report`)
+- `POST /audits` (create + enqueue, 201; body takes `audit_type` `website` (default) | `social` | `combined` plus `social_handles` — website requires `url`, social requires ≥1 handle, combined requires **both** `url` and ≥1 handle)
+- `GET /audits` (`limit` 1–100, default 25; `offset`; rows expose `audit_type`, `social_score`, and `overall_score`)
+- `GET /audits/{job_id}` (audit detail with scores incl. `overall_score`; website and combined audits return the composed `report` payload — for combined it carries the appended social + overall sections — and social-only audits return a `social_report`)
 - `GET /audits/{job_id}/status`
 - `POST /audits/{job_id}/rerun-enrichment` (re-runs external SEO → rescore → recomment → re-render)
 - `POST /audits/{job_id}/share` (generates a time-limited share token)
@@ -249,6 +268,9 @@ These settings are all optional and ship with safe defaults (most are documented
 - `YOUTUBE_API_KEY` (empty by default) / `YOUTUBE_TIMEOUT_SECONDS` (default `30`) — the free
   YouTube Data API v3 backend for the social audit (a plain API key, no OAuth). Empty key ⇒ the
   YouTube backend skips gracefully, like Apify.
+- `RUBRIC_OVERALL_PATH` (default `./rubrics/overall.yaml`) — the config-driven rubric that blends
+  the website Lead-Gen composite (0.70) with the Social Score (0.30) into the combined audit's
+  Overall Lead-Gen Readiness score; tune the two weights (must sum to 1.0) and bump its `version`.
 - `ALERT_WEBHOOK_URL` (empty by default) / `ALERT_FAILED_AUDITS_THRESHOLD` (default `5`) /
   `ALERT_STUCK_AUDIT_MINUTES` (default `60`) — operational alerting for `scripts/health_alert.py`
   (cron). Empty webhook ⇒ it only logs findings; otherwise posts a Slack/Discord/generic

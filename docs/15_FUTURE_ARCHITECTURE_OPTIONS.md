@@ -4,15 +4,16 @@
 
 > **Why this doc exists.** It preserves the *still-useful* forward-looking designs from the
 > original pre-pivot plan (which lived in a since-removed `docs/old/` archive) so that archive
-> could be deleted without losing anything. The current build deliberately diverges from the old plan on **three**
+> could be deleted without losing anything. The current build deliberately diverged from the old plan on **three**
 > reversible decisions; this doc captures, against the **current** code, exactly how to make each
-> of those moves if/when the team wants them. **None of this is built — it is a map, not a record.**
-> For as-built truth use `CLAUDE.md` §5, `README`, and `docs/08–10`.
+> of those moves if/when the team wants them.
+> **§1 has since been BUILT** (the combined audit + Overall Lead-Gen Readiness score, 2026-06-26 —
+> see §1); §2–§3 remain unbuilt maps. For as-built truth use `CLAUDE.md` §5, `README`, and `docs/08–10`.
 
 ## The three reversible decisions (old plan → current build)
 | Decision | Current build | Old plan | This doc covers |
 |---|---|---|---|
-| Social scoring | **standalone** Social Score (separate audit) | folded into one combined Lead-Gen score | **§1** (attach to website) |
+| Social scoring | **standalone** Social Score **+ a BUILT combined audit** (website + appended social + **Overall Lead-Gen Readiness**) | folded into one combined Lead-Gen score | **§1** (**BUILT** — combined audit + overall score; website composite still `{seo,uxui}`) |
 | IG/FB data vendor | **Apify** (free, sync) | Bright Data (paid, async) | **§2** (vendor swap) |
 | Report storage | **local FS** + cron retention | S3 object storage | **§3** (storage — decided against) |
 
@@ -23,9 +24,11 @@ commentary**, IG Business Discovery dropped in both.
 ---
 
 ## §0. Current as-built baseline (the starting point for everything below)
-- **Two independent audit types** on one `audit_jobs` row, discriminated by `audit_type`
-  (`"website"` | `"social"`). Website → `run_collection_audit` website branch; social →
-  `_run_social_pipeline` ([tasks.py](../apps/worker/tasks.py)).
+- **Three audit types** on one `audit_jobs` row, discriminated by the free `String(20)`
+  `audit_type` column (`"website"` | `"social"` | `"combined"`). Website → `run_collection_audit`
+  website branch; social → `_run_social_pipeline`; **combined → website branch then
+  `_augment_with_social`** (BUILT — see §1) ([tasks.py](../apps/worker/tasks.py)). The
+  `"combined"` value needed **no migration** (head is still `20260625_0005`).
 - **Website score:** `score_audit()` → `{seo, uxui, lead_gen}` where
   `lead_gen = compose_lead_generation_score(seo, uxui, composite)` weighted **0.45/0.55** by
   [rubrics/composite.yaml](../rubrics/composite.yaml) (`phase1-composite-v1`).
@@ -43,11 +46,71 @@ commentary**, IG Business Discovery dropped in both.
 
 ---
 
-## §1. Attach social to the website audit (combined Lead-Generation score)
-**Goal:** one job → one combined Lead-Gen Readiness score (SEO + UX/UI + **Social**) + one report.
-**Effort: SIGNIFICANT. Highest risk — it edits the shipped website score.**
+## §1. Attach social to the website audit (combined audit + Overall Lead-Gen Readiness) — ✅ BUILT 2026-06-26
+**Goal:** one job → the website report with an appended **Social Media Audit** section and a single
+**Overall Lead-Gen Readiness** score + one report (PDF **and** DOCX).
 
-### 1.1 Recommended approach — Sub-option (a): one merged job
+### 1.0 ✅ As built (2026-06-26)
+**This was BUILT — but with a deliberately safer design than §1.1–§1.7 below sketched.** The key
+divergence: the **website composite was NOT touched.** Rather than fold social into
+`composite.yaml`'s `{seo,uxui}` weights (the risky path §1.1 describes), the build keeps the website
+Lead-Gen composite **byte-for-byte unchanged** and **appends** a separate blended score on top.
+
+- **New `audit_type="combined"`** (free `String(20)` column — **no migration**). The new headline
+  number lives in `score_breakdown` JSON under `"overall_readiness"` — **no new DB column.**
+- **Flow:** one form (the Website Audit page) takes a URL + optional social links. The **untouched**
+  website SEO/UX-UI pipeline runs **first**; then `_augment_with_social`
+  ([tasks.py](../apps/worker/tasks.py)) runs social collect+score **after** the website result has
+  committed, and merges `social_score`/`social_facts` + `score_breakdown["social"]` /
+  `["overall_readiness"]` onto the **same** result. The existing RENDERING stage then renders **one**
+  combined report (website report + appended Social Media Audit section + Overall Lead-Gen Readiness
+  at the end). Progress: website stages → "Auditing social profiles" 96 → render 98 → complete 100.
+- **Overall Lead-Gen Readiness = `0.70 × website Lead-Gen composite (SEO+UX/UI) + 0.30 × Social Score`**,
+  config-driven via the **new** [rubrics/overall.yaml](../rubrics/overall.yaml)
+  (`phase2-overall-v1`; keys `version`, `max_score`, `website_weight 0.70`, `social_weight 0.30`,
+  summing to 1.0). Computed by `scoring.compose_overall_readiness_score()` via a new `OverallRubric`
+  Pydantic model; **rescales to the website score alone when social is missing**; half-up rounding.
+  New `Settings.rubric_overall_path` (default `./rubrics/overall.yaml`; documented as
+  `RUBRIC_OVERALL_PATH`). **Rationale:** the website is the bottom-of-funnel lead-capture surface,
+  social is top-of-funnel demand-gen/nurture, so the website dominates.
+- **Graceful degradation:** any failure in the social/overall step (missing `overall.yaml`, bad
+  provider data) is caught — the audit still completes as a **website-only** report; it never fails
+  the combined job. Combined-report social findings are **DETERMINISTIC** (no LLM).
+- **Report payload** ([report_payload.py](../apps/worker/stages/report_payload.py)): `ReportPayload`
+  gained optional `social_audit` + `overall_readiness` (default `None` ⇒ **not rendered** ⇒ a
+  website-only report is byte-identical). `compose_report_payload` populates them from
+  `result.social_facts` + `score_breakdown`, reusing the **shared** `social/report.py`
+  `build_social_report_data` (refactored out of `compose_social_report_payload` so the standalone
+  social report and the combined social section share one deterministic builder).
+  [report.html](../templates/report.html) appends the two sections at the **end** (skew-proof via
+  `payload.get('social_audit')`/`get('overall_readiness')`); `docx_renderer._combined_xml()` appends
+  the same, so the on-demand DOCX matches the PDF.
+- **Rerun-enrichment is combined-aware:** `rerun_external_enrichment_for_audit` re-attaches the
+  stored social breakdown and recomputes `overall_readiness` from the freshly re-scored website
+  lead-gen + the **stored** Social Score, so a rerun no longer drops the combined sections.
+- **API:** `AuditCreateRequest.audit_type` Literal is `["website","social","combined"]`; a combined
+  audit requires **both** `url` **and** ≥1 social handle. `AuditListItem`/`AuditDetailResponse`
+  expose `overall_score` (read from `score_breakdown.overall_readiness.score` via `_overall_score`).
+- **Frontend:** the standalone **Social Audit page (`pages/social.tsx`) and its nav tab were
+  REMOVED**; everything runs from the Website Audit page (`index.tsx`), which has optional
+  Instagram/Facebook/YouTube fields — providing **any** handle makes the submission a `"combined"`
+  audit. Top nav is now just **"Website Audit"** + **"Audit History"**. Detail
+  (`audit/[id].tsx`) appends a Social Media Audit + Overall Lead-Gen Readiness block at the very end;
+  history (`audits.tsx`) shows a **"Full"** badge + an Overall score cell. `lib/api.ts` gained
+  `audit_type "combined"`, `overall_score`, `OverallReadiness`, and
+  `ReportPayload.social_audit`/`overall_readiness`. **Note:** a social-ONLY audit (no website URL)
+  can no longer be created from the UI — but the backend `audit_type="social"` still exists and past
+  social audits still render in history/detail.
+
+The standalone website audit and standalone social audit (backend) are **unchanged**; ~224 unit
+tests pass, QA harness 11/11, website pipeline byte-identical.
+
+> The remaining §1.1–§1.7 below were the **original speculative design** (the risky "fold social into
+> `composite.yaml`" sub-option). They are kept for history but were **NOT** the path taken — the
+> build chose the safer append-only approach in §1.0. The website composite stays a typed
+> `{seo,uxui}`. ⬇
+
+### 1.1 Original sketch — Sub-option (a): one merged job
 The website audit grows an **optional social leg**; a website job may carry `social_handles`.
 The social term only contributes when social data is collected — when absent, the website score
 is **byte-identical to today** (this is the whole safety property).
@@ -222,6 +285,8 @@ off-box durability.** If ever needed, it's a self-contained add (no scoring/webs
 1. **Deterministic, rule-based scores** — the LLM never produces or changes a score.
 2. **Graceful degradation** — a missing key / failed source never aborts or penalizes an audit.
 3. **Versioned rubrics** — bump `version:` on any rubric/composite change (it's recorded in
-   `rubric_version` for reproducibility). The §1 composite bump is the one place this is unavoidable.
-4. **Don't disturb the shipped website audit** unless §1 is explicitly chosen — and even then, prove
-   the no-social path is byte-identical first.
+   `rubric_version` for reproducibility). The **built** §1 sidesteps this by leaving `composite.yaml`
+   untouched and introducing a **new** `overall.yaml` (`phase2-overall-v1`) for the appended score.
+4. **Don't disturb the shipped website audit** — honored by the built §1: the combined audit appends
+   social + the overall score **after** the unchanged website result, so the website-only path stays
+   byte-identical.
