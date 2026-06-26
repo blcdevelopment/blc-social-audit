@@ -10,8 +10,9 @@ interface LayoutProps {
 }
 
 const NAV_LINKS = [
+  // Social audits are now run from the Website Audit page (add social links there to get a
+  // combined report) — there is no separate Social Audit tab.
   { href: "/", label: "Website Audit" },
-  { href: "/social", label: "Social Audit" },
   { href: "/audits", label: "Audit History" },
 ];
 
