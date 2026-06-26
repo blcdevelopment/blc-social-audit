@@ -70,12 +70,26 @@ def require_user(request: Request) -> str | None:
             headers=_UNAUTHORIZED,
         ) from exc
 
+    # Authorized-party (origin) check. When parties are configured the token MUST carry an
+    # allowed `azp` — a token that simply omits the claim no longer slips past the check.
     parties = settings.clerk_authorized_parties
-    azp = claims.get("azp")
-    if parties and azp and azp not in parties:
+    if parties:
+        azp = claims.get("azp")
+        if not azp or azp not in parties:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Token authorized party is not allowed.",
+                headers=_UNAUTHORIZED,
+            )
+
+    sub = claims.get("sub")
+    # Optional defense-in-depth: restrict the API to a known set of Clerk user ids so a stranger
+    # who self-registers on the Clerk instance can't reach the endpoints. Empty => no restriction.
+    allowed_subjects = settings.clerk_allowed_subjects
+    if allowed_subjects and sub not in allowed_subjects:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token authorized party is not allowed.",
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This account is not authorized to use the audit tool.",
             headers=_UNAUTHORIZED,
         )
-    return claims.get("sub")
+    return sub

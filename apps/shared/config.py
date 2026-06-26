@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     # set it in production to require a valid Clerk session on the audit endpoints.
     clerk_issuer: str = ""
     clerk_authorized_parties: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    # Optional defense-in-depth allowlist of Clerk user ids (the token `sub`) permitted to use
+    # the API. Empty (default) => any validly-signed token from clerk_issuer is accepted. Set it
+    # to the comma-separated Clerk user ids of the 5-10 operators (visible in the Clerk dashboard)
+    # so a stranger who self-registers on the Clerk instance still can't reach the audit endpoints.
+    clerk_allowed_subjects: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
     database_url: str = "postgresql+psycopg://blc:change-me-local@localhost:5432/blc_website_audit"
 
@@ -177,7 +182,12 @@ class Settings(BaseSettings):
     report_css_path: Path = Path("./templates/report.css")
     report_social_template_path: Path = Path("./templates/social_report.html")
 
-    @field_validator("api_cors_origins", "clerk_authorized_parties", mode="before")
+    @field_validator(
+        "api_cors_origins",
+        "clerk_authorized_parties",
+        "clerk_allowed_subjects",
+        mode="before",
+    )
     @classmethod
     def parse_csv_list(cls, value: str | list[str]) -> list[str]:
         if isinstance(value, str):

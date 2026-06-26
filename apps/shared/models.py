@@ -138,6 +138,12 @@ class GoogleSearchConsoleConnection(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
     account_email: Mapped[str] = mapped_column(String(320), nullable=False, unique=True)
+    # Google OAuth tokens. Stored unencrypted by deliberate decision: this is a single internal
+    # VM where DB read access and shell access (where any encryption key would live in .env)
+    # belong to the same handful of operators, so at-rest encryption with a co-located key would
+    # add no real protection against that threat model — only churn. The one genuine residual
+    # risk is a DB dump leaving the box, so keep backups (scripts/backup_db.py output) on-box and
+    # access-controlled. Revisit if Google credentials ever need to outlive this trust boundary.
     access_token: Mapped[str | None] = mapped_column(Text)
     refresh_token: Mapped[str | None] = mapped_column(Text)
     token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

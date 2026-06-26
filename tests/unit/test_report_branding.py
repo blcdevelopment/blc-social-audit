@@ -60,3 +60,28 @@ def test_no_overrides_returns_context_unchanged() -> None:
     ctx = _base_context()
     assert apply_brand_overrides(ctx, None) == ctx
     assert apply_brand_overrides(ctx, {}) == ctx
+
+
+# SSRF: a remote logo_url is fetched server-side by WeasyPrint at render time, so a
+# private/loopback/link-local/reserved/metadata host must be rejected (the override is then
+# dropped and the default brand logo is used). These cases use IP literals / localhost so the
+# check never hits DNS (hermetic).
+def test_logo_url_pointing_at_metadata_or_internal_host_is_rejected() -> None:
+    ctx = _base_context()
+    for blocked in (
+        "http://169.254.169.254/latest/meta-data/",  # cloud metadata (link-local)
+        "http://127.0.0.1/logo.png",  # loopback
+        "http://10.0.0.5/logo.png",  # private
+        "http://192.168.1.10/logo.png",  # private
+        "http://[::1]/logo.png",  # IPv6 loopback
+        "http://localhost/logo.png",  # localhost name
+    ):
+        merged = apply_brand_overrides(ctx, {"logo_url": blocked})
+        assert merged["logo_uri"] == ctx["logo_uri"], blocked
+        assert merged["logo_path"] == ctx["logo_path"], blocked
+
+
+def test_logo_url_public_ip_literal_is_allowed() -> None:
+    merged = apply_brand_overrides(_base_context(), {"logo_url": "https://8.8.8.8/logo.png"})
+    assert merged["logo_uri"] == "https://8.8.8.8/logo.png"
+    assert merged["logo_exists"] is True

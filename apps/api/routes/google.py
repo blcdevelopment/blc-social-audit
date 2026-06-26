@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import secrets
 import time
 from typing import Annotated, Any
@@ -37,11 +38,25 @@ router = APIRouter(prefix="/google/search-console", tags=["google-search-console
 _STATE_TTL_SECONDS = 600
 _EPHEMERAL_STATE_SECRET = secrets.token_bytes(32)
 
+_logger = logging.getLogger(__name__)
+_ephemeral_secret_warned = False
+
 
 def _state_secret(settings: Settings) -> bytes:
     configured = getattr(settings, "google_oauth_state_secret", None)
     if configured and configured.get_secret_value():
         return hashlib.sha256(configured.get_secret_value().encode("utf-8")).digest()
+    # No configured secret: fall back to a per-process random key. Fine for a single API
+    # process, but OAuth `state` issued by one process can't be validated by another, so the
+    # flow breaks across restarts / multiple replicas. Warn once so this isn't a silent footgun.
+    global _ephemeral_secret_warned
+    if not _ephemeral_secret_warned:
+        _ephemeral_secret_warned = True
+        _logger.warning(
+            "GOOGLE_OAUTH_STATE_SECRET is not set; using an ephemeral per-process secret for the "
+            "Search Console OAuth `state`. This breaks the OAuth flow across API restarts or "
+            "multiple replicas. Set it to a fixed random value in production."
+        )
     return _EPHEMERAL_STATE_SECRET
 
 
