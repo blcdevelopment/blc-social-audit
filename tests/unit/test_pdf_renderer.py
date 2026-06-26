@@ -127,6 +127,92 @@ def test_render_report_pdf_includes_advisory_accessibility_section(tmp_path) -> 
     assert "Formula: round((SEO 81 * 45%)" in normalized
 
 
+def test_render_report_pdf_shows_opportunity_and_local_context(tmp_path) -> None:
+    from apps.worker.stages.google_search_console import (
+        _branded_split,
+        _opportunity_estimate,
+        _ranking_opportunities,
+        _topic_clusters,
+    )
+
+    rows = [
+        {
+            "query": "custom home builder austin",
+            "impressions": 3000,
+            "clicks": 57,
+            "ctr": 0.019,
+            "position": 9,
+        },
+        {
+            "query": "kitchen remodel cost austin",
+            "impressions": 1200,
+            "clicks": 48,
+            "ctr": 0.04,
+            "position": 6,
+        },
+        {
+            "query": "builder lead converter",
+            "impressions": 500,
+            "clicks": 200,
+            "ctr": 0.4,
+            "position": 1,
+        },
+    ]
+    opportunity = _opportunity_estimate(_ranking_opportunities(rows))
+    result = _result(
+        extra_items=0,
+        psi_facts=_complete_psi(),
+        crawled_pages=_crawled_pages(failed_pages=False),
+    )
+    result.external_seo_facts = {
+        "status": "complete",
+        "sources": {"technical_crawl": "skipped", "gsc": "complete", "url_inspection": "skipped"},
+        "gsc": {
+            "status": "complete",
+            "site_url": "https://example.com/",
+            "date_range": {"start": "2026-01-01", "end": "2026-03-31"},
+            "summary": {
+                "top_query_count": 3,
+                "top_page_count": 0,
+                "ranking_opportunities": 2,
+                "high_impression_low_ctr_pages": 0,
+                "declining_pages": 0,
+            },
+            "top_queries": rows,
+            "top_pages": [],
+            "ranking_opportunities": _ranking_opportunities(rows),
+            "high_impression_low_ctr_pages": [],
+            "declining_pages": [],
+            "opportunity": opportunity,
+            "branded": _branded_split(rows, "https://www.builderleadconverter.com/"),
+            "topic_clusters": _topic_clusters(rows, "builderleadconverter"),
+        },
+    }
+    output_path = tmp_path / "kpi.pdf"
+
+    render_report_pdf(
+        compose_report_payload(_job(), result),
+        settings=_settings(tmp_path),
+        output_path=output_path,
+    )
+
+    text = " ".join((page.extract_text() or "") for page in PdfReader(str(output_path)).pages)
+    normalized = " ".join(text.split())
+    # P1/P2 opportunity callout — assert the (non-uppercased) headline + a stored opportunity
+    # number, so this proves the real GSC-derived figure reaches the page.
+    assert "already shows up for about" in normalized
+    assert str(opportunity["opportunity_clicks_low"]) in normalized
+    assert "visits/month" in normalized
+    assert "Not a guarantee" in normalized
+    # P3 branded + P4 clusters
+    assert "Branded vs non-branded" in normalized
+    assert "Visibility by topic" in normalized
+    # P6/P7 local context (always rendered)
+    assert "Where your leads really come from" in normalized
+    assert "local pack" in normalized
+    assert "AI Overviews" in normalized
+
+
 def test_render_report_pdf_omits_advisory_section_when_skipped(tmp_path) -> None:
     payload = compose_report_payload(
         _job(),

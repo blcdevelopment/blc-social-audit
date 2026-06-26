@@ -204,6 +204,90 @@ def test_external_seo_findings_include_real_locations() -> None:
     assert "external_seo" not in finding.why
 
 
+def test_executive_summary_leads_with_grounded_opportunity_when_gsc_present() -> None:
+    from apps.worker.stages.google_search_console import (
+        _opportunity_estimate,
+        _ranking_opportunities,
+    )
+
+    rows = [
+        {
+            "query": "custom home builder austin",
+            "impressions": 3000,
+            "clicks": 57,
+            "ctr": 0.019,
+            "position": 9,
+        },
+        {
+            "query": "kitchen remodel cost austin",
+            "impressions": 1200,
+            "clicks": 48,
+            "ctr": 0.04,
+            "position": 6,
+        },
+    ]
+    opportunity = _opportunity_estimate(_ranking_opportunities(rows))
+    external_seo_facts = {
+        "status": "complete",
+        "gsc": {"status": "complete", "opportunity": opportunity},
+    }
+    breakdown = _breakdown(
+        [
+            _rule(
+                "seo.meta_description.present_all_pages",
+                "fail",
+                weight=10,
+                impact="high",
+                tier="quick_win",
+            )
+        ]
+    )
+
+    plan = build_content_plan(
+        audit_context={"url": "https://x.test", "niche": None, "target_audience": None},
+        seo_facts={},
+        uxui_facts={},
+        psi_facts={},
+        external_seo_facts=external_seo_facts,
+        score_breakdown=breakdown,
+        settings=_settings(),
+    )
+    # The summary now LEADS with the business outcome, not the score.
+    assert plan.executive_summary.startswith("Your site already appears in Google")
+    assert "more visits a month" in plan.executive_summary
+    assert "Lead Generation Readiness" in plan.executive_summary  # score still present, demoted
+
+    # Every opportunity number is a stored GSC fact, so grounding strips nothing.
+    commentary = {"status": "deterministic", "content": plan.model_dump(mode="json")}
+    sanitized, log = validate_commentary_grounding(
+        commentary,
+        fact_sources={
+            "external_seo_facts": external_seo_facts,
+            "scores": breakdown["scores"],
+        },
+    )
+    assert log["unsupported_claim_count"] == 0
+    assert sanitized["content"]["executive_summary"] == plan.executive_summary
+
+
+def test_executive_summary_unchanged_without_gsc_opportunity() -> None:
+    # No GSC => no opportunity lead-in => the legacy score-led summary, byte-for-byte.
+    breakdown = _breakdown(
+        [
+            _rule(
+                "seo.meta_description.present_all_pages",
+                "fail",
+                weight=10,
+                impact="high",
+                tier="quick_win",
+            )
+        ]
+    )
+    plan = _plan(breakdown)
+    assert not plan.executive_summary.startswith("Your site already appears")
+    assert plan.executive_summary.startswith("This audit scored the site")
+
+
 def test_plan_is_grounding_safe_on_real_fixture() -> None:
     settings = _settings()
     html = (FIXTURE_DIR / "weak_site.html").read_text(encoding="utf-8")

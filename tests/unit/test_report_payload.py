@@ -105,6 +105,51 @@ def test_compose_report_payload_does_not_surface_incomplete_external_zeroes() ->
     assert payload.search_performance_section.url_inspection_items == []
 
 
+def test_search_performance_section_carries_opportunity_branded_clusters() -> None:
+    result = _result(
+        external_seo_facts={
+            "status": "complete",
+            "sources": {"gsc": "complete"},
+            "gsc": {
+                "status": "complete",
+                "site_url": "https://example.com/",
+                "summary": {"top_query_count": 5},
+                "top_queries": [],
+                "top_pages": [],
+                "ranking_opportunities": [],
+                "high_impression_low_ctr_pages": [],
+                "declining_pages": [],
+                "opportunity": {
+                    "is_estimate": True,
+                    "opportunity_clicks_low": 120,
+                    "opportunity_clicks_high": 310,
+                    "striking_query_count": 4,
+                },
+                "branded": {"brand_token": "example", "branded_impression_share_pct": 35},
+                "topic_clusters": [
+                    {
+                        "cluster": "remodel",
+                        "query_count": 6,
+                        "impressions": 900,
+                        "avg_position": 7.2,
+                    }
+                ],
+            },
+        }
+    )
+    section = compose_report_payload(_job(), result).search_performance_section
+    assert section.opportunity["opportunity_clicks_high"] == 310
+    assert section.branded["branded_impression_share_pct"] == 35
+    assert section.topic_clusters[0]["cluster"] == "remodel"
+
+
+def test_search_performance_opportunity_empty_when_gsc_absent() -> None:
+    section = compose_report_payload(_job(), _result()).search_performance_section
+    assert section.opportunity == {}
+    assert section.branded == {}
+    assert section.topic_clusters == []
+
+
 def test_accessibility_advisory_section_defaults_to_skipped() -> None:
     payload = compose_report_payload(_job(), _result())
 

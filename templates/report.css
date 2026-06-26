@@ -698,6 +698,29 @@ td span {
   font-size: 8pt;
 }
 
+/* Business-opportunity callout (P1/P2) in the Search Performance section. */
+.opportunity-callout {
+  background: #f0f7f1;
+  border: 1px solid #cfe6d4;
+  border-left: 4px solid #2e7d46;
+  border-radius: 9px;
+  padding: 0.16in 0.18in;
+  margin: 0.1in 0 0.16in;
+  break-inside: avoid;
+}
+
+.opportunity-headline {
+  color: #1f2d3d;
+  font-size: 11pt;
+  line-height: 1.5;
+  margin: 0.04in 0 0.08in;
+}
+
+.opportunity-callout .muted {
+  font-size: 8.5pt;
+  margin: 0;
+}
+
 .finding-head,
 .technical-issue-head {
   align-items: center;

@@ -81,9 +81,13 @@ def build_content_plan(
 
     scores = _dict(score_breakdown.get("scores"))
     top_label = _top_priority_label(score_breakdown)
+    # Business-opportunity framing (P1): when Search Console is connected, the GSC stage stores a
+    # deterministic "clicks/leads left on the table" estimate. Every number it carries lives in the
+    # external_seo facts, so the grounding validator keeps the prose that cites it.
+    opportunity = _dict(_dict(_dict(external_seo_facts).get("gsc")).get("opportunity"))
 
     return CommentaryContent(
-        executive_summary=_executive_summary(scores, top_label),
+        executive_summary=_executive_summary(scores, top_label, opportunity),
         seo=seo_section,
         uxui=uxui_section,
         lead_generation=_lead_section(scores),
@@ -200,11 +204,40 @@ def _lead_section(scores: JsonDict) -> CommentarySection:
     )
 
 
-def _executive_summary(scores: JsonDict, top_label: str | None) -> str:
+def _opportunity_lead_in(opportunity: JsonDict) -> str:
+    """P1: lead the executive summary with the business outcome, not the score, when Search Console
+    data is available. Every number here is a stored GSC fact (grounding keeps it); ranges use
+    "to" (never a hyphen) so the grounding validator does not read the upper bound as negative."""
+    if not opportunity:
+        return ""
+    impressions = _int(opportunity.get("total_striking_impressions"))
+    current = _int(opportunity.get("current_clicks"))
+    queries = _int(opportunity.get("striking_query_count"))
+    clicks_low = _int(opportunity.get("opportunity_clicks_low"))
+    clicks_high = _int(opportunity.get("opportunity_clicks_high"))
+    leads_low = _int(opportunity.get("estimated_leads_low"))
+    leads_high = _int(opportunity.get("estimated_leads_high"))
+    rate_low = _int(opportunity.get("lead_rate_low_pct"))
+    rate_high = _int(opportunity.get("lead_rate_high_pct"))
+    if queries <= 0 or impressions <= 0:
+        return ""
+    return (
+        f"Your site already appears in Google for an estimated {impressions} searches a month "
+        "from people looking for services like yours, but it currently captures only about "
+        f"{current} of the available clicks. Closing the gap on your {queries} near-miss pages "
+        "— pages already ranking just below the top of the first page — could bring an estimated "
+        f"{clicks_low} to {clicks_high} more visits a month, and at a typical {rate_low}% to "
+        f"{rate_high}% home-services contact rate that is roughly {leads_low} to {leads_high} more "
+        "leads. These are estimates from your real Search Console data and published click-through "
+        "rates, not a guarantee, but they show where the fastest wins are. "
+    )
+
+
+def _executive_summary(scores: JsonDict, top_label: str | None, opportunity: JsonDict) -> str:
     seo = _int(scores.get("seo"))
     uxui = _int(scores.get("uxui"))
     lead = _int(scores.get("lead_gen"))
-    summary = (
+    summary = _opportunity_lead_in(opportunity) + (
         f"This audit scored the site {seo} for SEO, {uxui} for UX/UI, and {lead} for "
         "Lead Generation Readiness. Lead Generation Readiness is the roll-up score that "
         "shows whether search visibility and the on-page conversion experience are working "

@@ -95,6 +95,7 @@
         {% if payload.accessibility_advisory_section.status == "complete" %}
         <li><a href="#accessibility">Accessibility (Advisory)</a></li>
         {% endif %}
+        <li><a href="#local-context">Local Context</a></li>
         <li><a href="#roadmap">Roadmap</a></li>
         <li><a href="#appendix">Appendix</a></li>
         <li><a href="#visual-analytics">Visual Analytics</a></li>
@@ -299,7 +300,8 @@
           <p>
             Fix high-severity crawl issues first, especially errors on important service,
             location, or lead pages. Use the example URLs as the starting list for the
-            web team or CMS editor.
+            web team or CMS editor. In lead-generation terms: pages search engines cannot
+            reach or read cannot earn the calls and form fills that grow the business.
           </p>
         </article>
       </div>
@@ -391,6 +393,69 @@
           </p>
         </article>
       </div>
+
+      {% set opp = payload.search_performance_section.opportunity %}
+      {% if search_available and opp.get("is_estimate") %}
+        <div class="opportunity-callout">
+          <p class="eyebrow">The opportunity</p>
+          <p class="opportunity-headline">
+            Your site already shows up for about {{ opp.total_striking_impressions }} searches a
+            month on its {{ opp.striking_query_count }} near-miss pages, but captures only about
+            {{ opp.current_clicks }} of those clicks. Lifting them to the top of the first page
+            could bring an estimated
+            <strong>{{ opp.opportunity_clicks_low }}–{{ opp.opportunity_clicks_high }} more
+            visits/month</strong> — roughly {{ opp.estimated_leads_low }}–{{ opp.estimated_leads_high }}
+            more leads at a {{ opp.lead_rate_low_pct }}–{{ opp.lead_rate_high_pct }}% contact rate.
+          </p>
+          <p class="muted">
+            Estimate — models your near-miss pages (positions 4–20) reaching positions
+            {{ opp.target_position_high }}–{{ opp.target_position_low }}, using your real Search
+            Console impressions and published click-through rates ({{ opp.ctr_curve_source }}). The
+            {{ opp.lead_rate_low_pct }}–{{ opp.lead_rate_high_pct }}% contact rate is a home-services
+            industry benchmark, not measured on your site. These are leading indicators that predict
+            lead flow; your booked revenue lives in your CRM and call tracking, which this audit does
+            not measure. Not a guarantee.
+          </p>
+        </div>
+      {% endif %}
+
+      {% set branded = payload.search_performance_section.branded %}
+      {% if search_available and branded.get("brand_token") %}
+        <h3>Branded vs non-branded demand</h3>
+        <p class="helper-copy">
+          Branded searches (people already looking for you by name) signal demand and trust;
+          non-branded searches are new prospects discovering you for the first time. About
+          {{ branded.branded_impression_share_pct }}% of your impressions are branded.
+        </p>
+        <dl class="metric-list inline">
+          <div><dt>Branded impressions</dt><dd>{{ branded.branded_impressions }}</dd></div>
+          <div><dt>Non-branded impressions</dt><dd>{{ branded.nonbranded_impressions }}</dd></div>
+          <div><dt>Branded queries</dt><dd>{{ branded.branded_query_count }}</dd></div>
+        </dl>
+      {% endif %}
+
+      {% if search_available and payload.search_performance_section.topic_clusters %}
+        <h3>Visibility by topic</h3>
+        <p class="helper-copy">
+          Your search demand, auto-grouped into themes from your own pages and queries. Use it to
+          see which service topics are strong and which are near-invisible.
+        </p>
+        <table class="compact-table">
+          <thead>
+            <tr><th>Topic</th><th>Queries</th><th>Impressions</th><th>Avg position</th></tr>
+          </thead>
+          <tbody>
+            {% for cluster in payload.search_performance_section.topic_clusters %}
+              <tr>
+                <td>{{ cluster.cluster }}</td>
+                <td>{{ cluster.query_count }}</td>
+                <td>{{ cluster.impressions }}</td>
+                <td>{{ cluster.avg_position }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% endif %}
 
       {% if search_available and payload.search_performance_section.high_impression_low_ctr_pages %}
         <h3>High-impression, low-CTR pages</h3>
@@ -584,6 +649,38 @@
     </section>
     {% endif %}
 
+    <section class="page-section" id="local-context">
+      <p class="eyebrow">Context for a local business</p>
+      <h2>Where your leads really come from</h2>
+      <div class="section-guide">
+        <article>
+          <h3>The local pack is your #1 lead driver</h3>
+          <p>
+            For a local service business, the Google Map pack and your Google Business Profile
+            drive more calls and direction requests than classic blue-link rankings — local
+            searchers click the map results more often than the standard listings. This audit
+            checks the on-page signals that support local ranking (business-identity and
+            address structured data, a visible address, a Maps/Profile link, and service-area
+            markup — see the SEO findings). It cannot see your Business Profile itself, so the
+            next step is to claim and complete it, gather reviews, and keep your name, address,
+            and phone identical everywhere.
+          </p>
+        </article>
+        <article>
+          <h3>AI Overviews — and why your money searches are more insulated</h3>
+          <p>
+            Google's AI Overviews are reducing clicks, but mostly on broad informational
+            searches where a summary answers the question. Your highest-value searches are
+            local and high-intent ("builder near me", "kitchen remodel [city]") and the Map
+            pack — these are far less substitutable by a summary. The defensive plays are the
+            same ones that win locally: own the local pack and Business Profile, earn reviews,
+            and give clear, well-structured answers (headings, FAQs, and schema) so answer
+            engines can cite you.
+          </p>
+        </article>
+      </div>
+    </section>
+
     <section class="page-section" id="roadmap">
       <p class="eyebrow">Action Roadmap</p>
       <h2>Prioritized lead generation roadmap</h2>
@@ -663,7 +760,9 @@
         <h3>Core Web Vitals</h3>
         <p class="helper-copy">
           The detailed PageSpeed Insights metrics behind the performance score, rated the
-          way Google rates them: green is good, amber needs improvement, red is poor.
+          way Google rates them: green is good, amber needs improvement, red is poor. These
+          are a conversion lever, not just a score: slow pages on a phone lose visitors before
+          they ever call or fill in the form.
         </p>
         <table class="cwv-table">
           <thead>

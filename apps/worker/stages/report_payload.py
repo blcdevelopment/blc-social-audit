@@ -506,6 +506,10 @@ class SearchPerformanceSection(BaseModel):
     declining_pages: list[JsonDict] = Field(default_factory=list)
     url_inspection_summary: JsonDict = Field(default_factory=dict)
     url_inspection_items: list[JsonDict] = Field(default_factory=list)
+    # Business-opportunity framing (P1-P4) — all empty when GSC is not connected.
+    opportunity: JsonDict = Field(default_factory=dict)
+    branded: JsonDict = Field(default_factory=dict)
+    topic_clusters: list[JsonDict] = Field(default_factory=list)
 
 
 class AccessibilityIssue(BaseModel):
@@ -1362,6 +1366,11 @@ def _search_performance_section(external_seo_facts: JsonDict) -> SearchPerforman
         if url_inspection_complete
         else {},
         url_inspection_items=inspection_items,
+        opportunity=_dict(gsc.get("opportunity")) if gsc_complete else {},
+        branded=_dict(gsc.get("branded")) if gsc_complete else {},
+        topic_clusters=[_dict(row) for row in _list(gsc.get("topic_clusters"))]
+        if gsc_complete
+        else [],
     )
 
 

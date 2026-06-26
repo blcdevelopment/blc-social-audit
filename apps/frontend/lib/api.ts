@@ -191,6 +191,10 @@ export interface SearchPerformanceSection {
   declining_pages: Record<string, unknown>[];
   url_inspection_summary: Record<string, unknown>;
   url_inspection_items: Record<string, unknown>[];
+  // Business-opportunity framing (P1-P4); empty when GSC is not connected.
+  opportunity?: Record<string, unknown>;
+  branded?: Record<string, unknown>;
+  topic_clusters?: Record<string, unknown>[];
 }
 
 export interface SearchConsoleProperty {
