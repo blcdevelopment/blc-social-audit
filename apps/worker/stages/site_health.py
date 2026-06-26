@@ -361,7 +361,9 @@ async def _fetch_sitemap(
     if not await asyncio.to_thread(_host_allowed, sitemap_url, settings, host_allowed_cache):
         return set(), "blocked_host"
     try:
-        response = await _guarded_request(client, "GET", sitemap_url, settings, host_allowed_cache)
+        response, _ = await _guarded_request(
+            client, "GET", sitemap_url, settings, host_allowed_cache
+        )
     except _BlockedHost:
         return set(), "blocked_host"
     except httpx.HTTPError:
@@ -448,7 +450,7 @@ async def _sweep(
                     counters["blocked"] += 1
                 return
             try:
-                status_code, x_robots, error = await _check_url(
+                status_code, x_robots, error, redirect_hops = await _check_url(
                     client, url, settings, host_allowed_cache
                 )
             except _BlockedHost:
@@ -471,6 +473,14 @@ async def _sweep(
             if internal:
                 # The client's own site: every error is a reliable, actionable
                 # signal because we control the request.
+                # Internal links should point at the final URL; a redirect wastes crawl
+                # budget and a 2+-hop chain is a real crawlability problem (scored).
+                if redirect_hops >= 1:
+                    summary["redirecting_internal_urls"] = (
+                        int(summary.get("redirecting_internal_urls") or 0) + 1
+                    )
+                if redirect_hops >= 2:
+                    _count(summary, examples, "redirect_chain_internal_urls", url)
                 if 400 <= status_code <= 499:
                     _count(summary, examples, "client_error_internal_urls", url)
                 elif status_code >= 500:
@@ -508,26 +518,30 @@ async def _check_url(
     url: str,
     settings: Settings,
     host_allowed_cache: dict[str, bool],
-) -> tuple[int | None, str | None, str | None]:
-    """Return (status_code, x_robots_tag_header, error).
+) -> tuple[int | None, str | None, str | None, int]:
+    """Return (status_code, x_robots_tag_header, error, redirect_hops).
 
     GET is retried only when HEAD specifically is the problem (servers that
     reject or mishandle HEAD). Timeouts and connection failures would fail a GET
     identically, so retrying them would just double the worst-case latency.
     """
     try:
-        response = await _guarded_request(client, "HEAD", url, settings, host_allowed_cache)
+        response, hops = await _guarded_request(client, "HEAD", url, settings, host_allowed_cache)
         if response.status_code in _RETRY_GET_STATUSES:
-            response = await _guarded_request(client, "GET", url, settings, host_allowed_cache)
-        return response.status_code, response.headers.get("x-robots-tag"), None
+            response, hops = await _guarded_request(
+                client, "GET", url, settings, host_allowed_cache
+            )
+        return response.status_code, response.headers.get("x-robots-tag"), None, hops
     except httpx.RemoteProtocolError:
         try:
-            response = await _guarded_request(client, "GET", url, settings, host_allowed_cache)
-            return response.status_code, response.headers.get("x-robots-tag"), None
+            response, hops = await _guarded_request(
+                client, "GET", url, settings, host_allowed_cache
+            )
+            return response.status_code, response.headers.get("x-robots-tag"), None, hops
         except httpx.HTTPError as exc:
-            return None, None, _trim(str(exc) or exc.__class__.__name__)
+            return None, None, _trim(str(exc) or exc.__class__.__name__), 0
     except httpx.HTTPError as exc:
-        return None, None, _trim(str(exc) or exc.__class__.__name__)
+        return None, None, _trim(str(exc) or exc.__class__.__name__), 0
 
 
 async def _guarded_request(
@@ -536,8 +550,9 @@ async def _guarded_request(
     url: str,
     settings: Settings,
     host_allowed_cache: dict[str, bool],
-) -> httpx.Response:
-    """Follow redirects only after each target passes the SSRF host guard."""
+) -> tuple[httpx.Response, int]:
+    """Follow redirects only after each target passes the SSRF host guard. Returns the final
+    response and the number of redirect hops followed to reach it (0 = no redirect)."""
     current_url = normalize_url(url)
     if current_url is None:
         raise _BlockedHost
@@ -554,11 +569,11 @@ async def _guarded_request(
 
         response = await client.request(method, current_url)
         if not response.is_redirect:
-            return response
+            return response, redirect_count
 
         location = response.headers.get("location")
         if not location:
-            return response
+            return response, redirect_count
         if redirect_count >= _MAX_REDIRECTS:
             raise httpx.TooManyRedirects(
                 f"Exceeded {_MAX_REDIRECTS} redirects while requesting {url}",

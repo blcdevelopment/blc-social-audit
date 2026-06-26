@@ -1,8 +1,10 @@
 from celery import Celery
 
 from apps.shared.config import get_settings
+from apps.shared.observability import init_sentry
 
 settings = get_settings()
+init_sentry(settings, component="worker")
 
 celery_app = Celery(
     "blc_website_audit_worker",
@@ -20,4 +22,11 @@ celery_app.conf.update(
     timezone="UTC",
     task_time_limit=settings.celery_task_time_limit_seconds,
     task_soft_time_limit=settings.celery_task_soft_time_limit_seconds,
+    # Recover work lost to a worker crash/restart (e.g. a mid-audit deploy) by REDELIVERING the
+    # task instead of silently stranding the job in a non-terminal status. Safe because
+    # run_collection_audit is idempotent — it no-ops on an already-COMPLETE job (see tasks.py).
+    # A task that RAISES (incl. SoftTimeLimitExceeded) is still acked, so deterministic failures
+    # are never redelivered; only a lost worker re-queues its in-flight task.
+    task_acks_late=True,
+    task_reject_on_worker_lost=True,
 )

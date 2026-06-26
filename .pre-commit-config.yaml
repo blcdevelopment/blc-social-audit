@@ -1,3 +1,7 @@
+# Vendored, third-party assets (e.g. the pinned axe-core build) are committed as-is: they
+# must not be reformatted (end-of-file/whitespace) or counted against the large-file guard.
+exclude: ^vendor/
+
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0

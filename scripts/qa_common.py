@@ -6,7 +6,8 @@ This runs the *real* audit pipeline end-to-end with zero external dependencies:
   Playwright crawler renders a real page (no internet required).
 - The database is an ephemeral SQLite file (no PostgreSQL required).
 - PageSpeed Insights runs its real graceful-skip path (no API key required).
-- Commentary runs its real local-fallback path (no OpenAI key required).
+- Commentary is fully deterministic by construction in Phase 1 (no OpenAI call
+  is made at all), so no API key is involved.
 
 Everything else - crawler, SEO/UX extractors, deterministic scoring, grounding
 validation, report payload, and WeasyPrint PDF rendering - is the production

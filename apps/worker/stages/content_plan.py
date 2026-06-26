@@ -81,9 +81,13 @@ def build_content_plan(
 
     scores = _dict(score_breakdown.get("scores"))
     top_label = _top_priority_label(score_breakdown)
+    # Business-opportunity framing (P1): when Search Console is connected, the GSC stage stores a
+    # deterministic "clicks/leads left on the table" estimate. Every number it carries lives in the
+    # external_seo facts, so the grounding validator keeps the prose that cites it.
+    opportunity = _dict(_dict(_dict(external_seo_facts).get("gsc")).get("opportunity"))
 
     return CommentaryContent(
-        executive_summary=_executive_summary(scores, top_label),
+        executive_summary=_executive_summary(scores, top_label, opportunity),
         seo=seo_section,
         uxui=uxui_section,
         lead_generation=_lead_section(scores),
@@ -200,11 +204,40 @@ def _lead_section(scores: JsonDict) -> CommentarySection:
     )
 
 
-def _executive_summary(scores: JsonDict, top_label: str | None) -> str:
+def _opportunity_lead_in(opportunity: JsonDict) -> str:
+    """P1: lead the executive summary with the business outcome, not the score, when Search Console
+    data is available. Every number here is a stored GSC fact (grounding keeps it); ranges use
+    "to" (never a hyphen) so the grounding validator does not read the upper bound as negative."""
+    if not opportunity:
+        return ""
+    impressions = _int(opportunity.get("total_striking_impressions"))
+    current = _int(opportunity.get("current_clicks"))
+    queries = _int(opportunity.get("striking_query_count"))
+    clicks_low = _int(opportunity.get("opportunity_clicks_low"))
+    clicks_high = _int(opportunity.get("opportunity_clicks_high"))
+    leads_low = _int(opportunity.get("estimated_leads_low"))
+    leads_high = _int(opportunity.get("estimated_leads_high"))
+    rate_low = _int(opportunity.get("lead_rate_low_pct"))
+    rate_high = _int(opportunity.get("lead_rate_high_pct"))
+    if queries <= 0 or impressions <= 0:
+        return ""
+    return (
+        f"Your site already appears in Google for an estimated {impressions} searches a month "
+        "from people looking for services like yours, but it currently captures only about "
+        f"{current} of the available clicks. Closing the gap on your {queries} near-miss pages "
+        "— pages already ranking just below the top of the first page — could bring an estimated "
+        f"{clicks_low} to {clicks_high} more visits a month, and at a typical {rate_low}% to "
+        f"{rate_high}% home-services contact rate that is roughly {leads_low} to {leads_high} more "
+        "leads. These are estimates from your real Search Console data and published click-through "
+        "rates, not a guarantee, but they show where the fastest wins are. "
+    )
+
+
+def _executive_summary(scores: JsonDict, top_label: str | None, opportunity: JsonDict) -> str:
     seo = _int(scores.get("seo"))
     uxui = _int(scores.get("uxui"))
     lead = _int(scores.get("lead_gen"))
-    summary = (
+    summary = _opportunity_lead_in(opportunity) + (
         f"This audit scored the site {seo} for SEO, {uxui} for UX/UI, and {lead} for "
         "Lead Generation Readiness. Lead Generation Readiness is the roll-up score that "
         "shows whether search visibility and the on-page conversion experience are working "
@@ -284,13 +317,38 @@ _ACTION_TITLES: dict[str, str] = {
     "seo.h1.present_once": "Give every page one clear H1 heading",
     "seo.homepage.canonical": "Add a canonical tag to the homepage",
     "seo.schema.present": "Add structured-data markup to key pages",
+    "seo.schema.business_identity": "Add business-identity structured data",
+    "seo.schema.valid_json_ld": "Fix malformed structured data",
+    "seo.schema.breadcrumb": "Add breadcrumb structured data",
     "seo.images.alt_coverage": "Raise alt-text coverage across images",
     "seo.indexability.no_noindex_pages": "Unblock pages from search indexing",
+    "seo.security.https": "Serve the whole site over HTTPS",
+    "seo.security.no_mixed_content": "Fix insecure mixed-content resources",
+    "seo.aeo.heading_hierarchy": "Clean up the heading outline",
+    "seo.aeo.question_headings": "Phrase key subheadings as questions",
+    "seo.aeo.extractable_structure": "Use scannable lists and tables",
+    "seo.local.nap_schema": "Complete the business NAP structured data",
+    "seo.local.service_area": "Declare your service area in structured data",
+    "seo.local.map_or_gbp": "Link to your Google Business Profile",
+    "seo.local.visible_address": "Show your business address on the page",
+    "seo.a11y.html_lang": "Declare the page language",
+    "seo.a11y.viewport_zoom": "Let visitors zoom the page",
+    "seo.a11y.main_landmark": "Add a main content landmark",
+    "seo.a11y.no_positive_tabindex": "Fix the keyboard tab order",
+    "seo.a11y.form_controls_labeled": "Label every form field",
+    "seo.a11y.links_have_name": "Give every link readable text",
+    "seo.a11y.buttons_have_name": "Give every button a readable label",
+    "seo.a11y.unique_referenced_ids": "Make referenced element IDs unique",
     "seo.internal_links.depth": "Strengthen internal links between pages",
     "seo.psi.mobile_performance": "Speed up page loads on mobile",
     "seo.psi.desktop_performance": "Speed up page loads on desktop",
+    "seo.cwv.lcp": "Improve real-user loading speed (LCP)",
+    "seo.cwv.inp": "Improve interaction responsiveness (INP)",
+    "seo.cwv.cls": "Stop the page from shifting as it loads (CLS)",
     "seo.technical_crawl.no_broken_internal_urls": "Repair broken links and error pages",
     "seo.technical_crawl.indexable_urls": "Let blocked pages show in search",
+    "seo.technical_crawl.canonicals": "Add canonical tags to pages",
+    "seo.technical_crawl.redirect_chains": "Remove internal redirect chains",
     "seo.technical_crawl.missing_titles": "Add title tags to untitled pages",
     "seo.technical_crawl.duplicate_titles": "Make every page title unique",
     "seo.technical_crawl.missing_meta_descriptions": "Add the missing meta descriptions",
@@ -453,6 +511,87 @@ _RULE_CONTEXT: dict[str, JsonDict] = {
         "meaning": "Internal links help visitors and crawlers move from one useful page to the next.",
         "why": "Thin internal linking can leave good pages isolated and make next steps harder to find.",
         "noun": "internal link",
+    },
+    "seo.aeo.heading_hierarchy": {
+        "meaning": "A clean heading outline uses one H1 and steps down through H2/H3 without skipping levels.",
+        "why": "A broken outline makes the page harder for readers, screen readers, and answer engines to segment into the right sections.",
+        "failed_check": "The heading outline either repeated the H1 or jumped past a heading level on a crawled page.",
+    },
+    "seo.aeo.question_headings": {
+        "meaning": "Question-style subheadings phrase a section around the exact question a buyer would ask.",
+        "why": "They line up with how people and AI assistants search, so the page is easier to match to a query and quote in an answer.",
+        "noun": "question-style subheading",
+        "noun_plural": "question-style subheadings",
+    },
+    "seo.aeo.extractable_structure": {
+        "meaning": "Lists and tables turn steps, services, and specs into scannable chunks instead of dense paragraphs.",
+        "why": "Scannable structure helps visitors skim and lets answer engines lift a clean, self-contained block from the page.",
+        "failed_check": "No genuine content list or comparison table was found in the main content of the crawled page or pages.",
+    },
+    "seo.local.nap_schema": {
+        "meaning": "NAP structured data spells out the business name, postal address, and phone in a machine-readable LocalBusiness record.",
+        "why": "Without complete NAP markup, search engines and AI assistants cannot confidently tie the site to a real, located business.",
+        "failed_check": "No LocalBusiness structured data with a complete name, address, and phone was found on the crawled page or pages.",
+    },
+    "seo.local.service_area": {
+        "meaning": "A declared service area (areaServed or geo) tells search engines which places the business serves.",
+        "why": "Local searches happen in specific cities, so an undeclared service area can keep the business out of the right local results.",
+        "failed_check": "No service area or geo coordinates were declared in the structured data on the crawled page or pages.",
+    },
+    "seo.local.map_or_gbp": {
+        "meaning": "A Google Business Profile or map link connects the website to the verified, reviewed local listing.",
+        "why": "That link reinforces the business as a real local entity and gives visitors a fast way to check the location and reviews.",
+        "failed_check": "No Google Business Profile or map link was found on the crawled page or pages.",
+    },
+    "seo.local.visible_address": {
+        "meaning": "A visible address block shows the business location to visitors, mirroring the structured-data NAP.",
+        "why": "A visible, consistent address builds trust and confirms to search engines that the structured-data location is genuine.",
+        "failed_check": "No visible address block was found on the crawled page or pages.",
+    },
+    "seo.a11y.html_lang": {
+        "meaning": "The html element's lang attribute tells assistive technology which language the page is written in.",
+        "why": "Without it, screen readers can mispronounce the content, making the page harder to use for visitors who rely on them.",
+        "failed_check": "A crawled page did not declare a language on its html element.",
+    },
+    "seo.a11y.viewport_zoom": {
+        "meaning": "The viewport meta tag can either allow or block a visitor from pinching to zoom in.",
+        "why": "Blocking zoom stops low-vision visitors from enlarging text, which is both an accessibility barrier and a conversion risk.",
+        "failed_check": "A crawled page's viewport tag disables zooming (user-scalable=no or a low maximum-scale).",
+    },
+    "seo.a11y.main_landmark": {
+        "meaning": "A main landmark marks the primary content region so assistive tech can jump past the header and navigation.",
+        "why": "Without it, screen-reader and keyboard users must wade through the menus on every page to reach the content.",
+        "failed_check": 'A crawled page has no main element or role="main" landmark.',
+    },
+    "seo.a11y.no_positive_tabindex": {
+        "meaning": "A positive tabindex forces an element earlier in the keyboard tab order than its position on the page.",
+        "why": "It desyncs the visual order from the focus order, so keyboard users can jump around unpredictably.",
+        "noun": "element with a positive tabindex",
+        "noun_plural": "elements with a positive tabindex",
+    },
+    "seo.a11y.form_controls_labeled": {
+        "meaning": "A programmatic label ties a visible name to a form field so screen readers announce what it is for.",
+        "why": "Unlabeled fields are one of the most common accessibility failures and leave some visitors unable to complete the form.",
+        "noun": "form field with no programmatic label",
+        "noun_plural": "form fields with no programmatic label",
+    },
+    "seo.a11y.links_have_name": {
+        "meaning": "Every link needs readable text or an accessible label — especially icon-only links with no visible words.",
+        "why": 'A link announced as just "link" gives screen-reader users no idea where it goes, so they skip it.',
+        "noun": "link with no readable text",
+        "noun_plural": "links with no readable text",
+    },
+    "seo.a11y.buttons_have_name": {
+        "meaning": "Every button needs readable text or an accessible label so its action is announced.",
+        "why": 'An unlabeled button is announced as just "button," leaving assistive-tech users unsure what it does.',
+        "noun": "button with no readable label",
+        "noun_plural": "buttons with no readable label",
+    },
+    "seo.a11y.unique_referenced_ids": {
+        "meaning": "When a label or ARIA attribute points at an element ID, that ID must be unique to resolve to the right control.",
+        "why": "A duplicated, referenced ID silently links the label to the wrong element, breaking the association for assistive tech.",
+        "noun": "duplicated referenced ID",
+        "noun_plural": "duplicated referenced IDs",
     },
     "seo.psi.mobile_performance": {
         "meaning": "Mobile PageSpeed reflects how quickly and smoothly the site loads for people on phones.",

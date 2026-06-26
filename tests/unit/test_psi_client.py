@@ -225,3 +225,49 @@ def test_normalize_pagespeed_response_extracts_crux_field_data() -> None:
 def test_normalize_pagespeed_response_without_field_data() -> None:
     facts = normalize_pagespeed_response({"lighthouseResult": {}}, "mobile")
     assert facts["field_data"] == {"page": None, "origin": None}
+
+
+def test_summary_aggregates_origin_core_web_vitals(monkeypatch) -> None:
+    def fake_fetch(url: str, strategy: str, settings: Settings) -> dict:
+        return {
+            "status": "complete",
+            "strategy": strategy,
+            "scores": {
+                "performance": 80,
+                "accessibility": None,
+                "best_practices": None,
+                "seo": None,
+            },
+            "field_data": {
+                "page": None,
+                "origin": {
+                    "overall_category": "AVERAGE",
+                    "largest_contentful_paint_ms": {"p75": 3200, "category": "AVERAGE"},
+                    "interaction_to_next_paint_ms": {"p75": 180, "category": "FAST"},
+                    "cumulative_layout_shift": {"p75": 0.04, "category": "FAST"},
+                },
+            },
+        }
+
+    monkeypatch.setattr(psi_client, "_fetch_strategy", fake_fetch)
+    settings = Settings(_env_file=None, google_psi_api_key="psi-secret", psi_scope="homepage")
+    crux = collect_pagespeed_facts("https://example.com/", settings)["summary"]["crux"]
+    assert crux["has_field_data"] is True
+    assert crux["lcp_p75_ms"] == 3200
+    assert crux["inp_p75_ms"] == 180
+    assert crux["cls_p75"] == 0.04
+    assert crux["overall_category"] == "AVERAGE"
+
+
+def test_summary_crux_is_none_without_field_data(monkeypatch) -> None:
+    def fake_fetch(url: str, strategy: str, settings: Settings) -> dict:
+        return {"status": "complete", "strategy": strategy, "scores": {"performance": 90}}
+
+    monkeypatch.setattr(psi_client, "_fetch_strategy", fake_fetch)
+    settings = Settings(_env_file=None, google_psi_api_key="psi-secret", psi_scope="homepage")
+    crux = collect_pagespeed_facts("https://example.com/", settings)["summary"]["crux"]
+    # No field data -> values stay None so the CWV rules skip_if_missing (never penalize).
+    assert crux["has_field_data"] is False
+    assert crux["lcp_p75_ms"] is None
+    assert crux["inp_p75_ms"] is None
+    assert crux["cls_p75"] is None

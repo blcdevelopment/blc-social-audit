@@ -564,7 +564,7 @@ How much of the original Darius scope does Phase 1 cover? This is the honest acc
 - **Rubric** — the structured rulebook of "if X is true, award Y points" entries that produces a numeric score. Lives in external YAML.
 - **Grounded generation** — pattern where the LLM is constrained to only commentate on facts already extracted by deterministic code; it cannot introduce numbers or claims of its own.
 - **Hybrid scoring** — deterministic rule engine produces the score; LLM produces the prose. The score is never an LLM output.
-- **Lead Generation Readiness Score** — composite score combining SEO, UX/UI, (and eventually Social) into one headline number.
+- **Lead Generation Readiness Score** — composite score combining SEO, UX/UI, (and eventually Social) into one headline number. **As-built (2026-06-26):** the website Lead-Gen composite stays `{SEO, UX/UI}`; a **combined** audit additionally produces an **Overall Lead-Gen Readiness** score = `0.70 × website Lead-Gen + 0.30 × Social Score` (`rubrics/overall.yaml`), appended to the report. See `docs/15` §1.
 - **PSI** — Google PageSpeed Insights API, returns Lighthouse output for any URL.
 - **Phase 0** — discovery and scope-lock. Originally proposed in the Technical Assessment; effectively folded into the Phase 1 kickoff for the lean MVP.
 - **MVP** — Minimum Viable Product. In this context, the working Phase 1 deliverable.

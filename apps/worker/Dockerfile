@@ -22,7 +22,12 @@ RUN apt-get update \
 RUN pip install --no-cache-dir uv
 
 COPY . .
-RUN uv pip install --system -e .
+# Install pinned dependency versions from requirements.txt (the poetry.lock mirror) first so the
+# image is reproducible, then install the local package itself without re-resolving its deps.
+# Without this, the pyproject.toml floors would resolve to whatever is newest at build time, so
+# prod could differ from the locked local dev environment.
+RUN uv pip install --system -r requirements.txt \
+    && uv pip install --system --no-deps -e .
 # Pin Playwright's browser location so it is independent of XDG_CACHE_HOME (which the PDF
 # renderer repoints at a font cache at runtime). Browsers install to and launch from here.
 ENV PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright

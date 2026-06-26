@@ -1,0 +1,343 @@
+"""Combined audit: website pipeline (untouched) -> social audit -> ONE report with the social
+section + Overall Lead-Gen Readiness score appended at the end.
+
+Covers the overall-readiness weighting, the end-to-end combined orchestrator (real scoring + real
+PDF render so the appended template sections are exercised), and the load-bearing invariant that a
+website-only audit is unchanged (no social/overall data, byte-identical report payload shape).
+"""
+
+import json
+from datetime import UTC, datetime
+from pathlib import Path
+from uuid import UUID
+from zipfile import ZipFile
+
+import pytest
+from pydantic import ValidationError
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from apps.api.schemas.audits import AuditCreateRequest
+from apps.shared.config import Settings
+from apps.shared.models import AuditJob, Base
+from apps.worker import tasks
+from apps.worker.stages.crawler import CrawledPage, CrawlResult, RobotsPolicy
+from apps.worker.stages.docx_renderer import render_audit_docx
+from apps.worker.stages.report_payload import compose_report_payload
+from apps.worker.stages.scoring import compose_overall_readiness_score
+from apps.worker.stages.social.extractor import extract_social_facts
+
+FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
+NOW = datetime(2026, 6, 23, tzinfo=UTC)
+
+
+# --------------------------------------------------------------------------- weighting (pure)
+def _settings() -> Settings:
+    return Settings(_env_file=None)
+
+
+def test_overall_readiness_blends_website_and_social_70_30() -> None:
+    out = compose_overall_readiness_score(
+        website_lead_gen=80, social_score=60, settings=_settings()
+    )
+    assert out["status"] == "complete"
+    # 80*0.70 + 60*0.30 = 74, half-up rounded.
+    assert out["score"] == 74
+    assert out["band"] == "fair"
+    assert out["weights"] == {"website": 0.70, "social": 0.30}
+    assert out["inputs"] == {"website_lead_gen": 80, "social": 60}
+
+
+def test_overall_readiness_rescales_to_website_when_social_missing() -> None:
+    out = compose_overall_readiness_score(
+        website_lead_gen=82, social_score=None, settings=_settings()
+    )
+    assert out["status"] == "website_only"
+    assert out["score"] == 82
+    assert out["weights"] == {"website": 1.0, "social": 0.0}
+
+
+def test_overall_readiness_is_skipped_without_website_score() -> None:
+    out = compose_overall_readiness_score(
+        website_lead_gen=None, social_score=70, settings=_settings()
+    )
+    assert out["status"] == "skipped"
+    assert out["score"] is None
+    assert out["band"] == "unknown"
+
+
+# --------------------------------------------------------------------------- request validation
+def test_combined_request_requires_both_url_and_a_handle() -> None:
+    with pytest.raises(ValidationError):
+        AuditCreateRequest(audit_type="combined", url="https://example.com")  # no handle
+    with pytest.raises(ValidationError):
+        AuditCreateRequest(audit_type="combined", social_handles={"instagram": "acme"})  # no url
+    req = AuditCreateRequest(
+        audit_type="combined", url="https://example.com", social_handles={"instagram": "acme"}
+    )
+    assert req.audit_type == "combined"
+
+
+# --------------------------------------------------------------------------- orchestrator (e2e)
+def _fake_crawler(url: str, settings: Settings, audit_id: str | None) -> CrawlResult:
+    now = datetime.now(UTC).isoformat()
+    page = CrawledPage(
+        url=url,
+        final_url="https://example.com/",
+        status_code=200,
+        title="Example Builder",
+        html="""
+        <html><head>
+          <title>Example Builder Website</title>
+          <meta name="description" content="Custom builder serving local homeowners." />
+        </head><body>
+          <h1>Example Builder</h1>
+          <a class="btn cta" href="/estimate">Request Estimate</a>
+          <img src="/home.jpg" alt="Finished custom home" />
+        </body></html>
+        """,
+        text="Example Builder Request Estimate",
+        fetched_at=now,
+    )
+    return CrawlResult(
+        requested_url=url,
+        start_url=url,
+        final_url="https://example.com/",
+        status="complete",
+        pages=[page],
+        discovered_links=[],
+        skipped_pages=[],
+        failed_pages=[],
+        robots=RobotsPolicy(status="disabled", robots_url=None),
+        started_at=now,
+        completed_at=now,
+        max_pages=settings.crawler_max_pages,
+        user_agent=settings.crawler_user_agent,
+    )
+
+
+def _fake_psi(urls: list[str], settings: Settings) -> dict:
+    return {
+        "status": "skipped",
+        "reason": "unit_test",
+        "homepage_url": urls[0],
+        "pages_requested": len(urls),
+        "pages_analyzed": 0,
+        "pages": [],
+        "strategies": {},
+    }
+
+
+def _session(tmp_path):
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+        future=True,
+    )
+    Base.metadata.create_all(engine)
+    return sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+
+
+def _patch_settings(monkeypatch, TestingSession, tmp_path) -> None:
+    monkeypatch.setattr(tasks, "SessionLocal", TestingSession)
+    monkeypatch.setattr(
+        tasks,
+        "get_settings",
+        lambda: Settings(
+            _env_file=None,
+            google_psi_api_key=None,
+            crawler_screenshots_enabled=False,
+            site_health_enabled=False,
+            screaming_frog_enabled=False,
+            google_oauth_client_id="",
+            local_report_storage_dir=tmp_path / "reports",
+        ),
+    )
+
+
+def test_combined_audit_renders_one_report_with_social_and_overall(tmp_path, monkeypatch) -> None:
+    TestingSession = _session(tmp_path)
+    _patch_settings(monkeypatch, TestingSession, tmp_path)
+
+    strong = json.loads((FIXTURES / "social_instagram_strong.json").read_text())
+
+    def fake_collector(settings, handles):
+        return extract_social_facts(
+            [{"platform": "instagram", "handle": "acme", "raw": strong}], now=NOW
+        )
+
+    with TestingSession() as db:
+        job = AuditJob(
+            url="https://example.com/",
+            audit_type="combined",
+            social_handles={"instagram": "acme"},
+            status="queued",
+            current_stage="Queued",
+            progress_pct=0,
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        job_id = str(job.id)
+
+    # Real scoring + real WeasyPrint render so the appended template sections are exercised.
+    tasks.run_collection_audit(
+        job_id, crawler=_fake_crawler, psi_collector=_fake_psi, social_collector=fake_collector
+    )
+
+    with TestingSession() as db:
+        job = db.get(AuditJob, UUID(job_id))
+        assert job.status == "complete"
+        assert job.progress_pct == 100
+        result = job.result
+        # Website scores intact (the website pipeline is untouched).
+        assert result.seo_score is not None
+        assert result.uxui_score is not None
+        assert result.lead_gen_score is not None
+        # Social merged onto the SAME result.
+        assert result.social_score is not None and result.social_score >= 80
+        overall = result.score_breakdown["overall_readiness"]
+        assert overall["status"] == "complete"
+        expected = int(result.lead_gen_score * 0.70 + result.social_score * 0.30 + 0.5)
+        assert overall["score"] == expected
+        # The composed report appends both sections.
+        payload = compose_report_payload(job, result)
+        assert payload.social_audit is not None
+        assert payload.social_audit["score"] == result.social_score
+        assert payload.overall_readiness is not None
+        assert payload.overall_readiness["score"] == expected
+        # ONE combined PDF was rendered to local storage.
+        assert result.pdf_path and Path(result.pdf_path).exists()
+        assert Path(result.pdf_path).read_bytes().startswith(b"%PDF")
+        # The on-demand DOCX appends the same social + overall sections after the website content.
+        docx_res = render_audit_docx(
+            job, result, Settings(_env_file=None, local_report_storage_dir=tmp_path / "reports")
+        )
+        with ZipFile(docx_res.docx_path) as archive:
+            doc_xml = archive.read("word/document.xml").decode("utf-8")
+        assert "Website Audit Report" in doc_xml  # website content intact
+        assert "Social Media Audit" in doc_xml
+        assert "Overall Lead-Gen Readiness" in doc_xml
+
+
+def test_combined_audit_degrades_to_website_when_social_fails(tmp_path, monkeypatch) -> None:
+    # Graceful degradation: a failure in the optional social add-on must NOT fail the whole
+    # combined audit — the already-scored website report still completes (no social/overall).
+    TestingSession = _session(tmp_path)
+    _patch_settings(monkeypatch, TestingSession, tmp_path)
+
+    def boom_collector(settings, handles):
+        raise RuntimeError("apify exploded mid-collection")
+
+    with TestingSession() as db:
+        job = AuditJob(
+            url="https://example.com/",
+            audit_type="combined",
+            social_handles={"instagram": "acme"},
+            status="queued",
+            current_stage="Queued",
+            progress_pct=0,
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        job_id = str(job.id)
+
+    tasks.run_collection_audit(
+        job_id, crawler=_fake_crawler, psi_collector=_fake_psi, social_collector=boom_collector
+    )
+
+    with TestingSession() as db:
+        job = db.get(AuditJob, UUID(job_id))
+        assert job.status == "complete"  # NOT failed
+        result = job.result
+        assert result.seo_score is not None and result.lead_gen_score is not None
+        assert result.social_score is None
+        assert "overall_readiness" not in (result.score_breakdown or {})
+        assert result.pdf_path and Path(result.pdf_path).exists()
+
+
+def test_rerun_enrichment_preserves_combined_sections(tmp_path, monkeypatch) -> None:
+    # Re-running external SEO enrichment on a combined audit must keep the social breakdown and
+    # recompute the Overall Lead-Gen Readiness, not silently drop them.
+    TestingSession = _session(tmp_path)
+    _patch_settings(monkeypatch, TestingSession, tmp_path)
+
+    strong = json.loads((FIXTURES / "social_instagram_strong.json").read_text())
+
+    def fake_collector(settings, handles):
+        return extract_social_facts(
+            [{"platform": "instagram", "handle": "acme", "raw": strong}], now=NOW
+        )
+
+    with TestingSession() as db:
+        job = AuditJob(
+            url="https://example.com/",
+            audit_type="combined",
+            social_handles={"instagram": "acme"},
+            status="queued",
+            current_stage="Queued",
+            progress_pct=0,
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        job_id = str(job.id)
+
+    tasks.run_collection_audit(
+        job_id, crawler=_fake_crawler, psi_collector=_fake_psi, social_collector=fake_collector
+    )
+    with TestingSession() as db:
+        result = db.get(AuditJob, UUID(job_id)).result
+        before_overall = result.score_breakdown["overall_readiness"]["score"]
+        before_social = result.social_score
+
+    # Rerun external enrichment (runs synchronously). External sources all skip in this config,
+    # so the website score is unchanged — but the combined sections must survive.
+    tasks.rerun_external_enrichment_for_audit(job_id)
+
+    with TestingSession() as db:
+        job = db.get(AuditJob, UUID(job_id))
+        assert job.status == "complete"
+        result = job.result
+        assert result.social_score == before_social
+        assert isinstance(result.score_breakdown.get("social"), dict)
+        overall = result.score_breakdown.get("overall_readiness")
+        assert overall is not None and overall["score"] == before_overall
+
+
+def test_website_audit_is_unchanged_by_combined_feature(tmp_path, monkeypatch) -> None:
+    TestingSession = _session(tmp_path)
+    _patch_settings(monkeypatch, TestingSession, tmp_path)
+
+    def boom_collector(settings, handles):
+        raise AssertionError("social collector must NOT run for a plain website audit")
+
+    with TestingSession() as db:
+        job = AuditJob(
+            url="https://example.com/",
+            audit_type="website",
+            status="queued",
+            current_stage="Queued",
+            progress_pct=0,
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        job_id = str(job.id)
+
+    tasks.run_collection_audit(
+        job_id, crawler=_fake_crawler, psi_collector=_fake_psi, social_collector=boom_collector
+    )
+
+    with TestingSession() as db:
+        job = db.get(AuditJob, UUID(job_id))
+        assert job.status == "complete"
+        result = job.result
+        assert result.social_score is None
+        assert "overall_readiness" not in (result.score_breakdown or {})
+        payload = compose_report_payload(job, result)
+        assert payload.social_audit is None
+        assert payload.overall_readiness is None

@@ -13,6 +13,21 @@ class Settings(BaseSettings):
     app_name: str = "blc-website-audit"
     log_level: str = "info"
 
+    # Optional Sentry error reporting (API + worker). Empty DSN => disabled
+    # (local dev / tests / QA harness), mirroring the Clerk opt-in pattern.
+    sentry_dsn: SecretStr | None = None
+    sentry_traces_sample_rate: float = Field(default=0.0, ge=0, le=1)
+
+    # Operational alerting (scripts/health_alert.py, run from cron). Empty webhook =>
+    # disabled. Posts a Slack/Discord/generic-webhook message when a threshold is breached.
+    alert_webhook_url: SecretStr | None = None
+    alert_failed_audits_threshold: int = Field(default=5, ge=1)
+    alert_stuck_audit_minutes: int = Field(default=60, ge=5)
+    # PostgreSQL backups (scripts/backup_db.py, run from cron) -> timestamped .sql.gz.
+    backup_storage_dir: Path = Path("./storage/backups")
+    backup_retention_days: int = Field(default=14, ge=0)
+    pg_dump_path: str = "pg_dump"
+
     api_host: str = "0.0.0.0"
     api_port: int = 8000
     api_base_url: str = "http://localhost:8000"
@@ -25,6 +40,11 @@ class Settings(BaseSettings):
     # set it in production to require a valid Clerk session on the audit endpoints.
     clerk_issuer: str = ""
     clerk_authorized_parties: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    # Optional defense-in-depth allowlist of Clerk user ids (the token `sub`) permitted to use
+    # the API. Empty (default) => any validly-signed token from clerk_issuer is accepted. Set it
+    # to the comma-separated Clerk user ids of the 5-10 operators (visible in the Clerk dashboard)
+    # so a stranger who self-registers on the Clerk instance still can't reach the audit endpoints.
+    clerk_allowed_subjects: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
     database_url: str = "postgresql+psycopg://blc:change-me-local@localhost:5432/blc_website_audit"
 
@@ -43,6 +63,12 @@ class Settings(BaseSettings):
     local_report_storage_dir: Path = Path("./storage/reports")
     local_screenshot_storage_dir: Path = Path("./storage/screenshots")
     local_tool_export_storage_dir: Path = Path("./storage/tool_exports")
+    # Storage retention: scripts/cleanup_storage.py deletes generated reports,
+    # screenshots, and tool exports older than this many days. There is no in-app
+    # scheduler (run it from cron on the host); 0 disables cleanup (keep forever).
+    storage_retention_days: int = Field(default=90, ge=0)
+    # Read-only share links: how long a generated share token stays valid.
+    share_link_ttl_days: int = Field(default=7, ge=1, le=365)
 
     openai_api_key: SecretStr | None = None
     openai_model: str = "gpt-4o"
@@ -100,6 +126,18 @@ class Settings(BaseSettings):
     gsc_row_limit: int = Field(default=25000, ge=1, le=25000)
     url_inspection_max_urls: int = Field(default=20, ge=0, le=200)
 
+    # Social data provider (Apify) — powers the standalone social audit (free-tier credits)
+    # via the Instagram + Facebook actors. Empty token => the social collector skips, like
+    # other optional external sources.
+    apify_api_token: SecretStr | None = None
+    apify_timeout_seconds: int = Field(default=120, ge=10)
+
+    # YouTube Data API v3 — free public-data backend for the social audit (channel stats +
+    # recent uploads). A plain API key (no OAuth); empty key => the YouTube collector skips
+    # gracefully, like the Apify backends.
+    youtube_api_key: SecretStr | None = None
+    youtube_timeout_seconds: int = Field(default=30, ge=5)
+
     crawler_user_agent: str = "BLC-Audit-Bot/1.0 (+https://builderleadconverter.com/audit-bot)"
     crawler_max_pages: int = Field(default=10, ge=1, le=50)
     crawler_concurrency: int = Field(default=3, ge=1, le=10)
@@ -107,18 +145,52 @@ class Settings(BaseSettings):
     crawler_respect_robots_txt: bool = True
     crawler_screenshots_enabled: bool = True
     crawler_allow_private_hosts: bool = False
+    # Request-level SSRF guard: when enabled (default), every sub-resource/redirect the
+    # headless browser tries to fetch during rendering is validated against the same
+    # private/loopback/link-local/metadata-IP block-list as the page URL, closing the
+    # mid-render SSRF gap. Auto-disabled when crawler_allow_private_hosts is true
+    # (local dev / QA harness crawls against localhost fixtures).
+    crawler_intercept_requests: bool = True
     crawler_chromium_executable_path: Path | None = None
+
+    # Optional advisory accessibility pass (axe-core). Default OFF; mirrors
+    # screaming_frog_enabled. When enabled, axe runs DURING the crawl (inside the live
+    # page-render window, before the page closes) and its findings are stored separately
+    # and rendered as an ADVISORY report section. The results NEVER feed the deterministic
+    # scoring path (score_audit reads only seo/uxui/psi/external_seo), so scores stay
+    # byte-for-byte reproducible whether this is on or off. When disabled, or if axe.min.js
+    # is missing / the scan errors / it times out, the audit completes normally with no
+    # advisory section (graceful skip, like a missing PSI key).
+    accessibility_advisory_enabled: bool = False
+    accessibility_axe_script_path: Path = Path("./vendor/axe-core/axe.min.js")
+    accessibility_axe_timeout_seconds: int = Field(default=30, ge=5, le=120)
+    accessibility_max_examples_per_issue: int = Field(default=5, ge=1, le=50)
+    # color-contrast is the most expensive and least reproducible axe rule (it reads
+    # computed styles); ops can disable it while keeping the structural advisory checks.
+    accessibility_run_contrast: bool = True
 
     rubric_seo_path: Path = Path("./rubrics/seo.yaml")
     rubric_uxui_path: Path = Path("./rubrics/uxui.yaml")
     rubric_composite_path: Path = Path("./rubrics/composite.yaml")
+    rubric_social_path: Path = Path("./rubrics/social.yaml")
+    # Combined-audit Overall Lead-Gen Readiness weights (website composite + social). Combined
+    # audits only; website/social audits never load it.
+    rubric_overall_path: Path = Path("./rubrics/overall.yaml")
     commentary_system_prompt_path: Path = Path("./prompts/commentary_system.md")
     commentary_user_prompt_path: Path = Path("./prompts/commentary_user.md")
+    commentary_social_system_prompt_path: Path = Path("./prompts/commentary_social_system.md")
+    commentary_social_user_prompt_path: Path = Path("./prompts/commentary_social_user.md")
     brand_config_path: Path = Path("./brand/blc.yaml")
     report_template_path: Path = Path("./templates/report.html")
     report_css_path: Path = Path("./templates/report.css")
+    report_social_template_path: Path = Path("./templates/social_report.html")
 
-    @field_validator("api_cors_origins", "clerk_authorized_parties", mode="before")
+    @field_validator(
+        "api_cors_origins",
+        "clerk_authorized_parties",
+        "clerk_allowed_subjects",
+        mode="before",
+    )
     @classmethod
     def parse_csv_list(cls, value: str | list[str]) -> list[str]:
         if isinstance(value, str):

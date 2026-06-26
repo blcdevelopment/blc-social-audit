@@ -47,6 +47,10 @@ def upgrade() -> None:
             "progress_pct >= 0 AND progress_pct <= 100",
             name="ck_audit_jobs_progress_pct",
         ),
+        # This status list is a FROZEN duplicate of apps.shared.audit_states.JOB_STATUS_VALUES
+        # (the model computes its CHECK from that enum). Adding/removing a lifecycle state
+        # requires a NEW migration to ALTER this constraint; tests/unit/test_audit_states.py
+        # is the tripwire that flags the drift.
         sa.CheckConstraint(
             "status IN ('queued', 'crawling', 'collecting_performance', 'extracting', "
             "'scoring', 'commenting', 'validating', 'rendering', 'complete', 'failed')",

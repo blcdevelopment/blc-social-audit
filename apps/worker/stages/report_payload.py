@@ -7,6 +7,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from apps.worker.stages.social.report import build_social_report_data
+
 JsonDict = dict[str, Any]
 ReportSectionId = Literal["seo", "uxui", "lead_generation"]
 RecommendationTier = Literal["quick_win", "mid_term", "long_term"]
@@ -103,6 +105,21 @@ TECHNICAL_ISSUE_GUIDANCE: dict[str, dict[str, str]] = {
             "or other indexability blockers.",
         ),
         "location_label": "Non-indexable page",
+    },
+    "redirect_chain_internal_urls": {
+        "summary": _sentence(
+            "These internal links go through two or more redirects before reaching",
+            "the final page.",
+        ),
+        "why_it_matters": _sentence(
+            "Each extra hop wastes crawl budget, slows the page for visitors,",
+            "and can dilute the link's ranking signal.",
+        ),
+        "recommended_fix": _sentence(
+            "Update the internal link to point straight at the final destination URL",
+            "so there are no intermediate redirect hops.",
+        ),
+        "location_label": "Internal link with a redirect chain",
     },
     "missing_titles": {
         "summary": _sentence(
@@ -491,6 +508,41 @@ class SearchPerformanceSection(BaseModel):
     declining_pages: list[JsonDict] = Field(default_factory=list)
     url_inspection_summary: JsonDict = Field(default_factory=dict)
     url_inspection_items: list[JsonDict] = Field(default_factory=list)
+    # Business-opportunity framing (P1-P4) — all empty when GSC is not connected.
+    opportunity: JsonDict = Field(default_factory=dict)
+    branded: JsonDict = Field(default_factory=dict)
+    topic_clusters: list[JsonDict] = Field(default_factory=list)
+
+
+class AccessibilityIssue(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    rule_id: str
+    impact: str
+    wcag_criteria: list[str] = Field(default_factory=list)
+    help: str = ""
+    help_url: str = ""
+    instances: int = 0
+    example_selectors: list[str] = Field(default_factory=list)
+    example_pages: list[str] = Field(default_factory=list)
+    failure_summary: str = ""
+
+
+class AccessibilityAdvisorySection(BaseModel):
+    """Optional advisory accessibility section (axe-core). Advisory-only — populated only when
+    the opt-in pass ran; NEVER derived from or affecting the scored sections."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: str = "skipped"
+    status_label: str = "Not collected"
+    disclaimer: str = ""
+    axe_version: str = ""
+    pages_scanned: int = 0
+    impact_counts: dict[str, int] = Field(default_factory=dict)
+    needs_review_count: int = 0
+    issues: list[AccessibilityIssue] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
 
 
 class CrawlSummary(BaseModel):
@@ -527,8 +579,20 @@ class ReportPayload(BaseModel):
     external_seo_summary: ExternalSeoSummary
     technical_seo_section: TechnicalSeoSection
     search_performance_section: SearchPerformanceSection
+    # Optional advisory accessibility section (default empty/"skipped" => not rendered). Like
+    # core_web_vitals, this is default-factory so old stored results stay valid and the
+    # REPORT_PAYLOAD_VERSION is unchanged.
+    accessibility_advisory_section: AccessibilityAdvisorySection = Field(
+        default_factory=AccessibilityAdvisorySection
+    )
     crawl_summary: CrawlSummary
     appendix: Appendix
+    # Combined-audit only (default None => not rendered; a website-only report is byte-identical).
+    # `social_audit` is the appended social-media section (same deterministic builder as the
+    # standalone social report); `overall_readiness` is the blended Overall Lead-Gen Readiness
+    # score. Both append at the END of the report and never alter the website sections above.
+    social_audit: JsonDict | None = None
+    overall_readiness: JsonDict | None = None
 
 
 def compose_report_payload(job: Any, result: Any) -> ReportPayload:
@@ -561,6 +625,22 @@ def compose_report_payload(job: Any, result: Any) -> ReportPayload:
         _compose_section("lead_generation", result.lead_gen_score, commentary, score_breakdown),
     ]
 
+    # Combined-audit extras (appended at the END of the report). Populated only when social data
+    # is present on the result; for a website-only audit these stay None and the report is
+    # byte-identical to before.
+    social_facts = _dict(getattr(result, "social_facts", None))
+    overall_readiness = score_breakdown.get("overall_readiness")
+    overall_readiness = overall_readiness if isinstance(overall_readiness, dict) else None
+    social_audit = None
+    if social_facts or overall_readiness:
+        social_audit = build_social_report_data(
+            social_facts=social_facts,
+            social_breakdown=score_breakdown.get("social"),
+            social_score=getattr(result, "social_score", None),
+            handles=getattr(job, "social_handles", None),
+            commentary=None,
+        )
+
     return ReportPayload(
         metadata=metadata,
         scores=_score_cards(result, score_breakdown),
@@ -573,8 +653,13 @@ def compose_report_payload(job: Any, result: Any) -> ReportPayload:
         external_seo_summary=_external_seo_summary(external_seo_facts),
         technical_seo_section=_technical_seo_section(external_seo_facts),
         search_performance_section=_search_performance_section(external_seo_facts),
+        accessibility_advisory_section=_accessibility_advisory_section(
+            _dict(getattr(result, "accessibility_facts", None))
+        ),
         crawl_summary=_crawl_summary(crawled_pages),
         appendix=_appendix(score_breakdown),
+        social_audit=social_audit,
+        overall_readiness=overall_readiness,
     )
 
 
@@ -1307,6 +1392,11 @@ def _search_performance_section(external_seo_facts: JsonDict) -> SearchPerforman
         if url_inspection_complete
         else {},
         url_inspection_items=inspection_items,
+        opportunity=_dict(gsc.get("opportunity")) if gsc_complete else {},
+        branded=_dict(gsc.get("branded")) if gsc_complete else {},
+        topic_clusters=[_dict(row) for row in _list(gsc.get("topic_clusters"))]
+        if gsc_complete
+        else [],
     )
 
 
@@ -1361,6 +1451,43 @@ def _domain(url: str) -> str:
     parsed = urlparse(url)
     hostname = parsed.hostname or url
     return hostname.removeprefix("www.")
+
+
+def _accessibility_issue(issue: JsonDict) -> AccessibilityIssue:
+    return AccessibilityIssue(
+        rule_id=_text(issue.get("rule_id"), "unknown"),
+        impact=_text(issue.get("impact"), "minor"),
+        wcag_criteria=[str(value) for value in _list(issue.get("wcag_criteria"))],
+        help=_text(issue.get("help"), ""),
+        help_url=_text(issue.get("help_url"), ""),
+        instances=int(issue.get("instances") or 0),
+        example_selectors=[str(value) for value in _list(issue.get("example_selectors"))],
+        example_pages=[str(value) for value in _list(issue.get("example_pages"))],
+        failure_summary=_text(issue.get("failure_summary"), ""),
+    )
+
+
+def _accessibility_advisory_section(facts: JsonDict) -> AccessibilityAdvisorySection:
+    """Compose the optional advisory accessibility section from the stored advisory facts.
+    Pure presentation: it reads only ``accessibility_facts`` and never touches scores."""
+    status = str(facts.get("status") or "skipped")
+    if status != "complete":
+        return AccessibilityAdvisorySection(status=status, status_label=status_label(status))
+    impact_counts = {
+        level: int(_dict(facts.get("impact_counts")).get(level) or 0)
+        for level in ("critical", "serious", "moderate", "minor")
+    }
+    return AccessibilityAdvisorySection(
+        status="complete",
+        status_label=status_label("complete"),
+        disclaimer=_text(facts.get("disclaimer"), ""),
+        axe_version=_text(facts.get("axe_version"), "unknown"),
+        pages_scanned=int(facts.get("pages_scanned") or 0),
+        impact_counts=impact_counts,
+        needs_review_count=int(facts.get("needs_review_count") or 0),
+        issues=[_accessibility_issue(_dict(item)) for item in _list(facts.get("issues"))],
+        notes=[str(note) for note in _list(facts.get("notes"))],
+    )
 
 
 def _dict(value: Any) -> JsonDict:

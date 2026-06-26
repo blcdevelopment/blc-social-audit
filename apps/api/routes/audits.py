@@ -1,3 +1,5 @@
+import secrets
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated
 from uuid import UUID
@@ -16,6 +18,8 @@ from apps.api.schemas.audits import (
     AuditEnrichmentResponse,
     AuditListItem,
     AuditListResponse,
+    AuditShareResponse,
+    AuditShareRevokeResponse,
     AuditStatusResponse,
 )
 from apps.shared.audit_states import AuditStatus
@@ -23,12 +27,27 @@ from apps.shared.config import get_settings
 from apps.shared.models import AuditJob
 from apps.worker.stages.docx_renderer import render_audit_docx
 from apps.worker.stages.report_payload import compose_report_payload
+from apps.worker.stages.social.report import compose_social_report_payload
 
 # Every audit endpoint requires a valid Clerk session (no-op when CLERK_ISSUER is unset).
 router = APIRouter(prefix="/audits", tags=["audits"], dependencies=[Depends(require_user)])
 DbSession = Annotated[Session, Depends(get_db_session)]
 AuditLimit = Annotated[int, Query(ge=1, le=100)]
 AuditOffset = Annotated[int, Query(ge=0)]
+
+
+def _social_primary_url(handles: dict[str, str]) -> str:
+    """A real, displayable profile URL stored as the social job's `url` (kept NOT NULL)."""
+    for platform in ("instagram", "facebook", "youtube"):
+        handle = handles.get(platform)
+        if handle:
+            cleaned = handle.lstrip("@").strip("/")
+            if platform == "youtube":
+                return f"https://www.youtube.com/@{cleaned}"
+            host = "instagram.com" if platform == "instagram" else "facebook.com"
+            return f"https://www.{host}/{cleaned}/"
+    platform, handle = next(iter(handles.items()))
+    return f"https://{platform}.com/{handle.lstrip('@').strip('/')}"
 
 
 def _report_available(job: AuditJob) -> bool:
@@ -40,6 +59,17 @@ def _report_recorded(job: AuditJob) -> bool:
     # become a network round-trip per row once reports move to object storage). The
     # download endpoint remains the source of truth and 404s if the file is gone.
     return bool(job.result and job.result.pdf_path)
+
+
+def _overall_score(job: AuditJob) -> int | None:
+    """The combined-audit Overall Lead-Gen Readiness score (stored under
+    score_breakdown.overall_readiness). None for website/social-only audits."""
+    breakdown = getattr(job.result, "score_breakdown", None)
+    if isinstance(breakdown, dict):
+        overall = breakdown.get("overall_readiness")
+        if isinstance(overall, dict):
+            return overall.get("score")
+    return None
 
 
 def _docx_path(job: AuditJob) -> Path | None:
@@ -66,14 +96,22 @@ def _status_response(job: AuditJob) -> AuditStatusResponse:
 
 
 def _detail_response(job: AuditJob) -> AuditDetailResponse:
+    audit_type = job.audit_type or "website"
+    result = job.result
     report = None
-    if job.result is not None:
-        report = compose_report_payload(job, job.result)
+    social_report = None
+    if result is not None:
+        if audit_type == "social":
+            social_report = compose_social_report_payload(job, result)
+        else:
+            report = compose_report_payload(job, result)
     return AuditDetailResponse(
         job_id=job.id,
         url=job.url,
+        audit_type=audit_type,
         niche=job.niche,
         target_audience=job.target_audience,
+        social_handles=job.social_handles,
         status=job.status,
         current_stage=job.current_stage,
         progress_pct=job.progress_pct,
@@ -82,7 +120,13 @@ def _detail_response(job: AuditJob) -> AuditDetailResponse:
         started_at=job.started_at,
         completed_at=job.completed_at,
         report_available=_report_available(job),
+        seo_score=result.seo_score if result else None,
+        uxui_score=result.uxui_score if result else None,
+        lead_gen_score=result.lead_gen_score if result else None,
+        social_score=result.social_score if result else None,
+        overall_score=_overall_score(job),
         report=report,
+        social_report=social_report,
     )
 
 
@@ -91,6 +135,7 @@ def _list_item(job: AuditJob) -> AuditListItem:
     return AuditListItem(
         job_id=job.id,
         url=job.url,
+        audit_type=job.audit_type or "website",
         status=job.status,
         current_stage=job.current_stage,
         progress_pct=job.progress_pct,
@@ -99,6 +144,8 @@ def _list_item(job: AuditJob) -> AuditListItem:
         seo_score=result.seo_score if result else None,
         uxui_score=result.uxui_score if result else None,
         lead_gen_score=result.lead_gen_score if result else None,
+        social_score=result.social_score if result else None,
+        overall_score=_overall_score(job),
         report_available=_report_recorded(job),
     )
 
@@ -109,14 +156,49 @@ def create_audit(
     db: DbSession,
 ) -> AuditCreateResponse:
     settings = get_settings()
-    job = AuditJob(
-        url=str(payload.url),
-        niche=payload.niche,
-        target_audience=payload.target_audience,
-        status=AuditStatus.QUEUED.value,
-        current_stage="Queued",
-        progress_pct=0,
-    )
+    brand_overrides = None
+    if payload.brand_overrides is not None:
+        brand_overrides = payload.brand_overrides.model_dump(exclude_none=True) or None
+
+    if payload.audit_type == "social":
+        handles = {k: v for k, v in (payload.social_handles or {}).items() if v}
+        job = AuditJob(
+            url=_social_primary_url(handles),
+            audit_type="social",
+            social_handles=handles,
+            niche=payload.niche,
+            target_audience=payload.target_audience,
+            brand_overrides=brand_overrides,
+            status=AuditStatus.QUEUED.value,
+            current_stage="Queued",
+            progress_pct=0,
+        )
+    elif payload.audit_type == "combined":
+        # Combined: the real website URL plus social handles. The worker runs the website pipeline
+        # then the social audit and renders ONE report with both + the overall readiness score.
+        handles = {k: v for k, v in (payload.social_handles or {}).items() if v}
+        job = AuditJob(
+            url=str(payload.url),
+            audit_type="combined",
+            social_handles=handles,
+            niche=payload.niche,
+            target_audience=payload.target_audience,
+            brand_overrides=brand_overrides,
+            status=AuditStatus.QUEUED.value,
+            current_stage="Queued",
+            progress_pct=0,
+        )
+    else:
+        job = AuditJob(
+            url=str(payload.url),
+            audit_type="website",
+            niche=payload.niche,
+            target_audience=payload.target_audience,
+            brand_overrides=brand_overrides,
+            status=AuditStatus.QUEUED.value,
+            current_stage="Queued",
+            progress_pct=0,
+        )
     db.add(job)
     db.commit()
     db.refresh(job)
@@ -251,10 +333,11 @@ def get_audit_report(job_id: UUID, db: DbSession) -> FileResponse:
             detail="PDF report file is missing from local storage.",
         )
 
+    kind = "social" if (job.audit_type or "website") == "social" else "website"
     return FileResponse(
         pdf_path,
         media_type="application/pdf",
-        filename=f"blc-website-audit-{job.id}.pdf",
+        filename=f"blc-{kind}-audit-{job.id}.pdf",
     )
 
 
@@ -295,3 +378,38 @@ def get_audit_docx(job_id: UUID, db: DbSession) -> FileResponse:
         media_type=("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
         filename=f"blc-website-audit-{job.id}.docx",
     )
+
+
+@router.post("/{job_id}/share", response_model=AuditShareResponse)
+def create_share_link(job_id: UUID, db: DbSession) -> AuditShareResponse:
+    job = db.get(AuditJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audit job not found.")
+    if not _report_recorded(job):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A report must be generated before the audit can be shared.",
+        )
+
+    settings = get_settings()
+    job.share_token = secrets.token_urlsafe(32)
+    job.share_expires_at = datetime.now(UTC) + timedelta(days=settings.share_link_ttl_days)
+    db.commit()
+    db.refresh(job)
+    return AuditShareResponse(
+        job_id=job.id,
+        share_token=job.share_token,
+        share_expires_at=job.share_expires_at,
+        report_path=f"/shared/{job.share_token}/report",
+    )
+
+
+@router.delete("/{job_id}/share", response_model=AuditShareRevokeResponse)
+def revoke_share_link(job_id: UUID, db: DbSession) -> AuditShareRevokeResponse:
+    job = db.get(AuditJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audit job not found.")
+    job.share_token = None
+    job.share_expires_at = None
+    db.commit()
+    return AuditShareRevokeResponse(job_id=job.id, shared=False)

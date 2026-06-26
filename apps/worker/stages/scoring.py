@@ -41,7 +41,10 @@ class Rubric(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     version: str
-    category: Literal["seo", "uxui"]
+    # "social" is allowed for the STANDALONE social audit rubric. It does NOT enter the
+    # website CompositeRubric (whose weights stay exactly {seo, uxui}); the Social Score
+    # is computed on its own via score_social_audit().
+    category: Literal["seo", "uxui", "social"]
     max_score: int = Field(default=100, gt=0)
     normalization: NormalizationMode = "rescale_to_max"
     rules: list[RubricRule] = Field(min_length=1)
@@ -76,6 +79,27 @@ class CompositeRubric(BaseModel):
         for category, weight in self.weights.items():
             if weight < 0:
                 raise ValueError(f"composite weight for {category} must be non-negative")
+        return self
+
+
+class OverallRubric(BaseModel):
+    """Weights for the combined-audit Overall Lead-Gen Readiness score (rubrics/overall.yaml).
+
+    Blends the website Lead-Gen composite with the standalone Social Score. The website composite
+    ({seo, uxui}) is UNTOUCHED — it is used here only as one of two pre-computed inputs."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    version: str
+    max_score: int = Field(default=100, gt=0)
+    website_weight: float = Field(ge=0, le=1)
+    social_weight: float = Field(ge=0, le=1)
+
+    @model_validator(mode="after")
+    def validate_weights(self) -> OverallRubric:
+        total = self.website_weight + self.social_weight
+        if abs(total - 1.0) > 0.0001:
+            raise ValueError("overall weights (website_weight + social_weight) must sum to 1.0")
         return self
 
 
@@ -137,6 +161,32 @@ def score_audit(
     }
 
 
+def score_social_audit(social_facts: JsonDict, settings: Settings) -> JsonDict:
+    """Standalone Social Score for the Phase-2 social audit.
+
+    Scores ``rubrics/social.yaml`` against the social facts bundle (from
+    ``stages.social.extractor``). This is independent of the website audit — it never
+    touches the website composite, so website scores are unaffected. Returns no score
+    when collection was skipped/failed (status not complete/partial)."""
+    rubric = load_rubric(settings.rubric_social_path)
+    status = social_facts.get("status") if isinstance(social_facts, dict) else None
+    if status not in {"complete", "partial"}:
+        return {
+            "status": status or "skipped",
+            "rubric_version": rubric.version,
+            "score": None,
+            "category": None,
+        }
+
+    breakdown = score_category({"social": social_facts}, rubric)
+    return {
+        "status": "complete",
+        "rubric_version": rubric.version,
+        "score": breakdown["score"],
+        "category": breakdown,
+    }
+
+
 def _trusted_external_seo_facts(external_seo_facts: JsonDict | None) -> JsonDict:
     if not isinstance(external_seo_facts, dict):
         return {}
@@ -161,7 +211,12 @@ def score_category(facts: JsonDict, rubric: Rubric) -> JsonDict:
     skipped_weight = sum(rule["weight"] for rule in rule_results if rule["result"] == "skipped")
     awarded_points = sum(rule["points_awarded"] for rule in evaluated_rules)
 
-    if not evaluated_rules or evaluated_weight <= 0:
+    # When EVERY rule skipped (no scorable facts) the score is 0 only because there was nothing
+    # to score — which reads identically to a genuine 0. Surface ``data_sufficient`` so consumers
+    # can tell "no data" apart from "scored zero". (Effectively unreachable for the website audit,
+    # whose core rules never skip; defensive, and keeps the numeric score unchanged.)
+    data_sufficient = bool(evaluated_rules) and evaluated_weight > 0
+    if not data_sufficient:
         score = 0
     elif rubric.normalization == "sum_of_weights":
         score = _round_score(awarded_points, rubric.max_score)
@@ -176,6 +231,7 @@ def score_category(facts: JsonDict, rubric: Rubric) -> JsonDict:
         "score": score,
         "max_score": rubric.max_score,
         "normalization": rubric.normalization,
+        "data_sufficient": data_sufficient,
         "weights": {
             "configured": round(sum(rule.weight for rule in rubric.rules), 4),
             "evaluated": round(evaluated_weight, 4),
@@ -202,6 +258,65 @@ def compose_lead_generation_score(
             "seo": seo_score,
             "uxui": uxui_score,
         },
+    }
+
+
+def load_overall_rubric(path: Path) -> OverallRubric:
+    payload = _read_yaml(path)
+    return OverallRubric.model_validate(payload)
+
+
+def _readiness_band(score: int | None) -> str:
+    if score is None:
+        return "unknown"
+    if score >= 75:
+        return "strong"
+    if score >= 50:
+        return "fair"
+    return "weak"
+
+
+def compose_overall_readiness_score(
+    *,
+    website_lead_gen: int | None,
+    social_score: int | None,
+    settings: Settings,
+) -> JsonDict:
+    """Combine the website Lead-Gen composite with the Social Score into one 0-100 Overall
+    Lead-Gen Readiness number (combined audit only). When the social audit produced no score,
+    the readiness rescales to the website Lead-Gen score alone (social weight drops out).
+    Deterministic; half-up rounding to match the rest of the engine. The website composite is
+    untouched — it is consumed here only as a pre-computed input."""
+    rubric = load_overall_rubric(settings.rubric_overall_path)
+    if website_lead_gen is None:
+        return {
+            "status": "skipped",
+            "rubric_version": rubric.version,
+            "score": None,
+            "band": "unknown",
+            "max_score": rubric.max_score,
+            "weights": {"website": rubric.website_weight, "social": rubric.social_weight},
+            "inputs": {"website_lead_gen": website_lead_gen, "social": social_score},
+        }
+
+    if social_score is None:
+        score = _round_score(website_lead_gen, rubric.max_score)
+        status = "website_only"
+        weights = {"website": 1.0, "social": 0.0}
+    else:
+        weighted = website_lead_gen * rubric.website_weight + social_score * rubric.social_weight
+        score = _round_score(weighted, rubric.max_score)
+        status = "complete"
+        weights = {"website": rubric.website_weight, "social": rubric.social_weight}
+
+    return {
+        "status": status,
+        "rubric_version": rubric.version,
+        "score": score,
+        "band": _readiness_band(score),
+        "max_score": rubric.max_score,
+        "weights": weights,
+        "inputs": {"website_lead_gen": website_lead_gen, "social": social_score},
     }
 
 

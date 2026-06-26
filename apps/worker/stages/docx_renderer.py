@@ -197,6 +197,11 @@ def _document_xml(payload: ReportPayload) -> str:
         )
     )
 
+    # Combined audit only: append the Social Media Audit + Overall Lead-Gen Readiness sections at
+    # the VERY END, mirroring the PDF. A website-only audit leaves these None, so the DOCX above
+    # is unchanged (byte-identical to before).
+    parts.extend(_combined_xml(payload))
+
     body = "".join(parts)
     return (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
@@ -365,6 +370,113 @@ def _append_search_rows(parts: list[str], title: str, rows: list[JsonDict], labe
                 f"position={row.get('position', 'N/A')}"
             )
         )
+
+
+def _combined_xml(payload: ReportPayload) -> list[str]:
+    """Combined-audit social + overall sections, appended at the end of the website DOCX. Returns
+    [] for a website-only audit (social_audit/overall_readiness are None), leaving the DOCX
+    unchanged. Mirrors the PDF's appended sections."""
+    parts: list[str] = []
+    social = payload.social_audit
+    overall = payload.overall_readiness
+
+    if social:
+        parts.append(_heading("Social Media Audit", 1))
+        score = social.get("score")
+        score_text = (
+            f"Social Score: {score}/100" if score is not None else "Social Score: not available"
+        )
+        parts.append(_paragraph(score_text, "Strong"))
+        parts.append(
+            _paragraph(
+                "A standalone audit of the brand's public social profiles - profile completeness, "
+                "posting cadence, engagement, and lead-capture signals - scored independently of "
+                "the website."
+            )
+        )
+        status = social.get("status")
+        if status not in ("complete", "partial"):
+            parts.append(
+                _paragraph(
+                    f"Social profiles could not be collected for this audit ({status}), so the "
+                    "social score is unavailable."
+                )
+            )
+        else:
+            platforms = [p for p in (social.get("platforms") or []) if isinstance(p, dict)]
+            if platforms:
+                parts.append(_heading("Profiles audited", 2))
+                for p in platforms:
+                    followers = p.get("followers")
+                    ppm = p.get("posts_per_month")
+                    eng = p.get("avg_engagement_rate_pct")
+                    last = p.get("days_since_last_post")
+                    parts.append(
+                        _bullet(
+                            f"{p.get('platform', '-')} (@{p.get('handle', '-')}): "
+                            f"followers={followers if followers is not None else '-'}, "
+                            f"posts/mo={ppm if ppm is not None else '-'}, "
+                            f"engagement={f'{eng}%' if eng is not None else '-'}, "
+                            f"last post={f'{last}d ago' if last is not None else '-'}"
+                        )
+                    )
+            findings = [f for f in (social.get("findings") or []) if isinstance(f, dict)]
+            if findings:
+                parts.append(_heading("What to improve", 2))
+                for f in findings:
+                    parts.append(
+                        _paragraph(
+                            f"{str(f.get('impact', 'medium')).upper()}: {f.get('label', '')}",
+                            "Strong",
+                        )
+                    )
+                    if f.get("remediation"):
+                        parts.append(_paragraph(f.get("remediation")))
+            else:
+                parts.append(
+                    _paragraph(
+                        "No social findings were surfaced - the audited profiles met the "
+                        "rubric's checks."
+                    )
+                )
+
+    if overall and overall.get("score") is not None:
+        weights = overall.get("weights") or {}
+        inputs = overall.get("inputs") or {}
+        web = inputs.get("website_lead_gen")
+        soc = inputs.get("social")
+        parts.append(_heading("Overall Lead-Gen Readiness", 1))
+        parts.append(
+            _paragraph(f"Overall Lead-Gen Readiness: {overall.get('score')}/100", "Strong")
+        )
+        parts.append(
+            _paragraph(
+                "A single headline score combining the website audit (SEO + UX/UI) and the social "
+                "media audit, weighted toward the website because that is where leads are captured."
+            )
+        )
+        parts.append(
+            _paragraph(
+                f"Website Lead-Gen (SEO + UX/UI): {web if web is not None else '-'} "
+                f"(weight {round(weights.get('website', 0) * 100)}%).",
+                "Meta",
+            )
+        )
+        parts.append(
+            _paragraph(
+                f"Social Media: {soc if soc is not None else '-'} "
+                f"(weight {round(weights.get('social', 0) * 100)}%).",
+                "Meta",
+            )
+        )
+        if overall.get("status") == "website_only":
+            parts.append(
+                _paragraph(
+                    "Social data was unavailable, so this score reflects the website audit only."
+                )
+            )
+
+    return parts
 
 
 def _paragraph(text: Any, style: str | None = None) -> str:

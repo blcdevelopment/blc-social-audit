@@ -1,3 +1,5 @@
+import json
+from dataclasses import replace
 from datetime import UTC, datetime
 
 from sqlalchemy import create_engine
@@ -141,3 +143,94 @@ def test_run_collection_audit_persists_epic_4_artifacts(monkeypatch, tmp_path) -
         assert job.result.validation_log["status"] == "complete"
         assert job.result.pdf_path == str(pdf_path)
         assert job.result.report_metadata["renderer"] == "weasyprint"
+
+
+def _fake_crawler_with_axe(url: str, settings: Settings, audit_id: str | None) -> CrawlResult:
+    """Same as _fake_crawler but with a raw axe-core result attached to the page, so the advisory
+    normalize step has something to produce when the pass is enabled."""
+    result = _fake_crawler(url, settings, audit_id)
+    axe = {
+        "violations": [
+            {
+                "id": "color-contrast",
+                "impact": "serious",
+                "help": "Elements must meet contrast thresholds",
+                "helpUrl": "https://example.org/contrast",
+                "tags": ["wcag2aa", "wcag143"],
+                "nodes": [{"target": [".cta"], "failureSummary": "Fix the contrast ratio."}],
+            }
+        ],
+        "incomplete": [],
+    }
+    result.pages[0] = replace(result.pages[0], axe_results=axe)
+    return result
+
+
+def test_accessibility_advisory_never_changes_scores(monkeypatch, tmp_path) -> None:
+    """The load-bearing guarantee: running the opt-in advisory pass produces byte-for-byte
+    identical scores and score_breakdown vs. not running it; it only fills the separate
+    accessibility_facts column."""
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    TestingSession = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    monkeypatch.setattr(tasks, "SessionLocal", TestingSession)
+
+    pdf_path = tmp_path / "report.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n% unit test placeholder\n")
+    monkeypatch.setattr(
+        tasks,
+        "render_audit_pdf",
+        lambda job, result, settings: tasks.PdfRenderResult(
+            pdf_path=str(pdf_path),
+            report_metadata={"status": "complete", "renderer": "weasyprint"},
+            page_count=1,
+            size_bytes=pdf_path.stat().st_size,
+        ),
+    )
+
+    def _settings(enabled: bool) -> Settings:
+        return Settings(
+            _env_file=None,
+            google_psi_api_key=None,
+            crawler_screenshots_enabled=False,
+            site_health_enabled=False,
+            screaming_frog_enabled=False,
+            google_oauth_client_id="",
+            accessibility_advisory_enabled=enabled,
+            # Path is irrelevant here — the fake crawler injects axe_results directly, so
+            # run_axe_on_page is never called.
+            accessibility_axe_script_path=tmp_path / "unused.js",
+        )
+
+    def _run(enabled: bool) -> dict:
+        monkeypatch.setattr(tasks, "get_settings", lambda: _settings(enabled))
+        with TestingSession() as db:
+            job = AuditJob(
+                url="https://example.com/",
+                status=AuditStatus.QUEUED.value,
+                current_stage="Queued",
+                progress_pct=0,
+            )
+            db.add(job)
+            db.commit()
+            job_id = str(job.id)
+        tasks.run_collection_audit(job_id, crawler=_fake_crawler_with_axe, psi_collector=_fake_psi)
+        with TestingSession() as db:
+            result = db.get(AuditJob, job_id).result
+            return {
+                "scores": (result.seo_score, result.uxui_score, result.lead_gen_score),
+                "breakdown": json.dumps(result.score_breakdown, sort_keys=True),
+                "a11y": result.accessibility_facts,
+            }
+
+    off = _run(False)
+    on = _run(True)
+
+    # Scores + full breakdown are identical whether or not the advisory pass ran.
+    assert off["scores"] == on["scores"]
+    assert off["breakdown"] == on["breakdown"]
+    # Disabled => NULL column / no section; enabled => populated advisory bundle.
+    assert off["a11y"] is None
+    assert on["a11y"] is not None
+    assert on["a11y"]["status"] == "complete"
+    assert any(issue["rule_id"] == "color-contrast" for issue in on["a11y"]["issues"])

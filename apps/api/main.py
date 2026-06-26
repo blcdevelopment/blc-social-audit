@@ -2,10 +2,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
-from apps.api.routes import audits, google, health
+from apps.api.routes import audits, google, health, metrics, shared
 from apps.shared.config import get_settings
+from apps.shared.observability import init_sentry
 
 settings = get_settings()
+init_sentry(settings, component="api")
 
 app = FastAPI(
     title="BLC Website Audit Automation",
@@ -35,8 +37,11 @@ app.add_middleware(
 )
 
 app.include_router(health.router)
+app.include_router(metrics.router)
 app.include_router(audits.router)
 app.include_router(google.router)
+# Public, token-gated report sharing — intentionally NOT behind Clerk auth.
+app.include_router(shared.router)
 
 
 @app.get("/", include_in_schema=False)

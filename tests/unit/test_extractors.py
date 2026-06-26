@@ -94,6 +94,259 @@ def test_uxui_required_field_count_ignores_aria_required_false() -> None:
     assert form["required_field_count"] == 2
 
 
+def test_schema_detects_business_identity_and_malformed_json_ld() -> None:
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+      {"@context":"https://schema.org","@type":"GeneralContractor","name":"Acme"}
+    </script>
+    <script type="application/ld+json">{ this is not valid json }</script>
+    </head><body></body></html>
+    """
+    facts = extract_seo_facts([_page("schema", html)])
+    schema = facts["pages"][0]["schema"]
+    assert schema["json_ld_blocks"] == 2
+    assert schema["json_ld_invalid_blocks"] == 1
+    assert schema["json_ld_valid"] is False
+    assert schema["uses_schema_org_context"] is True
+    assert schema["detected"]["organization"] is True
+    assert schema["detected"]["local_business"] is True  # GeneralContractor -> "contractor"
+    assert facts["summary"]["pages_with_organization_schema"] == 1
+    assert facts["summary"]["pages_with_invalid_json_ld"] == 1
+
+
+def test_schema_detects_breadcrumb_and_faq() -> None:
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+      {"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[]}
+    </script>
+    <script type="application/ld+json">
+      {"@context":"https://schema.org","@type":"FAQPage"}
+    </script>
+    </head><body></body></html>
+    """
+    facts = extract_seo_facts([_page("bc", html)])
+    schema = facts["pages"][0]["schema"]
+    assert schema["detected"]["breadcrumb"] is True
+    assert schema["detected"]["faq"] is True
+    assert schema["json_ld_valid"] is True
+    assert facts["summary"]["has_breadcrumb_schema"] is True
+
+
+def test_security_detects_https_and_mixed_content() -> None:
+    html = """
+    <html><head>
+      <link rel="stylesheet" href="http://cdn.example/a.css">
+    </head><body>
+      <img src="http://cdn.example/img.jpg" alt="x">
+      <script src="https://cdn.example/ok.js"></script>
+    </body></html>
+    """
+    facts = extract_seo_facts([_page("secure", html)])  # _page url is https://
+    sec = facts["pages"][0]["security"]
+    assert sec["https"] is True
+    assert sec["mixed_content_count"] == 2  # http stylesheet + http img; the https script is fine
+    assert facts["summary"]["all_pages_https"] is True
+    assert facts["summary"]["pages_with_mixed_content"] == 1
+    assert facts["summary"]["total_mixed_content"] == 2
+
+
+def test_security_http_page_has_no_mixed_content() -> None:
+    http_page = {
+        "url": "http://insecure.example/",
+        "final_url": "http://insecure.example/",
+        "status_code": 200,
+        "html": '<html><body><img src="http://x/a.jpg"></body></html>',
+    }
+    facts = extract_seo_facts([http_page])
+    sec = facts["pages"][0]["security"]
+    # On a plain-http page the whole page is insecure; we don't double-count "mixed content".
+    assert sec["https"] is False
+    assert sec["mixed_content_count"] == 0
+    assert facts["summary"]["all_pages_https"] is False
+
+
+def test_aeo_detects_clean_hierarchy_question_headings_and_lists() -> None:
+    html = """
+    <html><body><main>
+      <h1>Custom Home Builder</h1>
+      <h2>Our Services</h2>
+      <ul><li>New homes</li><li>Remodels</li><li>Additions</li></ul>
+      <h2>Frequently Asked Questions</h2>
+      <h3>How much does a custom home cost?</h3>
+      <p>It depends on finishes.</p>
+      <h3>Do you offer free estimates?</h3>
+      <p>Yes, after a consultation.</p>
+    </main></body></html>
+    """
+    facts = extract_seo_facts([_page("aeo", html)])
+    aeo = facts["pages"][0]["aeo"]
+    assert aeo["heading_hierarchy_ok"] is True
+    assert aeo["question_heading_count"] == 2  # the two "?" H3s; "Our Services" is not a question
+    assert aeo["content_list_count"] == 1
+    assert aeo["has_extractable_structure"] is True
+    assert facts["summary"]["all_pages_heading_hierarchy_ok"] is True
+    assert facts["summary"]["total_question_headings"] == 2
+    assert facts["summary"]["has_extractable_structure"] is True
+
+
+def test_aeo_flags_skipped_heading_level_and_missing_h1() -> None:
+    skipped = "<html><body><h1>Title</h1><h3>Jumped past H2</h3></body></html>"
+    assert (
+        extract_seo_facts([_page("skip", skipped)])["pages"][0]["aeo"]["heading_hierarchy_ok"]
+        is False
+    )
+
+    no_h1 = "<html><body><h2>Welcome</h2><p>No top-level heading.</p></body></html>"
+    assert (
+        extract_seo_facts([_page("noh1", no_h1)])["pages"][0]["aeo"]["heading_hierarchy_ok"]
+        is False
+    )
+
+
+def test_aeo_excludes_nav_and_tiny_lists_from_extractable_structure() -> None:
+    html = """
+    <html><body>
+      <nav><ul><li>Home</li><li>Services</li><li>Contact</li></ul></nav>
+      <main>
+        <h1>Services</h1>
+        <ul><li>Only</li><li>Two</li></ul>
+      </main>
+    </body></html>
+    """
+    aeo = extract_seo_facts([_page("nav", html)])["pages"][0]["aeo"]
+    # The 3-item nav menu is chrome; the 2-item main list is below the content threshold.
+    assert aeo["content_list_count"] == 0
+    assert aeo["has_extractable_structure"] is False
+
+
+def test_local_detects_complete_nap_schema_address_and_map_link() -> None:
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+      {"@context":"https://schema.org","@type":"GeneralContractor","name":"BLC Homes",
+       "telephone":"+1-512-555-0188",
+       "address":{"@type":"PostalAddress","streetAddress":"100 Congress Ave",
+                  "addressLocality":"Austin"},
+       "areaServed":"Greater Austin"}
+    </script>
+    </head><body>
+      <address>BLC Homes, 100 Congress Ave, Austin, TX</address>
+      <a href="https://www.google.com/maps/place/BLC+Homes">Find us on Google Maps</a>
+    </body></html>
+    """
+    facts = extract_seo_facts([_page("local", html)])
+    local = facts["pages"][0]["local"]
+    assert local["nap_schema_complete"] is True
+    assert local["schema_area_served"] is True
+    assert local["has_address_element"] is True
+    assert local["has_map_or_gbp_link"] is True
+    assert facts["summary"]["has_complete_nap_schema"] is True
+    assert facts["summary"]["has_service_area_markup"] is True
+    assert facts["summary"]["has_map_or_gbp_link"] is True
+    assert facts["summary"]["has_visible_address"] is True
+
+
+def test_local_incomplete_nap_schema_is_not_complete() -> None:
+    # Name + phone but NO address -> NAP is incomplete; no map link or <address> either.
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+      {"@context":"https://schema.org","@type":"LocalBusiness","name":"BLC Homes",
+       "telephone":"+1-512-555-0188"}
+    </script>
+    </head><body><p>No address block here.</p></body></html>
+    """
+    facts = extract_seo_facts([_page("partial", html)])
+    local = facts["pages"][0]["local"]
+    assert local["has_business_schema"] is True
+    assert local["schema_address"] is False
+    assert local["nap_schema_complete"] is False
+    assert facts["summary"]["has_complete_nap_schema"] is False
+    assert facts["summary"]["has_visible_address"] is False
+    assert facts["summary"]["has_map_or_gbp_link"] is False
+
+
+def test_a11y_flags_lang_landmark_zoom_label_and_empty_controls() -> None:
+    html = """
+    <html>
+      <head><meta name="viewport" content="width=device-width, user-scalable=no"></head>
+      <body>
+        <form>
+          <input type="text" name="email">
+          <input type="hidden" name="csrf">
+        </form>
+        <a href="/x"><span aria-hidden="true">&#9733;</span></a>
+        <button type="button"></button>
+      </body>
+    </html>
+    """
+    a11y = extract_seo_facts([_page("bad", html)])["pages"][0]["a11y"]
+    assert a11y["has_lang"] is False
+    assert a11y["has_main_landmark"] is False
+    assert a11y["viewport_blocks_zoom"] is True
+    assert a11y["form_control_count"] == 1  # the hidden input is excluded
+    assert a11y["unlabeled_form_controls"] == 1
+    assert a11y["empty_links"] == 1  # the only text is an aria-hidden star -> no accessible name
+    assert a11y["empty_buttons"] == 1
+
+
+def test_a11y_accepts_accessible_names_and_excludes_decorative() -> None:
+    html = """
+    <html lang="en">
+      <head><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+      <body>
+        <main>
+          <form>
+            <label>Email <input type="email" name="email"></label>
+            <input type="text" name="phone" aria-label="Phone number">
+          </form>
+          <a href="/home" aria-label="Home"><svg></svg></a>
+          <a href="/profile"><img src="/i.png" alt="Your profile"></a>
+          <button aria-label="Close"></button>
+          <input type="submit" value="">
+          <p id="lbl">Search the site</p>
+          <input type="text" name="q" aria-labelledby="lbl">
+        </main>
+      </body>
+    </html>
+    """
+    a11y = extract_seo_facts([_page("good", html)])["pages"][0]["a11y"]
+    assert a11y["has_lang"] is True
+    assert a11y["has_main_landmark"] is True
+    assert a11y["viewport_blocks_zoom"] is False
+    assert a11y["unlabeled_form_controls"] == 0  # wrapping label, aria-label, aria-labelledby
+    assert a11y["empty_links"] == 0  # aria-label and inner img alt both count as names
+    assert a11y["empty_buttons"] == 0  # aria-label button + empty-value submit (UA default text)
+
+
+def test_a11y_gates_inapplicable_rules_and_narrows_duplicate_ids() -> None:
+    # No forms/buttons/links/id-references at all -> those summary facts are None (rule skips).
+    plain = "<html lang='en'><body><main><p>Just prose.</p></main></body></html>"
+    summary = extract_seo_facts([_page("plain", plain)])["summary"]
+    assert summary["unlabeled_form_controls"] is None
+    assert summary["empty_buttons"] is None
+    assert summary["empty_links"] is None
+    assert summary["duplicate_referenced_ids"] is None
+    assert summary["viewport_allows_zoom"] is None  # no viewport meta
+
+    # Generic duplicate ids do NOT count (WCAG 2.2 dropped 4.1.1); only a referenced one does.
+    dup = """
+    <html lang="en"><body><main>
+      <span id="dupe">A</span><span id="dupe">B</span>
+      <span id="solo">Label</span>
+      <label for="dupe">Pick</label>
+      <input type="text" id="field" aria-labelledby="solo">
+    </main></body></html>
+    """
+    a11y = extract_seo_facts([_page("dup", dup)])["pages"][0]["a11y"]
+    assert (
+        a11y["duplicate_referenced_ids"] == 1
+    )  # 'dupe' is duplicated AND referenced by label[for]
+    assert extract_seo_facts([_page("dup", dup)])["summary"]["duplicate_referenced_ids"] == 1
+
+
 def test_extractors_handle_malformed_html_fixture() -> None:
     html = _load_fixture("malformed_site.html")
     expected = _load_expected("malformed_site_expected.json")

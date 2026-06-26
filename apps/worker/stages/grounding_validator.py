@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from copy import deepcopy
 from typing import Any
-
-from apps.worker.stages.commentary import validate_commentary_content
 
 JsonDict = dict[str, Any]
 NUMERIC_RE = re.compile(r"(?<![A-Za-z])[-+]?\d[\d,]*(?:\.\d+)?%?")
@@ -33,6 +32,10 @@ def validate_commentary_grounding(
     *,
     fact_sources: JsonDict,
 ) -> tuple[JsonDict, JsonDict]:
+    # Imported lazily to avoid a module-load cycle: commentary imports the shared social
+    # grounding helpers (collect_social_known_numbers / social_text_has_ungrounded) from here.
+    from apps.worker.stages.commentary import validate_commentary_content
+
     sanitized = deepcopy(commentary)
     content = sanitized.get("content")
     if not isinstance(content, dict):
@@ -157,43 +160,127 @@ def _sanitize_text(
     return result_text
 
 
+# --- Shared numeric grounding ------------------------------------------------------------
+# ONE parameterized implementation backs BOTH grounding paths (P2-24 / SMWA-76): the website
+# path (every number, full precision, sentence-level stripping) and the social commentary path
+# (only "risky" percentages / large counts, integer-or-2dp precision, field-level revert). The
+# paths differ only in their regex + token normalization, supplied below; the recursive walk
+# and the claim extraction are shared, so there is a single tested implementation to maintain.
+
+# Social only flags a likely-fabricated claim: a percentage, or a 3+-digit count/year. Small
+# numbers (cadence like "2-3 posts/week", "30 days") are advice, not claims about the brand.
+_SOCIAL_RISKY_RE = re.compile(r"\d[\d,]*(?:\.\d+)?%|\b\d[\d,]{2,}(?:\.\d+)?\b")
+_SOCIAL_ANY_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
+
+
+def _website_token(value: Any) -> float | None:
+    """Normalize a website number/token to a comparable float (``None`` => not a number)."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return round(float(value), 4)
+    raw = str(value).replace(",", "").removesuffix("%")
+    try:
+        return round(float(raw), 4)
+    except ValueError:
+        return None
+
+
+def _social_token(value: Any) -> str | None:
+    """Normalize a social number/token to an int-or-2dp string (``None`` => skip)."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        number = float(value)
+    else:
+        digits = re.sub(r"[^\d.]", "", str(value)).rstrip(".")
+        if not digits:
+            return None
+        try:
+            number = float(digits)
+        except ValueError:
+            return digits
+    return str(int(number)) if number.is_integer() else str(round(number, 2))
+
+
+class NumericGrounding:
+    """Collect known numbers from fact payloads and flag ungrounded numeric claims in text.
+
+    Parameterized by a collection regex (numbers to harvest from fact strings), a claim regex
+    (numbers in prose that count as factual claims), and a token normalizer, so the website and
+    social paths share the walk/extract logic while keeping their distinct policies.
+    """
+
+    def __init__(
+        self,
+        *,
+        collect_re: re.Pattern[str],
+        claim_re: re.Pattern[str],
+        to_token: Callable[[Any], Any],
+    ) -> None:
+        self._collect_re = collect_re
+        self._claim_re = claim_re
+        self._to_token = to_token
+
+    def known(self, *payloads: Any) -> set:
+        found: set = set()
+        for payload in payloads:
+            self._walk(payload, found)
+        return found
+
+    def _walk(self, value: Any, found: set) -> None:
+        if isinstance(value, bool) or value is None:
+            return
+        if isinstance(value, int | float):
+            token = self._to_token(value)
+            if token is not None:
+                found.add(token)
+        elif isinstance(value, str):
+            for match in self._collect_re.findall(value):
+                token = self._to_token(match)
+                if token is not None:
+                    found.add(token)
+        elif isinstance(value, dict):
+            for child in value.values():
+                self._walk(child, found)
+        elif isinstance(value, list | tuple | set):
+            for child in value:
+                self._walk(child, found)
+
+    def claims(self, text: str) -> list:
+        tokens: list = []
+        for match in self._claim_re.findall(text):
+            token = self._to_token(match)
+            if token is not None:
+                tokens.append(token)
+        return tokens
+
+    def has_ungrounded(self, text: str, known: set) -> bool:
+        return any(token not in known for token in self.claims(text))
+
+
+_WEBSITE = NumericGrounding(collect_re=NUMERIC_RE, claim_re=NUMERIC_RE, to_token=_website_token)
+_SOCIAL = NumericGrounding(
+    collect_re=_SOCIAL_ANY_RE, claim_re=_SOCIAL_RISKY_RE, to_token=_social_token
+)
+
+
 def _known_numeric_values(payload: Any) -> set[float]:
-    values: set[float] = set()
-    _collect_numeric_values(payload, values)
-    return values
-
-
-def _collect_numeric_values(payload: Any, values: set[float]) -> None:
-    if isinstance(payload, bool) or payload is None:
-        return
-    if isinstance(payload, int | float):
-        values.add(_normalize_number(payload))
-        return
-    if isinstance(payload, str):
-        values.update(_numeric_claims(payload))
-        return
-    if isinstance(payload, dict):
-        for child in payload.values():
-            _collect_numeric_values(child, values)
-        return
-    if isinstance(payload, list | tuple | set):
-        for child in payload:
-            _collect_numeric_values(child, values)
+    return _WEBSITE.known(payload)
 
 
 def _numeric_claims(text: str) -> list[float]:
-    claims: list[float] = []
-    for match in NUMERIC_RE.finditer(text):
-        raw = match.group(0).replace(",", "").removesuffix("%")
-        try:
-            claims.append(_normalize_number(float(raw)))
-        except ValueError:
-            continue
-    return claims
+    return _WEBSITE.claims(text)
 
 
-def _normalize_number(value: int | float) -> float:
-    return round(float(value), 4)
+def collect_social_known_numbers(*payloads: Any) -> set[str]:
+    """Known numeric tokens for social grounding (followers, percentages, counts, etc.)."""
+    return _SOCIAL.known(*payloads)
+
+
+def social_text_has_ungrounded(text: str, known: set[str]) -> bool:
+    """True if ``text`` asserts a risky number (percentage / large count) not in ``known``."""
+    return _SOCIAL.has_ungrounded(text, known)
 
 
 def _supported_claim_count(payload: Any, known_values: set[float]) -> int:

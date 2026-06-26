@@ -3,7 +3,9 @@
   margin: 0.72in 0.58in 0.72in 0.58in;
 
   @top-left {
-    content: "Builder Lead Converter · Website Audit · " string(site-domain);
+    /* Use the (possibly white-labeled) brand name, not a hardcoded fallback, so a client-branded
+       PDF carries the client's name on every interior page too. */
+    content: {{ brand.name | tojson }} " · Website Audit · " string(site-domain);
     color: #98a2b3;
     font-size: 8.5pt;
   }
@@ -632,6 +634,91 @@ td span {
 
 .severity-info {
   border-left-color: #98a2b3;
+}
+
+/* axe-core impact levels (advisory accessibility section) reuse the severity card pattern. */
+.severity-critical {
+  border-left-color: #b42318;
+}
+
+.severity-serious {
+  border-left-color: #dc6803;
+}
+
+.severity-moderate {
+  border-left-color: #2e90fa;
+}
+
+.severity-minor {
+  border-left-color: #98a2b3;
+}
+
+.sev-critical {
+  background: #fdecea;
+  color: #b42318;
+}
+
+.sev-serious {
+  background: #fbf1dc;
+  color: #b06a00;
+}
+
+.sev-moderate {
+  background: #e7f0fa;
+  color: #1f74b7;
+}
+
+.sev-minor {
+  background: #eef1f5;
+  color: #5c697a;
+}
+
+.a11y-disclaimer {
+  background: #f8f9fb;
+  border: 1px solid #e4e7ec;
+  border-left: 4px solid #98a2b3;
+  border-radius: 9px;
+  padding: 0.13in 0.16in;
+  margin: 0.1in 0;
+}
+
+.a11y-disclaimer p {
+  color: #475467;
+  font-size: 9.5pt;
+  margin: 0 0 0.05in;
+}
+
+.a11y-disclaimer p:last-child {
+  margin-bottom: 0;
+}
+
+.wcag-ref {
+  color: #5c697a;
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 8pt;
+}
+
+/* Business-opportunity callout (P1/P2) in the Search Performance section. */
+.opportunity-callout {
+  background: #f0f7f1;
+  border: 1px solid #cfe6d4;
+  border-left: 4px solid #2e7d46;
+  border-radius: 9px;
+  padding: 0.16in 0.18in;
+  margin: 0.1in 0 0.16in;
+  break-inside: avoid;
+}
+
+.opportunity-headline {
+  color: #1f2d3d;
+  font-size: 11pt;
+  line-height: 1.5;
+  margin: 0.04in 0 0.08in;
+}
+
+.opportunity-callout .muted {
+  font-size: 8.5pt;
+  margin: 0;
 }
 
 .finding-head,

@@ -14,20 +14,27 @@ from apps.shared.config import Settings, get_settings
 from apps.shared.database import SessionLocal
 from apps.shared.models import AuditJob, AuditResult
 from apps.worker.celery_app import celery_app
-from apps.worker.stages.commentary import generate_commentary
+from apps.worker.stages.commentary import generate_commentary, generate_social_commentary
 from apps.worker.stages.crawler import CrawlResult, crawl_site_sync
 from apps.worker.stages.docx_renderer import DocxRenderResult, render_audit_docx
 from apps.worker.stages.external_seo import collect_external_seo_facts, empty_external_seo_facts
 from apps.worker.stages.extractor_seo import extract_seo_facts
 from apps.worker.stages.extractor_uxui import extract_uxui_facts
 from apps.worker.stages.grounding_validator import validate_commentary_grounding
-from apps.worker.stages.pdf_renderer import PdfRenderResult, render_audit_pdf
+from apps.worker.stages.pdf_renderer import PdfRenderResult, render_audit_pdf, render_social_pdf
 from apps.worker.stages.psi_client import collect_pagespeed_facts
-from apps.worker.stages.scoring import score_audit
+from apps.worker.stages.scoring import (
+    compose_overall_readiness_score,
+    score_audit,
+    score_social_audit,
+)
+from apps.worker.stages.social.collector import collect_social_facts
+from apps.worker.stages.social.report import compose_social_report_payload
 
 JsonDict = dict[str, Any]
 CrawlerFunc = Callable[[str, Settings, str | None], CrawlResult]
 PsiCollectorFunc = Callable[[Sequence[str], Settings], JsonDict]
+SocialCollectorFunc = Callable[[Settings, "dict[str, str] | None"], JsonDict]
 
 
 # Seconds held back after external enrichment for scoring, commentary, grounding,
@@ -62,6 +69,35 @@ def _collect_external_seo_safely(**kwargs: Any) -> JsonDict:
         facts["status"] = "failed"
         facts["error"] = " ".join(str(exc).split())[:500]
         return facts
+
+
+def _collect_accessibility_advisory_safely(
+    crawl_result: CrawlResult, settings: Settings
+) -> JsonDict:
+    """Normalize the advisory axe-core results gathered during the crawl. Advisory-only and
+    must never abort an audit (mirrors external SEO). Returns ``{}`` when the pass is disabled,
+    when no page produced a result, or on any normalization error. NEVER feeds scoring."""
+    if not settings.accessibility_advisory_enabled:
+        return {}
+    try:
+        from apps.worker.stages.accessibility import normalize_accessibility_facts, read_axe_version
+
+        per_page = [
+            {"url": page.final_url or page.url, "result": page.axe_results}
+            for page in crawl_result.pages
+            if getattr(page, "axe_results", None)
+        ]
+        if not per_page:
+            return {}
+        return normalize_accessibility_facts(
+            per_page,
+            max_examples=settings.accessibility_max_examples_per_issue,
+            axe_version=read_axe_version(settings.accessibility_axe_script_path),
+        )
+    except SoftTimeLimitExceeded:
+        raise
+    except Exception:
+        return {}
 
 
 def _mark_job(
@@ -101,6 +137,7 @@ def _upsert_audit_result(
     score_breakdown: JsonDict,
     commentary: JsonDict,
     validation_log: JsonDict,
+    accessibility_facts: JsonDict | None = None,
 ) -> AuditResult:
     result = job.result
     if result is None:
@@ -132,6 +169,8 @@ def _upsert_audit_result(
     result.uxui_facts = uxui_facts
     result.psi_facts = psi_facts
     result.external_seo_facts = external_seo_facts
+    # Advisory-only; stored separately from the scored facts. Empty => NULL => no report section.
+    result.accessibility_facts = accessibility_facts or None
     result.score_breakdown = score_breakdown
     result.commentary = commentary
     result.validation_log = validation_log
@@ -202,11 +241,145 @@ def _page_urls_from_crawled_pages(crawled_pages: JsonDict, fallback_url: str) ->
     return urls or [fallback_url]
 
 
+def _upsert_social_result(
+    db: Session,
+    job: AuditJob,
+    social_facts: JsonDict,
+    social_result: JsonDict,
+) -> AuditResult:
+    rubric_version = str(social_result.get("rubric_version") or "phase2-social")
+    result = job.result
+    if result is None:
+        result = AuditResult(
+            job_id=job.id,
+            seo_score=None,
+            uxui_score=None,
+            lead_gen_score=None,
+            crawled_pages={},
+            seo_facts={},
+            uxui_facts={},
+            psi_facts={},
+            external_seo_facts={},
+            score_breakdown={},
+            commentary={},
+            validation_log={},
+            report_metadata={},
+            pdf_path=None,
+            rubric_version=rubric_version,
+            llm_model="deterministic",
+        )
+        db.add(result)
+
+    result.seo_score = None
+    result.uxui_score = None
+    result.lead_gen_score = None
+    result.social_score = social_result.get("score")
+    result.social_facts = social_facts
+    result.score_breakdown = social_result
+    result.report_metadata = {
+        "status": "pending_pdf_render",
+        "renderer": "weasyprint",
+        "report_kind": "social",
+    }
+    result.pdf_path = None
+    result.rubric_version = rubric_version
+    result.llm_model = "deterministic"
+    db.commit()
+    db.refresh(result)
+    db.refresh(job)
+    return result
+
+
+def _run_social_pipeline(
+    db: Session,
+    job: AuditJob,
+    settings: Settings,
+    social_collector: SocialCollectorFunc,
+) -> None:
+    _mark_job(db, job, AuditStatus.CRAWLING, "Collecting social profiles", 40)
+    social_facts = social_collector(settings, job.social_handles)
+
+    _mark_job(db, job, AuditStatus.SCORING, "Scoring social profiles", 80)
+    social_result = score_social_audit(social_facts, settings)
+
+    result = _upsert_social_result(db, job, social_facts, social_result)
+
+    _mark_job(db, job, AuditStatus.COMMENTING, "Writing social commentary", 88)
+    baseline = compose_social_report_payload(job, result)
+    commentary = generate_social_commentary(
+        audit_context={"handles": job.social_handles, "niche": job.niche},
+        social_facts=social_facts,
+        score=baseline.get("score"),
+        findings=baseline.get("findings") or [],
+        settings=settings,
+    )
+    result.commentary = commentary
+    result.llm_model = commentary.get("model") or result.llm_model
+    db.commit()
+    db.refresh(result)
+
+    _mark_job(db, job, AuditStatus.RENDERING, "Rendering social report", 95)
+    pdf_result = render_social_pdf(job, result, settings)
+    result.report_metadata = {
+        **pdf_result.report_metadata,
+        "exports": {"pdf": pdf_result.report_metadata},
+    }
+    result.pdf_path = pdf_result.pdf_path
+    db.commit()
+    db.refresh(result)
+
+    _mark_job(db, job, AuditStatus.COMPLETE, "Social audit complete", 100)
+
+
+def _augment_with_social(
+    db: Session,
+    job: AuditJob,
+    result: AuditResult,
+    settings: Settings,
+    social_collector: SocialCollectorFunc,
+) -> None:
+    """Combined audit: after the (untouched) website pipeline has scored + persisted, run the
+    social audit and merge it onto the SAME result, then compute the Overall Lead-Gen Readiness
+    score. The website columns and score_breakdown are left intact — we only ADD social_score,
+    social_facts, and the ``social`` / ``overall_readiness`` keys. The existing RENDERING stage
+    then produces ONE combined PDF (compose_report_payload appends the social + overall sections
+    when it sees this data). Social findings here are deterministic (no LLM)."""
+    _mark_job(db, job, AuditStatus.RENDERING, "Auditing social profiles", 96)
+    # Graceful degradation: the social add-on must never sink an already-scored, already-committed
+    # website audit. Do all the fallible work (network collect, rubric load, scoring) BEFORE
+    # mutating the result, so a failure here just leaves the website result intact and the report
+    # renders website-only (no social/overall sections) — mirroring the website pipeline's
+    # skip-on-failure contract. Only SoftTimeLimitExceeded propagates (the task is out of time).
+    try:
+        social_facts = social_collector(settings, job.social_handles)
+        social_result = score_social_audit(social_facts, settings)
+        overall = compose_overall_readiness_score(
+            website_lead_gen=result.lead_gen_score,
+            social_score=social_result.get("score"),
+            settings=settings,
+        )
+    except SoftTimeLimitExceeded:
+        raise
+    except Exception:
+        # Website result is untouched and already committed; render it as a website-only report.
+        return
+
+    breakdown = dict(result.score_breakdown or {})
+    breakdown["social"] = social_result
+    breakdown["overall_readiness"] = overall
+    result.social_score = social_result.get("score")
+    result.social_facts = social_facts
+    result.score_breakdown = breakdown
+    db.commit()
+    db.refresh(result)
+
+
 def run_collection_audit(
     job_id: str,
     *,
     crawler: CrawlerFunc = crawl_site_sync,
     psi_collector: PsiCollectorFunc = collect_pagespeed_facts,
+    social_collector: SocialCollectorFunc = collect_social_facts,
 ) -> None:
     settings = get_settings()
     task_started = time.monotonic()
@@ -217,7 +390,17 @@ def run_collection_audit(
         if job is None:
             return
 
+        # Idempotency: a redelivered task (worker crash + acks_late re-queue) must not re-run and
+        # overwrite an audit that already finished. Re-running a queued/in-progress job is fine —
+        # that is the crash recovery acks_late buys us.
+        if (job.status or "") == AuditStatus.COMPLETE.value:
+            return
+
         try:
+            if (job.audit_type or "website") == "social":
+                _run_social_pipeline(db, job, settings, social_collector)
+                return
+
             _mark_job(db, job, AuditStatus.CRAWLING, "Rendering website pages", 15)
             crawl_result = crawler(job.url, settings, str(job.id))
 
@@ -233,6 +416,10 @@ def run_collection_audit(
             _mark_job(db, job, AuditStatus.EXTRACTING, "Extracting SEO and UX/UI facts", 70)
             seo_facts = extract_seo_facts(crawl_result.pages)
             uxui_facts = extract_uxui_facts(crawl_result.pages)
+            # Advisory-only; computed from axe results gathered during the crawl. Deliberately
+            # NOT passed to score_audit / generate_commentary below, so scores are identical
+            # whether this opt-in pass ran or not.
+            accessibility_facts = _collect_accessibility_advisory_safely(crawl_result, settings)
 
             _mark_job(db, job, AuditStatus.EXTRACTING, "Collecting external SEO insights", 76)
             external_seo_facts = _collect_external_seo_safely(
@@ -297,7 +484,14 @@ def run_collection_audit(
                 score_breakdown,
                 commentary,
                 validation_log,
+                accessibility_facts=accessibility_facts,
             )
+
+            # Combined audit: run the social audit AFTER the website pipeline and merge it onto the
+            # same result, so the single report rendered below appends the social + overall
+            # sections. A plain website audit skips this and is byte-identical to before.
+            if (job.audit_type or "website") == "combined":
+                _augment_with_social(db, job, result, settings, social_collector)
 
             _mark_job(db, job, AuditStatus.RENDERING, "Rendering report exports", 98)
             pdf_result = render_audit_pdf(job, result, settings)
@@ -305,6 +499,21 @@ def run_collection_audit(
             _store_export_results(db, result, pdf_result, docx_result, docx_error)
 
             _mark_job(db, job, AuditStatus.COMPLETE, "Audit report complete", 100)
+        except SoftTimeLimitExceeded:
+            # The soft time limit fired: mark the job FAILED with an honest reason (not an empty
+            # exception repr), then re-raise so Celery records + acks it (no redelivery loop).
+            db.rollback()
+            timed_out = db.get(AuditJob, parsed_job_id)
+            if timed_out is not None:
+                _mark_job(
+                    db,
+                    timed_out,
+                    AuditStatus.FAILED,
+                    "Audit timed out",
+                    timed_out.progress_pct or 0,
+                    "Audit exceeded the time limit and was stopped before completing.",
+                )
+            raise
         except Exception as exc:
             db.rollback()
             failed_job = db.get(AuditJob, parsed_job_id)
@@ -407,6 +616,23 @@ def rerun_external_enrichment_for_audit(job_id: str) -> None:
                     "scores": score_breakdown.get("scores", {}),
                 },
             )
+
+            # Combined audit: the rescore above is website-only, so it lost the `social` and
+            # `overall_readiness` keys _augment_with_social had added. Re-attach the (unchanged)
+            # social breakdown and recompute the Overall Lead-Gen Readiness from the NEW lead-gen
+            # score + the stored Social Score (social is not re-collected here), so a rerun keeps
+            # the combined report intact instead of silently dropping the headline score.
+            if (job.audit_type or "website") == "combined":
+                prev_breakdown = previous["score_breakdown"]
+                if isinstance(prev_breakdown, dict) and isinstance(
+                    prev_breakdown.get("social"), dict
+                ):
+                    score_breakdown["social"] = prev_breakdown["social"]
+                score_breakdown["overall_readiness"] = compose_overall_readiness_score(
+                    website_lead_gen=score_breakdown["scores"]["lead_gen"],
+                    social_score=result.social_score,
+                    settings=settings,
+                )
 
             result.external_seo_facts = external_seo_facts
             result.score_breakdown = score_breakdown

@@ -7,13 +7,19 @@ import Layout from "../../components/Layout";
 import {
   ApiError,
   AuditDetail,
+  AuditShareResponse,
+  OverallReadiness,
   ReportFormat,
   ReportSection,
   RoadmapTier,
   ScoreCard,
+  SocialReport,
   downloadReport,
   getAuditDetail,
   rerunAuditEnrichment,
+  revokeShare,
+  shareAudit,
+  shareUrlFromPath,
 } from "../../lib/api";
 import { formatDate, isTerminal, scoreTone, statusLabel, statusTone } from "../../lib/format";
 
@@ -144,6 +150,57 @@ function recordText(record: Record<string, unknown>, key: string, fallback = "N/
 function ctrText(record: Record<string, unknown>): string {
   const value = record.ctr;
   return typeof value === "number" ? `${(value * 100).toFixed(1)}%` : "N/A";
+}
+
+function AccessibilityBlock({ report }: { report: NonNullable<AuditDetail["report"]> }) {
+  const a11y = report.accessibility_advisory_section;
+  if (!a11y || a11y.status !== "complete") {
+    return null;
+  }
+  const impactLevels = ["critical", "serious", "moderate", "minor"];
+  return (
+    <section className="card">
+      <div className="section-head">
+        <h3>Accessibility (advisory)</h3>
+        <span className="pill">axe-core {a11y.axe_version}</span>
+      </div>
+      <p className="muted">{a11y.disclaimer}</p>
+      <div className="meta-grid">
+        {impactLevels.map((level) => (
+          <div key={level}>
+            <h4>{level}</h4>
+            <p>{a11y.impact_counts[level] ?? 0}</p>
+          </div>
+        ))}
+      </div>
+      {a11y.notes.map((note) => (
+        <p className="muted" key={note}>
+          {note}
+        </p>
+      ))}
+      {a11y.issues.length > 0 ? (
+        <ul>
+          {a11y.issues.map((issue) => (
+            <li key={issue.rule_id}>
+              <strong>{issue.help || issue.rule_id}</strong>{" "}
+              <span className="muted">
+                ({issue.impact}, {issue.instances} affected
+                {issue.wcag_criteria.length > 0 ? ` · ${issue.wcag_criteria.join(", ")}` : ""})
+              </span>
+              {issue.failure_summary && <p className="muted">{issue.failure_summary}</p>}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="muted">
+          The scan flagged no issues beyond the accessibility checks already scored above.
+        </p>
+      )}
+      {a11y.needs_review_count > 0 && (
+        <p className="muted">{a11y.needs_review_count} item(s) need manual review.</p>
+      )}
+    </section>
+  );
 }
 
 function ExternalSeoBlock({
@@ -344,6 +401,117 @@ function ProgressView({ detail }: { detail: AuditDetail }) {
   );
 }
 
+function OverallReadinessBlock({ overall }: { overall: OverallReadiness }) {
+  return (
+    <section className="card section-block">
+      <div className="section-head">
+        <h3>Overall Lead-Gen Readiness</h3>
+      </div>
+      <div className="score-grid">
+        <div className={`score-card tone-${scoreTone(overall.score)}`}>
+          <p className="score-label">Overall Lead-Gen Readiness</p>
+          <p className="score-value">
+            {overall.score ?? "—"}
+            <span className="score-max">/ 100</span>
+          </p>
+          <p className="score-desc">
+            Website {overall.inputs.website_lead_gen ?? "—"} (
+            {Math.round(overall.weights.website * 100)}%) · Social {overall.inputs.social ?? "—"} (
+            {Math.round(overall.weights.social * 100)}%)
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function SocialReportView({ report }: { report: SocialReport }) {
+  return (
+    <>
+      <div className="score-grid">
+        <div className={`score-card tone-${scoreTone(report.score)}`}>
+          <p className="score-label">Social Score</p>
+          <p className="score-value">
+            {report.score ?? "—"}
+            <span className="score-max">/ 100</span>
+          </p>
+          <p className="score-desc">
+            {Object.entries(report.handles)
+              .map(([platform, handle]) => `${platform}: @${handle}`)
+              .join(" · ")}
+          </p>
+        </div>
+      </div>
+
+      {report.executive_summary && (
+        <section className="card section-block">
+          <div className="section-head">
+            <h3>Summary</h3>
+          </div>
+          <p className="summary-text">{report.executive_summary}</p>
+        </section>
+      )}
+
+      {report.findings.length > 0 ? (
+        <section className="card section-block">
+          <div className="section-head">
+            <h3>What to improve</h3>
+          </div>
+          <ul className="finding-list">
+            {report.findings.map((finding) => (
+              <li key={finding.id}>
+                <span className={`sev sev-${finding.impact}`}>{finding.impact}</span>
+                <div>
+                  <strong>{finding.label}</strong>
+                  {finding.narrative ? (
+                    <p>{finding.narrative}</p>
+                  ) : (
+                    finding.remediation && <p>{finding.remediation}</p>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : (
+        <section className="card">
+          <p className="muted">No major issues detected on the audited profiles.</p>
+        </section>
+      )}
+
+      {report.platforms.length > 0 && (
+        <section className="card">
+          <h3>Profiles audited</h3>
+          <table className="audit-table">
+            <thead>
+              <tr>
+                <th>Platform</th>
+                <th>Handle</th>
+                <th>Followers</th>
+                <th>Posts/mo</th>
+                <th>Engagement</th>
+                <th>Last post</th>
+              </tr>
+            </thead>
+            <tbody>
+              {report.platforms.map((platform, index) => (
+                <tr key={index}>
+                  <td>{recordText(platform, "platform")}</td>
+                  <td>@{recordText(platform, "handle", "")}</td>
+                  <td>{recordNumberText(platform, "followers")}</td>
+                  <td>{recordText(platform, "posts_per_month", "—")}</td>
+                  <td>{recordText(platform, "avg_engagement_rate_pct", "—")}</td>
+                  <td>{recordText(platform, "days_since_last_post", "—")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+    </>
+  );
+}
+
 export default function AuditDetailPage() {
   const router = useRouter();
   const { getToken } = useAuth();
@@ -355,6 +523,10 @@ export default function AuditDetailPage() {
   const [downloading, setDownloading] = useState<ReportFormat | null>(null);
   const [enriching, setEnriching] = useState(false);
   const [pollNonce, setPollNonce] = useState(0);
+  const [share, setShare] = useState<AuditShareResponse | null>(null);
+  const [shareError, setShareError] = useState<string | null>(null);
+  const [sharing, setSharing] = useState(false);
+  const [shareCopied, setShareCopied] = useState(false);
 
   async function handleDownload(format: ReportFormat) {
     if (!detail) return;
@@ -400,6 +572,48 @@ export default function AuditDetailPage() {
       );
     } finally {
       setEnriching(false);
+    }
+  }
+
+  async function handleShare() {
+    if (!detail) return;
+    setShareError(null);
+    setShareCopied(false);
+    setSharing(true);
+    try {
+      const token = await getToken();
+      const response = await shareAudit(detail.job_id, token);
+      setShare(response);
+    } catch (error) {
+      setShareError(error instanceof ApiError ? error.message : "Could not create a share link.");
+    } finally {
+      setSharing(false);
+    }
+  }
+
+  async function handleRevokeShare() {
+    if (!detail) return;
+    setShareError(null);
+    setSharing(true);
+    try {
+      const token = await getToken();
+      await revokeShare(detail.job_id, token);
+      setShare(null);
+      setShareCopied(false);
+    } catch (error) {
+      setShareError(error instanceof ApiError ? error.message : "Could not revoke the share link.");
+    } finally {
+      setSharing(false);
+    }
+  }
+
+  async function handleCopyShare() {
+    if (!share) return;
+    try {
+      await navigator.clipboard.writeText(shareUrlFromPath(share.report_path));
+      setShareCopied(true);
+    } catch {
+      setShareError("Copy failed — select and copy the link manually.");
     }
   }
 
@@ -504,7 +718,7 @@ export default function AuditDetailPage() {
               <ProgressView detail={detail} />
             )}
 
-            {detail.status === "complete" && detail.report && (
+            {detail.status === "complete" && detail.audit_type !== "social" && detail.report && (
               <>
                 <div className="result-actions card">
                   <div>
@@ -542,11 +756,54 @@ export default function AuditDetailPage() {
                       >
                         {downloading === "docx" ? "Downloading DOCX..." : "Download DOCX"}
                       </button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        onClick={handleShare}
+                        disabled={sharing}
+                      >
+                        {sharing ? "Working..." : share ? "Refresh link" : "Share"}
+                      </button>
                     </div>
                   ) : (
                     <span className="muted">Report exports unavailable.</span>
                   )}
                 </div>
+
+                {share && (
+                  <div className="card share-panel">
+                    <p className="muted">
+                      Anyone with this link can view the report without signing in, until{" "}
+                      {formatDate(share.share_expires_at)}.
+                    </p>
+                    <div className="share-row">
+                      <input
+                        type="text"
+                        className="share-link-input"
+                        readOnly
+                        value={shareUrlFromPath(share.report_path)}
+                        onFocus={(event) => event.target.select()}
+                      />
+                      <button type="button" className="btn btn-secondary" onClick={handleCopyShare}>
+                        {shareCopied ? "Copied" : "Copy"}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        onClick={handleRevokeShare}
+                        disabled={sharing}
+                      >
+                        Revoke
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {shareError && (
+                  <div className="alert alert-danger" role="alert">
+                    {shareError}
+                  </div>
+                )}
 
                 {downloadError && (
                   <div className="alert alert-danger" role="alert">
@@ -574,6 +831,8 @@ export default function AuditDetailPage() {
                 {detail.report.sections.map((section) => (
                   <SectionBlock key={section.id} section={section} />
                 ))}
+
+                <AccessibilityBlock report={detail.report} />
 
                 <RoadmapBlock roadmap={detail.report.roadmap} />
 
@@ -605,8 +864,106 @@ export default function AuditDetailPage() {
                     <p className="muted">{detail.report.metadata.llm_model}</p>
                   </div>
                 </section>
+
+                {/* Combined audit: the social media report + overall readiness score are appended
+                    at the VERY END here, mirroring the PDF. The SEO/UX-UI sections above are
+                    untouched; these render only when social data is present (combined audit). */}
+                {detail.report.social_audit && (
+                  <>
+                    <section className="card section-block">
+                      <div className="section-head">
+                        <h3>Social Media Audit</h3>
+                      </div>
+                    </section>
+                    <SocialReportView report={detail.report.social_audit} />
+                  </>
+                )}
+
+                {detail.report.overall_readiness &&
+                  detail.report.overall_readiness.score !== null && (
+                    <OverallReadinessBlock overall={detail.report.overall_readiness} />
+                  )}
               </>
             )}
+
+            {detail.status === "complete" &&
+              detail.audit_type === "social" &&
+              detail.social_report && (
+                <>
+                  <div className="result-actions card">
+                    <div>
+                      <h2>Social audit complete</h2>
+                      <p className="muted">
+                        Generated {detail.social_report.generated_date} ·{" "}
+                        {detail.social_report.platforms_audited} profile(s)
+                      </p>
+                    </div>
+                    {detail.report_available ? (
+                      <div className="download-buttons">
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          onClick={() => handleDownload("pdf")}
+                          disabled={downloading !== null}
+                        >
+                          {downloading === "pdf" ? "Downloading PDF..." : "Download PDF"}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          onClick={handleShare}
+                          disabled={sharing}
+                        >
+                          {sharing ? "Working..." : share ? "Refresh link" : "Share"}
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="muted">Report export unavailable.</span>
+                    )}
+                  </div>
+
+                  {share && (
+                    <div className="card share-panel">
+                      <p className="muted">
+                        Anyone with this link can view the report without signing in, until{" "}
+                        {formatDate(share.share_expires_at)}.
+                      </p>
+                      <div className="share-row">
+                        <input
+                          type="text"
+                          className="share-link-input"
+                          readOnly
+                          value={shareUrlFromPath(share.report_path)}
+                          onFocus={(event) => event.target.select()}
+                        />
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          onClick={handleCopyShare}
+                        >
+                          {shareCopied ? "Copied" : "Copy"}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          onClick={handleRevokeShare}
+                          disabled={sharing}
+                        >
+                          Revoke
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {(shareError || downloadError) && (
+                    <div className="alert alert-danger" role="alert">
+                      {shareError || downloadError}
+                    </div>
+                  )}
+
+                  <SocialReportView report={detail.social_report} />
+                </>
+              )}
           </>
         )}
       </div>

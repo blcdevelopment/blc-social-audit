@@ -4,7 +4,59 @@ from pathlib import Path
 from apps.shared.config import Settings
 from apps.worker.stages.extractor_seo import extract_seo_facts
 from apps.worker.stages.extractor_uxui import extract_uxui_facts
-from apps.worker.stages.scoring import load_composite_rubric, load_rubric, score_audit
+from apps.worker.stages.scoring import (
+    Rubric,
+    RubricRule,
+    load_composite_rubric,
+    load_rubric,
+    score_audit,
+    score_category,
+)
+
+
+def test_data_sufficient_distinguishes_all_skip_from_genuine_zero() -> None:
+    # Every rule skips (fact absent + skip_if_missing): score is 0 only because nothing was
+    # scorable, so data_sufficient must be False (not indistinguishable from a real 0).
+    all_skip = Rubric(
+        version="t-skip",
+        category="seo",
+        max_score=100,
+        normalization="rescale_to_max",
+        rules=[
+            RubricRule(
+                id="seo.absent",
+                description="needs a fact that is absent",
+                weight=10,
+                fact_path="seo.summary.absent",
+                evaluator="boolean",
+                skip_if_missing=True,
+            )
+        ],
+    )
+    out = score_category({"seo": {"summary": {}}}, all_skip)
+    assert out["score"] == 0
+    assert out["data_sufficient"] is False
+
+    # A scorable rule => data_sufficient True and a real score.
+    scored = Rubric(
+        version="t-ok",
+        category="seo",
+        max_score=100,
+        normalization="rescale_to_max",
+        rules=[
+            RubricRule(
+                id="seo.present",
+                description="present fact",
+                weight=10,
+                fact_path="seo.summary.present",
+                evaluator="boolean",
+            )
+        ],
+    )
+    out2 = score_category({"seo": {"summary": {"present": True}}}, scored)
+    assert out2["score"] == 100
+    assert out2["data_sufficient"] is True
+
 
 FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures"
 
@@ -45,9 +97,9 @@ def test_phase_1_rubrics_load_and_validate() -> None:
     uxui = load_rubric(settings.rubric_uxui_path)
     composite = load_composite_rubric(settings.rubric_composite_path)
 
-    assert seo.version == "phase1-seo-v4"
+    assert seo.version == "phase2-seo-v11"
     assert uxui.version == "phase1-uxui-v2"
-    assert sum(rule.weight for rule in seo.rules) == 158
+    assert sum(rule.weight for rule in seo.rules) == 261
     assert sum(rule.weight for rule in uxui.rules) == 100
     assert composite.weights == {"seo": 0.45, "uxui": 0.55}
 
@@ -76,7 +128,12 @@ def test_scoring_is_reproducible_for_same_facts() -> None:
     second = score_audit(seo, uxui, _psi(), settings)
 
     assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
-    assert first["categories"]["seo"]["weights"]["skipped"] == 78
+    # The CrUX CWV rules (7+6+5) and the 2 technical-crawl rules added in P2-16 (canonicals 5 +
+    # redirect_chains 5) all skip_if_missing when the fixture carries no field/external-crawl data.
+    # The P2-13 AEO rules are NOT skip_if_missing (they read on-page facts always present), so they
+    # are scored here. The P2-15 a11y unique_referenced_ids rule (weight 2) skips on this fixture
+    # because it uses no id-referencing label/ARIA attributes, so the skipped total is 106 + 2.
+    assert first["categories"]["seo"]["weights"]["skipped"] == 108
     assert first["categories"]["seo"]["score"] >= 85
 
 

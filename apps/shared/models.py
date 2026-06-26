@@ -39,6 +39,9 @@ def json_type():
     return JSON().with_variant(JSONB, "postgresql")
 
 
+JsonDict = dict[str, Any]
+
+
 class Base(DeclarativeBase):
     pass
 
@@ -56,12 +59,18 @@ class AuditJob(Base):
         ),
         Index("idx_audit_jobs_status", "status"),
         Index("idx_audit_jobs_created", "created_at"),
+        Index("idx_audit_jobs_share_token", "share_token", unique=True),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
     url: Mapped[str] = mapped_column(Text, nullable=False)
     niche: Mapped[str | None] = mapped_column(String(255))
     target_audience: Mapped[str | None] = mapped_column(String(255))
+    # "website" (default) or "social" — selects which pipeline run_collection_audit runs.
+    # Social audits are standalone (own report + Social Score; website scoring untouched).
+    audit_type: Mapped[str] = mapped_column(String(20), nullable=False, default="website")
+    # {platform: handle} for social audits (e.g. {"instagram": "acmebuilders"}); null for website.
+    social_handles: Mapped[JsonDict | None] = mapped_column(json_type())
     status: Mapped[str] = mapped_column(
         String(50), nullable=False, default=AuditStatus.QUEUED.value
     )
@@ -73,13 +82,16 @@ class AuditJob(Base):
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Per-client white-label branding overrides (name / colors / logo_url) applied at render.
+    brand_overrides: Mapped[JsonDict | None] = mapped_column(json_type())
+    # Read-only report sharing: a random token grants access to the report without a Clerk
+    # session until share_expires_at. A null token means not shared / revoked.
+    share_token: Mapped[str | None] = mapped_column(String(64))
+    share_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     result: Mapped[AuditResult | None] = relationship(
         back_populates="job", cascade="all, delete-orphan", uselist=False
     )
-
-
-JsonDict = dict[str, Any]
 
 
 class AuditResult(Base):
@@ -90,14 +102,22 @@ class AuditResult(Base):
     job_id: Mapped[uuid.UUID] = mapped_column(
         GUID(), ForeignKey("audit_jobs.id", ondelete="CASCADE"), nullable=False, unique=True
     )
-    seo_score: Mapped[int] = mapped_column(Integer, nullable=False)
-    uxui_score: Mapped[int] = mapped_column(Integer, nullable=False)
-    lead_gen_score: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Website-audit scores are nullable so a SOCIAL audit result can leave them empty and
+    # populate social_score instead. A website audit always sets all three.
+    seo_score: Mapped[int | None] = mapped_column(Integer)
+    uxui_score: Mapped[int | None] = mapped_column(Integer)
+    lead_gen_score: Mapped[int | None] = mapped_column(Integer)
+    social_score: Mapped[int | None] = mapped_column(Integer)
+    social_facts: Mapped[JsonDict | None] = mapped_column(json_type())
     crawled_pages: Mapped[JsonDict] = mapped_column(json_type(), nullable=False, default=dict)
     seo_facts: Mapped[JsonDict] = mapped_column(json_type(), nullable=False, default=dict)
     uxui_facts: Mapped[JsonDict] = mapped_column(json_type(), nullable=False, default=dict)
     psi_facts: Mapped[JsonDict] = mapped_column(json_type(), nullable=False, default=dict)
     external_seo_facts: Mapped[JsonDict] = mapped_column(json_type(), nullable=False, default=dict)
+    # Advisory-only axe-core accessibility findings (P2-15b). Nullable; populated only when the
+    # opt-in pass runs. NEVER read by scoring — kept in its own column so it can't be confused
+    # with the trust-gated, scored external_seo_facts.
+    accessibility_facts: Mapped[JsonDict | None] = mapped_column(json_type())
     score_breakdown: Mapped[JsonDict] = mapped_column(json_type(), nullable=False, default=dict)
     commentary: Mapped[JsonDict] = mapped_column(json_type(), nullable=False, default=dict)
     validation_log: Mapped[JsonDict] = mapped_column(json_type(), nullable=False, default=dict)
@@ -118,6 +138,12 @@ class GoogleSearchConsoleConnection(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
     account_email: Mapped[str] = mapped_column(String(320), nullable=False, unique=True)
+    # Google OAuth tokens. Stored unencrypted by deliberate decision: this is a single internal
+    # VM where DB read access and shell access (where any encryption key would live in .env)
+    # belong to the same handful of operators, so at-rest encryption with a co-located key would
+    # add no real protection against that threat model — only churn. The one genuine residual
+    # risk is a DB dump leaving the box, so keep backups (scripts/backup_db.py output) on-box and
+    # access-controlled. Revisit if Google credentials ever need to outlive this trust boundary.
     access_token: Mapped[str | None] = mapped_column(Text)
     refresh_token: Mapped[str | None] = mapped_column(Text)
     token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

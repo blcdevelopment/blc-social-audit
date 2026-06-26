@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from urllib.parse import quote, urlencode, urlparse
@@ -274,6 +275,7 @@ def collect_search_analytics(
     opportunities = _ranking_opportunities(top_queries)
     low_ctr_pages = _low_ctr_pages(top_pages)
     declining_pages = _declining_pages(top_pages, previous_pages)
+    brand_token = _brand_token(site_url)
     return {
         "status": "complete",
         "source": "search_console_api",
@@ -291,6 +293,11 @@ def collect_search_analytics(
         "ranking_opportunities": opportunities[:25],
         "high_impression_low_ctr_pages": low_ctr_pages[:25],
         "declining_pages": declining_pages[:25],
+        # Business-opportunity framing (P1-P4); see helpers above. Stored as facts so the grounding
+        # validator keeps any executive-summary prose that cites these numbers.
+        "opportunity": _opportunity_estimate(opportunities),
+        "branded": _branded_split(top_queries, site_url),
+        "topic_clusters": _topic_clusters(top_queries, brand_token)[:8],
         "started_at": started_at,
         "completed_at": _utc_now(),
     }
@@ -452,6 +459,212 @@ def _low_ctr_pages(rows: list[JsonDict]) -> list[JsonDict]:
         for row in rows
         if float(row.get("impressions") or 0) >= 100 and float(row.get("ctr") or 0) <= 0.02
     ]
+
+
+# --- Business-opportunity framing (P1-P4) ------------------------------------------------------
+# These helpers translate the site's OWN Search Console data into business-shaped, leading-indicator
+# facts (clicks/leads left on the table, branded demand, topic-cluster visibility). Every number is
+# a transparent function of real GSC impressions/CTR + published benchmarks, stored as a FACT so the
+# grounding validator keeps any prose that cites it. They are estimates/ranges, never guarantees,
+# and never a revenue/CAC figure (out of scope without CRM data). Half-up rounding (int(x + 0.5))
+# matches the project convention.
+
+# Published organic CTR-by-position meta-analysis (First Page Sage, 2025). Used only to model the
+# opportunity range from real impressions; positions past 10 fall back to the position-10 CTR.
+_CTR_CURVE: dict[int, float] = {
+    1: 0.398,
+    2: 0.187,
+    3: 0.102,
+    4: 0.072,
+    5: 0.051,
+    6: 0.044,
+    7: 0.030,
+    8: 0.021,
+    9: 0.019,
+    10: 0.016,
+}
+_CTR_CURVE_SOURCE = "First Page Sage organic CTR-by-position meta-analysis (2025)"
+# Conservative target band: model near-miss pages reaching the top of page 1 (position 5 = low end,
+# position 3 = high end). Never position 1 — that would overstate the opportunity.
+_OPPORTUNITY_TARGET_LOW, _OPPORTUNITY_TARGET_HIGH = 5, 3
+# Published home-services service-page contact (call/form) conversion benchmark RANGE — an industry
+# figure, NOT measured on the audited site; only ever applied as a labeled range, never x job value.
+_LEAD_RATE_LOW_PCT, _LEAD_RATE_HIGH_PCT = 5, 10
+
+_CLUSTER_STOPWORDS = frozenset(
+    {
+        "the",
+        "and",
+        "for",
+        "with",
+        "your",
+        "you",
+        "our",
+        "best",
+        "near",
+        "are",
+        "can",
+        "does",
+        "how",
+        "what",
+        "when",
+        "where",
+        "why",
+        "who",
+        "cost",
+        "costs",
+        "price",
+        "prices",
+        "near me",
+        "company",
+        "companies",
+        "service",
+        "services",
+        "contractor",
+        "contractors",
+        "home",
+        "homes",
+    }
+)
+
+
+def _ctr_at(position: int) -> float:
+    return _CTR_CURVE.get(max(1, min(position, 10)), _CTR_CURVE[10])
+
+
+def _opportunity_for_target(rows: list[JsonDict], target_position: int) -> float:
+    target_ctr = _ctr_at(target_position)
+    total = 0.0
+    for row in rows:
+        impressions = float(row.get("impressions") or 0)
+        current_ctr = float(row.get("ctr") or 0)
+        # Never model a query BELOW its current real CTR; only the upside delta counts.
+        total += max(0.0, impressions * (max(target_ctr, current_ctr) - current_ctr))
+    return total
+
+
+def _opportunity_estimate(striking_rows: list[JsonDict]) -> JsonDict:
+    """P1+P2: deterministic 'clicks/leads left on the table' from the striking-distance set."""
+    if not striking_rows:
+        return {}
+    total_impressions = sum(float(row.get("impressions") or 0) for row in striking_rows)
+    current_clicks = sum(
+        float(row.get("impressions") or 0) * float(row.get("ctr") or 0) for row in striking_rows
+    )
+    opp_low = _opportunity_for_target(striking_rows, _OPPORTUNITY_TARGET_LOW)
+    opp_high = _opportunity_for_target(striking_rows, _OPPORTUNITY_TARGET_HIGH)
+    opp_clicks_low, opp_clicks_high = int(opp_low + 0.5), int(opp_high + 0.5)
+    # No modeled headroom (every near-miss query already out-performs the target CTR) => emit
+    # nothing rather than a degenerate "0 to 0 more visits" estimate; the callout simply won't show.
+    if opp_clicks_high <= 0:
+        return {}
+    return {
+        "is_estimate": True,
+        "striking_query_count": len(striking_rows),
+        "total_striking_impressions": int(total_impressions + 0.5),
+        "current_clicks": int(current_clicks + 0.5),
+        "opportunity_clicks_low": opp_clicks_low,
+        "opportunity_clicks_high": opp_clicks_high,
+        "estimated_leads_low": int(opp_clicks_low * _LEAD_RATE_LOW_PCT / 100 + 0.5),
+        "estimated_leads_high": int(opp_clicks_high * _LEAD_RATE_HIGH_PCT / 100 + 0.5),
+        "lead_rate_low_pct": _LEAD_RATE_LOW_PCT,
+        "lead_rate_high_pct": _LEAD_RATE_HIGH_PCT,
+        "target_position_low": _OPPORTUNITY_TARGET_LOW,
+        "target_position_high": _OPPORTUNITY_TARGET_HIGH,
+        "ctr_curve_source": _CTR_CURVE_SOURCE,
+    }
+
+
+def _brand_token(site_url: str) -> str:
+    host = (urlparse(site_url).hostname or "").lower().removeprefix("www.")
+    labels = [label for label in host.split(".") if label]
+    name = labels[-2] if len(labels) >= 2 else (labels[0] if labels else "")
+    return re.sub(r"[^a-z0-9]", "", name)
+
+
+def _branded_split(rows: list[JsonDict], site_url: str) -> JsonDict:
+    """P3: branded vs non-branded demand split. A query is branded if the site's registrable name
+    appears in its alphanumerics (so 'builder lead converter' matches builderleadconverter.com)."""
+    token = _brand_token(site_url)
+    if len(token) < 3:
+        return {}
+    branded_impr = branded_clicks = total_impr = total_clicks = 0.0
+    branded_count = 0
+    for row in rows:
+        impressions = float(row.get("impressions") or 0)
+        clicks = float(row.get("clicks") or 0)
+        total_impr += impressions
+        total_clicks += clicks
+        if token in re.sub(r"[^a-z0-9]", "", str(row.get("query") or "").lower()):
+            branded_impr += impressions
+            branded_clicks += clicks
+            branded_count += 1
+    if total_impr <= 0:
+        return {}
+    return {
+        "brand_token": token,
+        "branded_query_count": branded_count,
+        "branded_impressions": int(branded_impr + 0.5),
+        "branded_clicks": int(branded_clicks + 0.5),
+        "nonbranded_impressions": int(total_impr - branded_impr + 0.5),
+        "nonbranded_clicks": int(total_clicks - branded_clicks + 0.5),
+        "branded_impression_share_pct": int((branded_impr / total_impr) * 100 + 0.5),
+    }
+
+
+def _query_tokens(query: str, brand_token: str) -> list[str]:
+    tokens = re.split(r"[^a-z0-9]+", query.lower())
+    return [
+        token
+        for token in tokens
+        if len(token) >= 4 and token not in _CLUSTER_STOPWORDS and token != brand_token
+    ]
+
+
+def _topic_clusters(
+    rows: list[JsonDict], brand_token: str, *, max_clusters: int = 6
+) -> list[JsonDict]:
+    """P4: deterministic topic-cluster visibility. Seeds are the highest-impression content tokens
+    across the query set; each query joins the first seed it contains. No LLM, no external
+    taxonomy."""
+    weights: dict[str, float] = {}
+    for row in rows:
+        impressions = float(row.get("impressions") or 0)
+        for token in _query_tokens(str(row.get("query") or ""), brand_token):
+            weights[token] = weights.get(token, 0.0) + impressions
+    if not weights:
+        return []
+    seeds = [token for token, _ in sorted(weights.items(), key=lambda kv: (-kv[1], kv[0]))][
+        :max_clusters
+    ]
+    buckets: dict[str, dict[str, float]] = {
+        seed: {"impressions": 0.0, "position_weight": 0.0, "count": 0.0} for seed in seeds
+    }
+    for row in rows:
+        impressions = float(row.get("impressions") or 0)
+        position = float(row.get("position") or 0)
+        tokens = set(_query_tokens(str(row.get("query") or ""), brand_token))
+        seed = next((candidate for candidate in seeds if candidate in tokens), None)
+        if seed is None:
+            continue
+        bucket = buckets[seed]
+        bucket["impressions"] += impressions
+        bucket["position_weight"] += position * impressions
+        bucket["count"] += 1
+    clusters = [
+        {
+            "cluster": seed,
+            "query_count": int(bucket["count"]),
+            "impressions": int(bucket["impressions"] + 0.5),
+            "avg_position": round(bucket["position_weight"] / bucket["impressions"], 1)
+            if bucket["impressions"] > 0
+            else 0.0,
+        }
+        for seed, bucket in buckets.items()
+        if bucket["count"] > 0 and bucket["impressions"] > 0
+    ]
+    clusters.sort(key=lambda item: (-item["impressions"], item["cluster"]))
+    return clusters
 
 
 def _declining_pages(current_rows: list[JsonDict], previous_rows: list[JsonDict]) -> list[JsonDict]:

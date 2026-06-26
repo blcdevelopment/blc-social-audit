@@ -232,6 +232,48 @@ def test_link_sweep_blocks_redirects_to_private_hosts(monkeypatch) -> None:
     assert summary["unreachable_internal_urls"] == 0
 
 
+def test_sweep_counts_internal_redirect_chains() -> None:
+    # /a -> /b -> /final (2 hops = a chain); /one -> /final (1 hop = a single redirect, not chain).
+    chain = {
+        "http://site.example/a": ("http://site.example/b", 301),
+        "http://site.example/b": ("http://site.example/final", 301),
+        "http://site.example/one": ("http://site.example/final", 301),
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = str(request.url)
+        if path in chain:
+            location, status = chain[path]
+            return httpx.Response(status, headers={"Location": location}, request=request)
+        return httpx.Response(200, request=request)
+
+    async def run() -> dict:
+        summary: dict = {}
+        examples: dict = defaultdict(list)
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+            follow_redirects=False,
+        ) as client:
+            await site_health._sweep(
+                client,
+                internal_urls=["http://site.example/a", "http://site.example/one"],
+                external_urls=[],
+                settings=_settings(),
+                summary=summary,
+                examples=examples,
+                notes=[],
+                host_allowed_cache={},
+            )
+        return summary
+
+    summary = asyncio.run(run())
+    # Both redirected, so both count as "redirecting"; only the 2-hop /a is a chain.
+    assert summary["redirecting_internal_urls"] == 2
+    assert summary["redirect_chain_internal_urls"] == 1
+    # Neither is a broken link — they all resolve to a final 200.
+    assert summary.get("client_error_internal_urls", 0) == 0
+
+
 def test_sweep_does_not_report_bot_blocked_external_links() -> None:
     """Outbound 401/403/429/451 are bot-blocking, not broken links.
 

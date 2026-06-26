@@ -11,7 +11,7 @@ from markupsafe import Markup
 from pydantic import BaseModel, ConfigDict, Field
 
 from apps.shared.config import Settings
-from apps.worker.stages.report_branding import load_brand_config
+from apps.worker.stages.report_branding import apply_brand_overrides, load_brand_config
 from apps.worker.stages.report_payload import (
     REPORT_PAYLOAD_VERSION,
     ReportPayload,
@@ -34,7 +34,12 @@ class PdfRenderResult(BaseModel):
 def render_audit_pdf(job: Any, result: Any, settings: Settings) -> PdfRenderResult:
     payload = compose_report_payload(job, result)
     output_path = _output_path(settings.local_report_storage_dir, str(job.id))
-    return render_report_pdf(payload, settings=settings, output_path=output_path)
+    return render_report_pdf(
+        payload,
+        settings=settings,
+        output_path=output_path,
+        brand_overrides=getattr(job, "brand_overrides", None),
+    )
 
 
 def render_report_pdf(
@@ -42,6 +47,7 @@ def render_report_pdf(
     *,
     settings: Settings,
     output_path: Path,
+    brand_overrides: JsonDict | None = None,
 ) -> PdfRenderResult:
     _ensure_font_cache()
     from weasyprint import HTML
@@ -51,6 +57,8 @@ def render_report_pdf(
     css_path = settings.report_css_path
     brand = load_brand_config(settings.brand_config_path)
     brand_context = brand.template_context(config_path=settings.brand_config_path)
+    # Per-client white-label overrides (apps/shared/models.AuditJob.brand_overrides).
+    brand_context = apply_brand_overrides(brand_context, brand_overrides)
     html = _render_html(
         payload=payload,
         template_path=template_path,
@@ -85,6 +93,62 @@ def render_report_pdf(
     return PdfRenderResult(
         pdf_path=str(output_path),
         report_metadata=report_metadata,
+        page_count=len(document.pages),
+        size_bytes=size_bytes,
+    )
+
+
+def render_social_pdf(job: Any, result: Any, settings: Settings) -> PdfRenderResult:
+    """Render the standalone Social audit report (separate template; PDF only)."""
+    from apps.worker.stages.social.report import compose_social_report_payload
+
+    payload = compose_social_report_payload(job, result)
+    output_path = _output_path(settings.local_report_storage_dir, str(job.id))
+    _ensure_font_cache()
+    from weasyprint import HTML
+
+    rendered_at = datetime.now(UTC)
+    template_path = settings.report_social_template_path
+    if not template_path.exists():
+        raise FileNotFoundError(f"Social report template does not exist: {template_path}")
+
+    brand = load_brand_config(settings.brand_config_path)
+    brand_context = apply_brand_overrides(
+        brand.template_context(config_path=settings.brand_config_path),
+        getattr(job, "brand_overrides", None),
+    )
+    env = Environment(
+        loader=FileSystemLoader(str(template_path.parent)),
+        autoescape=select_autoescape(("html", "xml")),
+        undefined=StrictUndefined,
+        trim_blocks=True,
+        lstrip_blocks=True,
+    )
+    template = env.get_template(template_path.name)
+    html = template.render(payload=payload, brand=brand_context)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    document = HTML(string=html, base_url=str(template_path.parent.resolve())).render()
+    document.write_pdf(target=str(output_path))
+
+    size_bytes = output_path.stat().st_size
+    return PdfRenderResult(
+        pdf_path=str(output_path),
+        report_metadata={
+            "status": "complete",
+            "renderer": "weasyprint",
+            "renderer_version": PDF_RENDERER_VERSION,
+            "report_kind": "social",
+            "report_payload_version": payload["version"],
+            "generated_at": rendered_at.isoformat(),
+            "pdf_path": str(output_path),
+            "pdf_size_bytes": size_bytes,
+            "page_count": len(document.pages),
+            "template_path": str(template_path),
+            "brand_config_path": str(settings.brand_config_path),
+            "brand_logo_used": brand_context["logo_exists"],
+            "storage": {"type": "local_filesystem", "directory": str(output_path.parent)},
+        },
         page_count=len(document.pages),
         size_bytes=size_bytes,
     )

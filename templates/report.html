@@ -92,9 +92,19 @@
         <li><a href="#technical-seo">Technical SEO</a></li>
         <li><a href="#search-performance">Search Performance</a></li>
         <li><a href="#uxui">UX/UI Findings</a></li>
+        {% if payload.accessibility_advisory_section.status == "complete" %}
+        <li><a href="#accessibility">Accessibility (Advisory)</a></li>
+        {% endif %}
+        <li><a href="#local-context">Local Context</a></li>
         <li><a href="#roadmap">Roadmap</a></li>
         <li><a href="#appendix">Appendix</a></li>
         <li><a href="#visual-analytics">Visual Analytics</a></li>
+        {% if payload.get('social_audit') %}
+        <li><a href="#social-media">Social Media Audit</a></li>
+        {% endif %}
+        {% if payload.get('overall_readiness') %}
+        <li><a href="#overall-readiness">Overall Lead-Gen Readiness</a></li>
+        {% endif %}
       </ol>
     </section>
 
@@ -296,7 +306,8 @@
           <p>
             Fix high-severity crawl issues first, especially errors on important service,
             location, or lead pages. Use the example URLs as the starting list for the
-            web team or CMS editor.
+            web team or CMS editor. In lead-generation terms: pages search engines cannot
+            reach or read cannot earn the calls and form fills that grow the business.
           </p>
         </article>
       </div>
@@ -388,6 +399,69 @@
           </p>
         </article>
       </div>
+
+      {% set opp = payload.search_performance_section.opportunity %}
+      {% if search_available and opp.get("is_estimate") %}
+        <div class="opportunity-callout">
+          <p class="eyebrow">The opportunity</p>
+          <p class="opportunity-headline">
+            Your site already shows up for about {{ opp.total_striking_impressions }} searches a
+            month on its {{ opp.striking_query_count }} near-miss pages, but captures only about
+            {{ opp.current_clicks }} of those clicks. Lifting them to the top of the first page
+            could bring an estimated
+            <strong>{{ opp.opportunity_clicks_low }}–{{ opp.opportunity_clicks_high }} more
+            visits/month</strong> — roughly {{ opp.estimated_leads_low }}–{{ opp.estimated_leads_high }}
+            more leads at a {{ opp.lead_rate_low_pct }}–{{ opp.lead_rate_high_pct }}% contact rate.
+          </p>
+          <p class="muted">
+            Estimate — models your near-miss pages (positions 4–20) reaching positions
+            {{ opp.target_position_high }}–{{ opp.target_position_low }}, using your real Search
+            Console impressions and published click-through rates ({{ opp.ctr_curve_source }}). The
+            {{ opp.lead_rate_low_pct }}–{{ opp.lead_rate_high_pct }}% contact rate is a home-services
+            industry benchmark, not measured on your site. These are leading indicators that predict
+            lead flow; your booked revenue lives in your CRM and call tracking, which this audit does
+            not measure. Not a guarantee.
+          </p>
+        </div>
+      {% endif %}
+
+      {% set branded = payload.search_performance_section.branded %}
+      {% if search_available and branded.get("brand_token") %}
+        <h3>Branded vs non-branded demand</h3>
+        <p class="helper-copy">
+          Branded searches (people already looking for you by name) signal demand and trust;
+          non-branded searches are new prospects discovering you for the first time. About
+          {{ branded.branded_impression_share_pct }}% of your impressions are branded.
+        </p>
+        <dl class="metric-list inline">
+          <div><dt>Branded impressions</dt><dd>{{ branded.branded_impressions }}</dd></div>
+          <div><dt>Non-branded impressions</dt><dd>{{ branded.nonbranded_impressions }}</dd></div>
+          <div><dt>Branded queries</dt><dd>{{ branded.branded_query_count }}</dd></div>
+        </dl>
+      {% endif %}
+
+      {% if search_available and payload.search_performance_section.topic_clusters %}
+        <h3>Visibility by topic</h3>
+        <p class="helper-copy">
+          Your search demand, auto-grouped into themes from your own pages and queries. Use it to
+          see which service topics are strong and which are near-invisible.
+        </p>
+        <table class="compact-table">
+          <thead>
+            <tr><th>Topic</th><th>Queries</th><th>Impressions</th><th>Avg position</th></tr>
+          </thead>
+          <tbody>
+            {% for cluster in payload.search_performance_section.topic_clusters %}
+              <tr>
+                <td>{{ cluster.cluster }}</td>
+                <td>{{ cluster.query_count }}</td>
+                <td>{{ cluster.impressions }}</td>
+                <td>{{ cluster.avg_position }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% endif %}
 
       {% if search_available and payload.search_performance_section.high_impression_low_ctr_pages %}
         <h3>High-impression, low-CTR pages</h3>
@@ -505,6 +579,114 @@
       {% endif %}
     </section>
 
+    {% if payload.accessibility_advisory_section.status == "complete" %}
+    {% set a11y = payload.accessibility_advisory_section %}
+    <section class="page-section" id="accessibility">
+      <p class="eyebrow">Accessibility (Advisory)</p>
+      <h2>Automated accessibility scan</h2>
+
+      <div class="a11y-disclaimer">
+        <p><strong>About this section — advisory, not a compliance verdict.</strong></p>
+        <p>{{ a11y.disclaimer }}</p>
+      </div>
+
+      <dl class="metric-list">
+        <div><dt>Tool</dt><dd>axe-core {{ a11y.axe_version }}</dd></div>
+        <div><dt>Pages scanned</dt><dd>{{ a11y.pages_scanned }}</dd></div>
+        <div><dt>Critical</dt><dd>{{ a11y.impact_counts.get("critical", 0) }}</dd></div>
+        <div><dt>Serious</dt><dd>{{ a11y.impact_counts.get("serious", 0) }}</dd></div>
+        <div><dt>Moderate</dt><dd>{{ a11y.impact_counts.get("moderate", 0) }}</dd></div>
+        <div><dt>Minor</dt><dd>{{ a11y.impact_counts.get("minor", 0) }}</dd></div>
+      </dl>
+
+      {% for note in a11y.notes %}
+      <p class="muted">{{ note }}</p>
+      {% endfor %}
+
+      {% if a11y.issues %}
+      <div class="technical-issue-list">
+        {% for issue in a11y.issues %}
+        <article class="technical-issue severity-{{ issue.impact }}">
+          <div class="technical-issue-head">
+            <span class="sev-pill sev-{{ issue.impact }}">{{ issue.impact }}</span>
+            {% if issue.wcag_criteria %}
+            <span class="wcag-ref">{{ issue.wcag_criteria | join(", ") }}</span>
+            {% endif %}
+            <span class="count-chip">{{ issue.instances }} affected</span>
+          </div>
+          <h4 class="issue-title">{{ issue.help or issue.rule_id }}</h4>
+          {% if issue.failure_summary %}
+          <div class="issue-guidance">
+            <p>{{ issue.failure_summary }}</p>
+          </div>
+          {% endif %}
+          {% if issue.example_selectors %}
+          <div class="issue-locations">
+            <p class="location-label">Example elements:</p>
+            <ul class="url-list">
+              {% for selector in issue.example_selectors %}
+              <li><code>{{ selector }}</code></li>
+              {% endfor %}
+            </ul>
+          </div>
+          {% endif %}
+          {% if issue.example_pages %}
+          <p class="muted">Seen on: {{ issue.example_pages | join(", ") }}.</p>
+          {% endif %}
+          {% if issue.help_url %}
+          <p class="muted">How to fix: {{ issue.help_url }}</p>
+          {% endif %}
+        </article>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="muted">
+        The automated scan flagged no additional issues beyond the accessibility checks already
+        covered in the scored SEO section. Manual review is still recommended.
+      </p>
+      {% endif %}
+
+      {% if a11y.needs_review_count > 0 %}
+      <p class="muted">
+        {{ a11y.needs_review_count }} item(s) could not be determined automatically and need
+        manual review.
+      </p>
+      {% endif %}
+    </section>
+    {% endif %}
+
+    <section class="page-section" id="local-context">
+      <p class="eyebrow">Context for a local business</p>
+      <h2>Where your leads really come from</h2>
+      <div class="section-guide">
+        <article>
+          <h3>The local pack is your #1 lead driver</h3>
+          <p>
+            For a local service business, the Google Map pack and your Google Business Profile
+            drive more calls and direction requests than classic blue-link rankings — local
+            searchers click the map results more often than the standard listings. This audit
+            checks the on-page signals that support local ranking (business-identity and
+            address structured data, a visible address, a Maps/Profile link, and service-area
+            markup — see the SEO findings). It cannot see your Business Profile itself, so the
+            next step is to claim and complete it, gather reviews, and keep your name, address,
+            and phone identical everywhere.
+          </p>
+        </article>
+        <article>
+          <h3>AI Overviews — and why your money searches are more insulated</h3>
+          <p>
+            Google's AI Overviews are reducing clicks, but mostly on broad informational
+            searches where a summary answers the question. Your highest-value searches are
+            local and high-intent ("builder near me", "kitchen remodel [city]") and the Map
+            pack — these are far less substitutable by a summary. The defensive plays are the
+            same ones that win locally: own the local pack and Business Profile, earn reviews,
+            and give clear, well-structured answers (headings, FAQs, and schema) so answer
+            engines can cite you.
+          </p>
+        </article>
+      </div>
+    </section>
+
     <section class="page-section" id="roadmap">
       <p class="eyebrow">Action Roadmap</p>
       <h2>Prioritized lead generation roadmap</h2>
@@ -584,7 +766,9 @@
         <h3>Core Web Vitals</h3>
         <p class="helper-copy">
           The detailed PageSpeed Insights metrics behind the performance score, rated the
-          way Google rates them: green is good, amber needs improvement, red is poor.
+          way Google rates them: green is good, amber needs improvement, red is poor. These
+          are a conversion lever, not just a score: slow pages on a phone lose visitors before
+          they ever call or fill in the form.
         </p>
         <table class="cwv-table">
           <thead>
@@ -922,5 +1106,120 @@
         </p>
       {% endif %}
     </section>
+
+    {# ----- Combined audit: appended social media + overall readiness sections ----- #}
+    {# Rendered only for a combined audit (payload.social_audit / overall_readiness populated). #}
+    {# A website-only report leaves both None, so nothing below renders and the PDF is unchanged. #}
+    {% if payload.get('social_audit') %}
+    {% set social = payload.get('social_audit') %}
+    {% set sscore = social.score %}
+    {% set sband = "strong" if (sscore is not none and sscore >= 75) else ("fair" if (sscore is not none and sscore >= 50) else "weak") %}
+    {% set band_colors = {"strong": "#28864b", "fair": "#c98a16", "weak": "#b42318"} %}
+    <section class="page-section" id="social-media">
+      <p class="eyebrow">Social Media Audit</p>
+      <h2>Social media presence</h2>
+      <p class="helper-copy">
+        A standalone audit of the brand's public social profiles &mdash; profile completeness,
+        posting cadence, engagement, and lead-capture signals &mdash; scored independently of the
+        website.
+      </p>
+
+      <div style="display:flex; align-items:flex-end; gap:16px; margin:16px 0 10px;">
+        <div style="font-size:40px; line-height:1; font-weight:700; color:{{ band_colors.get(sband, '#667085') }};">
+          {% if sscore is not none %}{{ sscore }}<span style="font-size:18px; color:#667085; font-weight:600;">/100</span>{% else %}<span style="color:#667085;">&mdash;</span>{% endif %}
+        </div>
+        <div class="muted" style="padding-bottom:4px;">
+          Social Score{% if social.platforms_audited %} &middot; {{ social.platforms_audited }} platform{{ "s" if social.platforms_audited != 1 else "" }} audited{% endif %}
+        </div>
+      </div>
+
+      {% if social.status not in ["complete", "partial"] %}
+        <p class="muted">Social profiles could not be collected for this audit ({{ social.status }}), so the social score is unavailable. Provide reachable public handles and re-run to populate it.</p>
+      {% else %}
+        {% if social.platforms %}
+        <table style="width:100%; border-collapse:collapse; margin:10px 0 16px; font-size:11px;">
+          <thead>
+            <tr style="text-align:left; border-bottom:2px solid #e4e7ec;">
+              <th style="padding:6px 8px;">Platform</th>
+              <th style="padding:6px 8px;">Handle</th>
+              <th style="padding:6px 8px; text-align:right;">Followers</th>
+              <th style="padding:6px 8px; text-align:right;">Posts/mo</th>
+              <th style="padding:6px 8px; text-align:right;">Engagement</th>
+              <th style="padding:6px 8px; text-align:right;">Last post</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in social.platforms %}
+            <tr style="border-bottom:1px solid #f0f1f3;">
+              <td style="padding:6px 8px; text-transform:capitalize;">{{ p.get("platform", "&mdash;") }}</td>
+              <td style="padding:6px 8px;">{{ p.get("handle", "&mdash;") }}</td>
+              <td style="padding:6px 8px; text-align:right;">{{ p.get("followers") if p.get("followers") is not none else "&mdash;" }}</td>
+              <td style="padding:6px 8px; text-align:right;">{{ p.get("posts_per_month") if p.get("posts_per_month") is not none else "&mdash;" }}</td>
+              <td style="padding:6px 8px; text-align:right;">{% if p.get("avg_engagement_rate_pct") is not none %}{{ p.get("avg_engagement_rate_pct") }}%{% else %}&mdash;{% endif %}</td>
+              <td style="padding:6px 8px; text-align:right;">{% if p.get("days_since_last_post") is not none %}{{ p.get("days_since_last_post") }}d ago{% else %}&mdash;{% endif %}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% endif %}
+
+        {% if social.findings %}
+        <h3 style="margin-top:8px;">What to improve</h3>
+        <ul>
+          {% for f in social.findings %}
+          <li style="margin-bottom:6px;"><strong>{{ f.label }}</strong>{% if f.remediation %} &mdash; {{ f.remediation }}{% endif %} <span class="muted">({{ f.impact }} impact)</span></li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="muted">No social findings were surfaced &mdash; the audited profiles met the rubric's checks.</p>
+        {% endif %}
+      {% endif %}
+    </section>
+    {% endif %}
+
+    {% if payload.get('overall_readiness') %}
+    {% set overall = payload.get('overall_readiness') %}
+    {% set oscore = overall.score %}
+    {% set oband_colors = {"strong": "#28864b", "fair": "#c98a16", "weak": "#b42318"} %}
+    <section class="page-section" id="overall-readiness">
+      <p class="eyebrow">Overall</p>
+      <h2>Overall Lead-Gen Readiness</h2>
+      <p class="helper-copy">
+        A single headline score combining the website audit (SEO + UX/UI) and the social media
+        audit, weighted toward the website because that is where leads are captured.
+      </p>
+
+      <div style="display:flex; align-items:flex-end; gap:16px; margin:16px 0 12px;">
+        <div style="font-size:54px; line-height:1; font-weight:800; color:{{ oband_colors.get(overall.band, '#667085') }};">
+          {% if oscore is not none %}{{ oscore }}<span style="font-size:22px; color:#667085; font-weight:600;">/100</span>{% else %}<span style="color:#667085;">&mdash;</span>{% endif %}
+        </div>
+        <div class="muted" style="padding-bottom:6px; text-transform:capitalize;">{{ overall.band }} readiness</div>
+      </div>
+
+      <table style="width:100%; border-collapse:collapse; font-size:11px; margin-top:6px;">
+        <tbody>
+          <tr style="border-bottom:1px solid #f0f1f3;">
+            <td style="padding:6px 8px;">Website Lead-Gen (SEO + UX/UI)</td>
+            <td style="padding:6px 8px; text-align:right;">{{ overall.inputs.website_lead_gen if overall.inputs.website_lead_gen is not none else "&mdash;" }}</td>
+            <td style="padding:6px 8px; text-align:right; color:#667085;">weight {{ (overall.weights.website * 100) | round | int }}%</td>
+          </tr>
+          <tr style="border-bottom:1px solid #f0f1f3;">
+            <td style="padding:6px 8px;">Social Media</td>
+            <td style="padding:6px 8px; text-align:right;">{{ overall.inputs.social if overall.inputs.social is not none else "&mdash;" }}</td>
+            <td style="padding:6px 8px; text-align:right; color:#667085;">weight {{ (overall.weights.social * 100) | round | int }}%</td>
+          </tr>
+          <tr style="border-top:2px solid #e4e7ec; font-weight:700;">
+            <td style="padding:6px 8px;">Overall Lead-Gen Readiness</td>
+            <td style="padding:6px 8px; text-align:right;">{{ oscore if oscore is not none else "&mdash;" }}</td>
+            <td style="padding:6px 8px;"></td>
+          </tr>
+        </tbody>
+      </table>
+
+      {% if overall.status == "website_only" %}
+      <p class="muted" style="margin-top:8px;">Social data was unavailable, so this score reflects the website audit only.</p>
+      {% endif %}
+    </section>
+    {% endif %}
   </body>
 </html>

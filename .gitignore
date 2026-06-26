@@ -245,7 +245,7 @@ apps/frontend/tsconfig.tsbuildinfo
 !apps/frontend/lib/
 !apps/frontend/lib/**
 .claude/
-Claude.md
+CLAUDE.md
 https://www.builderleadconverter.com/
 seo_audits/
 semrush_ai_insights/
