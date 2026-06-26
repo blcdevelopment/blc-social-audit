@@ -173,6 +173,9 @@ class Settings(BaseSettings):
     rubric_uxui_path: Path = Path("./rubrics/uxui.yaml")
     rubric_composite_path: Path = Path("./rubrics/composite.yaml")
     rubric_social_path: Path = Path("./rubrics/social.yaml")
+    # Combined-audit Overall Lead-Gen Readiness weights (website composite + social). Combined
+    # audits only; website/social audits never load it.
+    rubric_overall_path: Path = Path("./rubrics/overall.yaml")
     commentary_system_prompt_path: Path = Path("./prompts/commentary_system.md")
     commentary_user_prompt_path: Path = Path("./prompts/commentary_user.md")
     commentary_social_system_prompt_path: Path = Path("./prompts/commentary_social_system.md")

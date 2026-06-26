@@ -99,6 +99,12 @@
         <li><a href="#roadmap">Roadmap</a></li>
         <li><a href="#appendix">Appendix</a></li>
         <li><a href="#visual-analytics">Visual Analytics</a></li>
+        {% if payload.social_audit %}
+        <li><a href="#social-media">Social Media Audit</a></li>
+        {% endif %}
+        {% if payload.overall_readiness %}
+        <li><a href="#overall-readiness">Overall Lead-Gen Readiness</a></li>
+        {% endif %}
       </ol>
     </section>
 
@@ -1100,5 +1106,120 @@
         </p>
       {% endif %}
     </section>
+
+    {# ----- Combined audit: appended social media + overall readiness sections ----- #}
+    {# Rendered only for a combined audit (payload.social_audit / overall_readiness populated). #}
+    {# A website-only report leaves both None, so nothing below renders and the PDF is unchanged. #}
+    {% if payload.social_audit %}
+    {% set social = payload.social_audit %}
+    {% set sscore = social.score %}
+    {% set sband = "strong" if (sscore is not none and sscore >= 75) else ("fair" if (sscore is not none and sscore >= 50) else "weak") %}
+    {% set band_colors = {"strong": "#28864b", "fair": "#c98a16", "weak": "#b42318"} %}
+    <section class="page-section" id="social-media">
+      <p class="eyebrow">Social Media Audit</p>
+      <h2>Social media presence</h2>
+      <p class="helper-copy">
+        A standalone audit of the brand's public social profiles &mdash; profile completeness,
+        posting cadence, engagement, and lead-capture signals &mdash; scored independently of the
+        website.
+      </p>
+
+      <div style="display:flex; align-items:flex-end; gap:16px; margin:16px 0 10px;">
+        <div style="font-size:40px; line-height:1; font-weight:700; color:{{ band_colors.get(sband, '#667085') }};">
+          {% if sscore is not none %}{{ sscore }}<span style="font-size:18px; color:#667085; font-weight:600;">/100</span>{% else %}<span style="color:#667085;">&mdash;</span>{% endif %}
+        </div>
+        <div class="muted" style="padding-bottom:4px;">
+          Social Score{% if social.platforms_audited %} &middot; {{ social.platforms_audited }} platform{{ "s" if social.platforms_audited != 1 else "" }} audited{% endif %}
+        </div>
+      </div>
+
+      {% if social.status not in ["complete", "partial"] %}
+        <p class="muted">Social profiles could not be collected for this audit ({{ social.status }}), so the social score is unavailable. Provide reachable public handles and re-run to populate it.</p>
+      {% else %}
+        {% if social.platforms %}
+        <table style="width:100%; border-collapse:collapse; margin:10px 0 16px; font-size:11px;">
+          <thead>
+            <tr style="text-align:left; border-bottom:2px solid #e4e7ec;">
+              <th style="padding:6px 8px;">Platform</th>
+              <th style="padding:6px 8px;">Handle</th>
+              <th style="padding:6px 8px; text-align:right;">Followers</th>
+              <th style="padding:6px 8px; text-align:right;">Posts/mo</th>
+              <th style="padding:6px 8px; text-align:right;">Engagement</th>
+              <th style="padding:6px 8px; text-align:right;">Last post</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in social.platforms %}
+            <tr style="border-bottom:1px solid #f0f1f3;">
+              <td style="padding:6px 8px; text-transform:capitalize;">{{ p.get("platform", "&mdash;") }}</td>
+              <td style="padding:6px 8px;">{{ p.get("handle", "&mdash;") }}</td>
+              <td style="padding:6px 8px; text-align:right;">{{ p.get("followers") if p.get("followers") is not none else "&mdash;" }}</td>
+              <td style="padding:6px 8px; text-align:right;">{{ p.get("posts_per_month") if p.get("posts_per_month") is not none else "&mdash;" }}</td>
+              <td style="padding:6px 8px; text-align:right;">{% if p.get("avg_engagement_rate_pct") is not none %}{{ p.get("avg_engagement_rate_pct") }}%{% else %}&mdash;{% endif %}</td>
+              <td style="padding:6px 8px; text-align:right;">{% if p.get("days_since_last_post") is not none %}{{ p.get("days_since_last_post") }}d ago{% else %}&mdash;{% endif %}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% endif %}
+
+        {% if social.findings %}
+        <h3 style="margin-top:8px;">What to improve</h3>
+        <ul>
+          {% for f in social.findings %}
+          <li style="margin-bottom:6px;"><strong>{{ f.label }}</strong>{% if f.remediation %} &mdash; {{ f.remediation }}{% endif %} <span class="muted">({{ f.impact }} impact)</span></li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="muted">No social findings were surfaced &mdash; the audited profiles met the rubric's checks.</p>
+        {% endif %}
+      {% endif %}
+    </section>
+    {% endif %}
+
+    {% if payload.overall_readiness %}
+    {% set overall = payload.overall_readiness %}
+    {% set oscore = overall.score %}
+    {% set oband_colors = {"strong": "#28864b", "fair": "#c98a16", "weak": "#b42318"} %}
+    <section class="page-section" id="overall-readiness">
+      <p class="eyebrow">Overall</p>
+      <h2>Overall Lead-Gen Readiness</h2>
+      <p class="helper-copy">
+        A single headline score combining the website audit (SEO + UX/UI) and the social media
+        audit, weighted toward the website because that is where leads are captured.
+      </p>
+
+      <div style="display:flex; align-items:flex-end; gap:16px; margin:16px 0 12px;">
+        <div style="font-size:54px; line-height:1; font-weight:800; color:{{ oband_colors.get(overall.band, '#667085') }};">
+          {% if oscore is not none %}{{ oscore }}<span style="font-size:22px; color:#667085; font-weight:600;">/100</span>{% else %}<span style="color:#667085;">&mdash;</span>{% endif %}
+        </div>
+        <div class="muted" style="padding-bottom:6px; text-transform:capitalize;">{{ overall.band }} readiness</div>
+      </div>
+
+      <table style="width:100%; border-collapse:collapse; font-size:11px; margin-top:6px;">
+        <tbody>
+          <tr style="border-bottom:1px solid #f0f1f3;">
+            <td style="padding:6px 8px;">Website Lead-Gen (SEO + UX/UI)</td>
+            <td style="padding:6px 8px; text-align:right;">{{ overall.inputs.website_lead_gen if overall.inputs.website_lead_gen is not none else "&mdash;" }}</td>
+            <td style="padding:6px 8px; text-align:right; color:#667085;">weight {{ (overall.weights.website * 100) | round | int }}%</td>
+          </tr>
+          <tr style="border-bottom:1px solid #f0f1f3;">
+            <td style="padding:6px 8px;">Social Media</td>
+            <td style="padding:6px 8px; text-align:right;">{{ overall.inputs.social if overall.inputs.social is not none else "&mdash;" }}</td>
+            <td style="padding:6px 8px; text-align:right; color:#667085;">weight {{ (overall.weights.social * 100) | round | int }}%</td>
+          </tr>
+          <tr style="border-top:2px solid #e4e7ec; font-weight:700;">
+            <td style="padding:6px 8px;">Overall Lead-Gen Readiness</td>
+            <td style="padding:6px 8px; text-align:right;">{{ oscore if oscore is not none else "&mdash;" }}</td>
+            <td style="padding:6px 8px;"></td>
+          </tr>
+        </tbody>
+      </table>
+
+      {% if overall.status == "website_only" %}
+      <p class="muted" style="margin-top:8px;">Social data was unavailable, so this score reflects the website audit only.</p>
+      {% endif %}
+    </section>
+    {% endif %}
   </body>
 </html>

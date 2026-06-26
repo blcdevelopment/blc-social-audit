@@ -38,6 +38,9 @@ function RowScores({ audit }: { audit: AuditListItem }) {
   if (audit.seo_score === null) return <span className="tag tag-neutral">Incomplete</span>;
   return (
     <div className="score-cells">
+      {audit.audit_type === "combined" &&
+        audit.overall_score !== null &&
+        audit.overall_score !== undefined && <ScoreCell score={audit.overall_score} />}
       <ScoreCell score={audit.lead_gen_score} />
       <ScoreCell score={audit.seo_score} />
       <ScoreCell score={audit.uxui_score} />
@@ -224,7 +227,7 @@ export default function AuditsHistoryPage() {
                       <th>Status</th>
                       <th>Submitted</th>
                       <th>
-                        Scores <span className="th-hint">Lead · SEO · UX · Social</span>
+                        Scores <span className="th-hint">Overall · Lead · SEO · UX · Social</span>
                       </th>
                       <th className="col-actions">Actions</th>
                     </tr>
@@ -235,10 +238,18 @@ export default function AuditsHistoryPage() {
                         <td className="col-url">
                           <span
                             className={`badge badge-${
-                              audit.audit_type === "social" ? "progress" : "neutral"
+                              audit.audit_type === "social"
+                                ? "progress"
+                                : audit.audit_type === "combined"
+                                  ? "success"
+                                  : "neutral"
                             }`}
                           >
-                            {audit.audit_type === "social" ? "Social" : "Web"}
+                            {audit.audit_type === "social"
+                              ? "Social"
+                              : audit.audit_type === "combined"
+                                ? "Full"
+                                : "Web"}
                           </span>{" "}
                           <Link href={`/audit/${audit.job_id}`} className="url-link">
                             {audit.url}

@@ -20,7 +20,9 @@ export interface BrandOverrides {
 
 export interface AuditCreateRequest {
   url?: string | null;
-  audit_type?: "website" | "social";
+  // "combined" runs the website audit then the social audit and returns ONE report with the
+  // social section + Overall Lead-Gen Readiness appended (needs url AND >=1 handle).
+  audit_type?: "website" | "social" | "combined";
   niche?: string | null;
   target_audience?: string | null;
   brand_overrides?: BrandOverrides | null;
@@ -52,6 +54,17 @@ export interface SocialReport {
   roadmap: Record<string, SocialReportFinding[]>;
 }
 
+// Combined-audit Overall Lead-Gen Readiness (website composite blended with the Social Score).
+export interface OverallReadiness {
+  status: string;
+  rubric_version: string;
+  score: number | null;
+  band: string;
+  max_score: number;
+  weights: { website: number; social: number };
+  inputs: { website_lead_gen: number | null; social: number | null };
+}
+
 export interface AuditCreateResponse {
   job_id: string;
   status: string;
@@ -78,6 +91,7 @@ export interface AuditListItem {
   uxui_score: number | null;
   lead_gen_score: number | null;
   social_score: number | null;
+  overall_score?: number | null;
   report_available: boolean;
 }
 
@@ -275,6 +289,9 @@ export interface ReportPayload {
   technical_seo_section: TechnicalSeoSection;
   search_performance_section: SearchPerformanceSection;
   accessibility_advisory_section?: AccessibilityAdvisorySection;
+  // Combined-audit only: the social section + overall readiness appended to the website report.
+  social_audit?: SocialReport | null;
+  overall_readiness?: OverallReadiness | null;
 }
 
 export interface AuditDetail {
@@ -296,6 +313,7 @@ export interface AuditDetail {
   uxui_score?: number | null;
   lead_gen_score?: number | null;
   social_score?: number | null;
+  overall_score?: number | null;
   report: ReportPayload | null;
   social_report?: SocialReport | null;
 }

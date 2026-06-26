@@ -61,6 +61,17 @@ def _report_recorded(job: AuditJob) -> bool:
     return bool(job.result and job.result.pdf_path)
 
 
+def _overall_score(job: AuditJob) -> int | None:
+    """The combined-audit Overall Lead-Gen Readiness score (stored under
+    score_breakdown.overall_readiness). None for website/social-only audits."""
+    breakdown = getattr(job.result, "score_breakdown", None)
+    if isinstance(breakdown, dict):
+        overall = breakdown.get("overall_readiness")
+        if isinstance(overall, dict):
+            return overall.get("score")
+    return None
+
+
 def _docx_path(job: AuditJob) -> Path | None:
     if not job.result:
         return None
@@ -113,6 +124,7 @@ def _detail_response(job: AuditJob) -> AuditDetailResponse:
         uxui_score=result.uxui_score if result else None,
         lead_gen_score=result.lead_gen_score if result else None,
         social_score=result.social_score if result else None,
+        overall_score=_overall_score(job),
         report=report,
         social_report=social_report,
     )
@@ -133,6 +145,7 @@ def _list_item(job: AuditJob) -> AuditListItem:
         uxui_score=result.uxui_score if result else None,
         lead_gen_score=result.lead_gen_score if result else None,
         social_score=result.social_score if result else None,
+        overall_score=_overall_score(job),
         report_available=_report_recorded(job),
     )
 
@@ -152,6 +165,21 @@ def create_audit(
         job = AuditJob(
             url=_social_primary_url(handles),
             audit_type="social",
+            social_handles=handles,
+            niche=payload.niche,
+            target_audience=payload.target_audience,
+            brand_overrides=brand_overrides,
+            status=AuditStatus.QUEUED.value,
+            current_stage="Queued",
+            progress_pct=0,
+        )
+    elif payload.audit_type == "combined":
+        # Combined: the real website URL plus social handles. The worker runs the website pipeline
+        # then the social audit and renders ONE report with both + the overall readiness score.
+        handles = {k: v for k, v in (payload.social_handles or {}).items() if v}
+        job = AuditJob(
+            url=str(payload.url),
+            audit_type="combined",
             social_handles=handles,
             niche=payload.niche,
             target_audience=payload.target_audience,

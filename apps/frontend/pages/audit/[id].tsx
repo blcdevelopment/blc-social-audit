@@ -8,6 +8,7 @@ import {
   ApiError,
   AuditDetail,
   AuditShareResponse,
+  OverallReadiness,
   ReportFormat,
   ReportSection,
   RoadmapTier,
@@ -397,6 +398,30 @@ function ProgressView({ detail }: { detail: AuditDetail }) {
         })}
       </ol>
     </div>
+  );
+}
+
+function OverallReadinessBlock({ overall }: { overall: OverallReadiness }) {
+  return (
+    <section className="card section-block">
+      <div className="section-head">
+        <h3>Overall Lead-Gen Readiness</h3>
+      </div>
+      <div className="score-grid">
+        <div className={`score-card tone-${scoreTone(overall.score)}`}>
+          <p className="score-label">Overall Lead-Gen Readiness</p>
+          <p className="score-value">
+            {overall.score ?? "—"}
+            <span className="score-max">/ 100</span>
+          </p>
+          <p className="score-desc">
+            Website {overall.inputs.website_lead_gen ?? "—"} (
+            {Math.round(overall.weights.website * 100)}%) · Social {overall.inputs.social ?? "—"} (
+            {Math.round(overall.weights.social * 100)}%)
+          </p>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -839,6 +864,25 @@ export default function AuditDetailPage() {
                     <p className="muted">{detail.report.metadata.llm_model}</p>
                   </div>
                 </section>
+
+                {/* Combined audit: the social media report + overall readiness score are appended
+                    at the VERY END here, mirroring the PDF. The SEO/UX-UI sections above are
+                    untouched; these render only when social data is present (combined audit). */}
+                {detail.report.social_audit && (
+                  <>
+                    <section className="card section-block">
+                      <div className="section-head">
+                        <h3>Social Media Audit</h3>
+                      </div>
+                    </section>
+                    <SocialReportView report={detail.report.social_audit} />
+                  </>
+                )}
+
+                {detail.report.overall_readiness &&
+                  detail.report.overall_readiness.score !== null && (
+                    <OverallReadinessBlock overall={detail.report.overall_readiness} />
+                  )}
               </>
             )}
 

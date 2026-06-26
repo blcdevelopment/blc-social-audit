@@ -23,7 +23,11 @@ from apps.worker.stages.extractor_uxui import extract_uxui_facts
 from apps.worker.stages.grounding_validator import validate_commentary_grounding
 from apps.worker.stages.pdf_renderer import PdfRenderResult, render_audit_pdf, render_social_pdf
 from apps.worker.stages.psi_client import collect_pagespeed_facts
-from apps.worker.stages.scoring import score_audit, score_social_audit
+from apps.worker.stages.scoring import (
+    compose_overall_readiness_score,
+    score_audit,
+    score_social_audit,
+)
 from apps.worker.stages.social.collector import collect_social_facts
 from apps.worker.stages.social.report import compose_social_report_payload
 
@@ -327,6 +331,49 @@ def _run_social_pipeline(
     _mark_job(db, job, AuditStatus.COMPLETE, "Social audit complete", 100)
 
 
+def _augment_with_social(
+    db: Session,
+    job: AuditJob,
+    result: AuditResult,
+    settings: Settings,
+    social_collector: SocialCollectorFunc,
+) -> None:
+    """Combined audit: after the (untouched) website pipeline has scored + persisted, run the
+    social audit and merge it onto the SAME result, then compute the Overall Lead-Gen Readiness
+    score. The website columns and score_breakdown are left intact — we only ADD social_score,
+    social_facts, and the ``social`` / ``overall_readiness`` keys. The existing RENDERING stage
+    then produces ONE combined PDF (compose_report_payload appends the social + overall sections
+    when it sees this data). Social findings here are deterministic (no LLM)."""
+    _mark_job(db, job, AuditStatus.RENDERING, "Auditing social profiles", 96)
+    # Graceful degradation: the social add-on must never sink an already-scored, already-committed
+    # website audit. Do all the fallible work (network collect, rubric load, scoring) BEFORE
+    # mutating the result, so a failure here just leaves the website result intact and the report
+    # renders website-only (no social/overall sections) — mirroring the website pipeline's
+    # skip-on-failure contract. Only SoftTimeLimitExceeded propagates (the task is out of time).
+    try:
+        social_facts = social_collector(settings, job.social_handles)
+        social_result = score_social_audit(social_facts, settings)
+        overall = compose_overall_readiness_score(
+            website_lead_gen=result.lead_gen_score,
+            social_score=social_result.get("score"),
+            settings=settings,
+        )
+    except SoftTimeLimitExceeded:
+        raise
+    except Exception:
+        # Website result is untouched and already committed; render it as a website-only report.
+        return
+
+    breakdown = dict(result.score_breakdown or {})
+    breakdown["social"] = social_result
+    breakdown["overall_readiness"] = overall
+    result.social_score = social_result.get("score")
+    result.social_facts = social_facts
+    result.score_breakdown = breakdown
+    db.commit()
+    db.refresh(result)
+
+
 def run_collection_audit(
     job_id: str,
     *,
@@ -439,6 +486,12 @@ def run_collection_audit(
                 validation_log,
                 accessibility_facts=accessibility_facts,
             )
+
+            # Combined audit: run the social audit AFTER the website pipeline and merge it onto the
+            # same result, so the single report rendered below appends the social + overall
+            # sections. A plain website audit skips this and is byte-identical to before.
+            if (job.audit_type or "website") == "combined":
+                _augment_with_social(db, job, result, settings, social_collector)
 
             _mark_job(db, job, AuditStatus.RENDERING, "Rendering report exports", 98)
             pdf_result = render_audit_pdf(job, result, settings)
@@ -563,6 +616,23 @@ def rerun_external_enrichment_for_audit(job_id: str) -> None:
                     "scores": score_breakdown.get("scores", {}),
                 },
             )
+
+            # Combined audit: the rescore above is website-only, so it lost the `social` and
+            # `overall_readiness` keys _augment_with_social had added. Re-attach the (unchanged)
+            # social breakdown and recompute the Overall Lead-Gen Readiness from the NEW lead-gen
+            # score + the stored Social Score (social is not re-collected here), so a rerun keeps
+            # the combined report intact instead of silently dropping the headline score.
+            if (job.audit_type or "website") == "combined":
+                prev_breakdown = previous["score_breakdown"]
+                if isinstance(prev_breakdown, dict) and isinstance(
+                    prev_breakdown.get("social"), dict
+                ):
+                    score_breakdown["social"] = prev_breakdown["social"]
+                score_breakdown["overall_readiness"] = compose_overall_readiness_score(
+                    website_lead_gen=score_breakdown["scores"]["lead_gen"],
+                    social_score=result.social_score,
+                    settings=settings,
+                )
 
             result.external_seo_facts = external_seo_facts
             result.score_breakdown = score_breakdown

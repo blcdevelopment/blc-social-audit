@@ -20,9 +20,22 @@ def _dict(value: Any) -> JsonDict:
     return value if isinstance(value, dict) else {}
 
 
-def compose_social_report_payload(job: Any, result: Any) -> JsonDict:
-    facts = _dict(getattr(result, "social_facts", None))
-    breakdown = _dict(getattr(result, "score_breakdown", None))
+def build_social_report_data(
+    *,
+    social_facts: Any,
+    social_breakdown: Any,
+    social_score: Any,
+    handles: Any,
+    commentary: Any = None,
+) -> JsonDict:
+    """Pure builder of the social report dict from its raw pieces.
+
+    Shared by the standalone social audit (``compose_social_report_payload``) and the combined
+    audit's appended social section (``report_payload``), so both derive findings/roadmap from the
+    same deterministic rule metadata. ``commentary`` is the optional LLM-polished envelope (only
+    the standalone social pipeline sets it); pass ``None`` for the deterministic baseline."""
+    facts = _dict(social_facts)
+    breakdown = _dict(social_breakdown)
     summary = _dict(facts.get("summary"))
     category = _dict(breakdown.get("category"))
     rules = category.get("rules") if isinstance(category.get("rules"), list) else []
@@ -33,10 +46,9 @@ def compose_social_report_payload(job: Any, result: Any) -> JsonDict:
         if isinstance(p, dict) and p.get("status") == "complete"
     ]
 
-    # Optional LLM-polished prose (set by _run_social_pipeline). When present, attach the
-    # executive summary and a per-finding narrative; otherwise the report is the pure
-    # rule-derived deterministic output (commentary_provider == "deterministic").
-    commentary = _dict(getattr(result, "commentary", None))
+    # Optional LLM-polished prose. When present, attach the executive summary and a per-finding
+    # narrative; otherwise the report is the pure rule-derived deterministic output.
+    commentary = _dict(commentary)
     content = _dict(commentary.get("content"))
     narratives = {
         f.get("id"): f.get("narrative")
@@ -68,9 +80,9 @@ def compose_social_report_payload(job: Any, result: Any) -> JsonDict:
 
     return {
         "version": SOCIAL_REPORT_VERSION,
-        "score": getattr(result, "social_score", None),
+        "score": social_score,
         "status": facts.get("status") or "unknown",
-        "handles": getattr(job, "social_handles", None) or {},
+        "handles": handles or {},
         "generated_date": datetime.now(UTC).strftime("%B %d, %Y"),
         "platforms_audited": summary.get("platforms_audited", 0),
         "summary": summary,
@@ -80,3 +92,13 @@ def compose_social_report_payload(job: Any, result: Any) -> JsonDict:
         "findings": findings,
         "roadmap": roadmap,
     }
+
+
+def compose_social_report_payload(job: Any, result: Any) -> JsonDict:
+    return build_social_report_data(
+        social_facts=getattr(result, "social_facts", None),
+        social_breakdown=getattr(result, "score_breakdown", None),
+        social_score=getattr(result, "social_score", None),
+        handles=getattr(job, "social_handles", None),
+        commentary=getattr(result, "commentary", None),
+    )

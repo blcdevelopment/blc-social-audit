@@ -19,21 +19,25 @@ class BrandOverrides(BaseModel):
 
 class AuditCreateRequest(BaseModel):
     url: AnyHttpUrl | None = None
-    audit_type: Literal["website", "social"] = "website"
+    # "combined" runs the website audit then the social audit and produces ONE report with the
+    # social section + Overall Lead-Gen Readiness score appended (requires url AND >=1 handle).
+    audit_type: Literal["website", "social", "combined"] = "website"
     niche: str | None = Field(default=None, max_length=255)
     target_audience: str | None = Field(default=None, max_length=255)
     brand_overrides: BrandOverrides | None = None
-    # {platform: handle} for social audits, e.g. {"instagram": "acmebuilders"}.
+    # {platform: handle} for social/combined audits, e.g. {"instagram": "acmebuilders"}.
     social_handles: dict[str, str] | None = None
 
     @model_validator(mode="after")
     def _validate_inputs(self) -> "AuditCreateRequest":
-        if self.audit_type == "website" and self.url is None:
-            raise ValueError("url is required for a website audit")
-        if self.audit_type == "social":
+        if self.audit_type in ("website", "combined") and self.url is None:
+            raise ValueError("url is required for a website or combined audit")
+        if self.audit_type in ("social", "combined"):
             handles = {k: v for k, v in (self.social_handles or {}).items() if v}
             if not handles:
-                raise ValueError("at least one social handle is required for a social audit")
+                raise ValueError(
+                    "at least one social handle is required for a social or combined audit"
+                )
         return self
 
 
@@ -76,6 +80,8 @@ class AuditListItem(BaseModel):
     uxui_score: int | None
     lead_gen_score: int | None
     social_score: int | None
+    # Combined-audit headline (website + social blended); null for website/social-only audits.
+    overall_score: int | None = None
     report_available: bool
 
 
@@ -102,6 +108,7 @@ class AuditDetailResponse(BaseModel):
     uxui_score: int | None = None
     lead_gen_score: int | None = None
     social_score: int | None = None
+    overall_score: int | None = None
     report: ReportPayload | None = None
     social_report: dict | None = None
 

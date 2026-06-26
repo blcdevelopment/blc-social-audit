@@ -7,6 +7,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from apps.worker.stages.social.report import build_social_report_data
+
 JsonDict = dict[str, Any]
 ReportSectionId = Literal["seo", "uxui", "lead_generation"]
 RecommendationTier = Literal["quick_win", "mid_term", "long_term"]
@@ -585,6 +587,12 @@ class ReportPayload(BaseModel):
     )
     crawl_summary: CrawlSummary
     appendix: Appendix
+    # Combined-audit only (default None => not rendered; a website-only report is byte-identical).
+    # `social_audit` is the appended social-media section (same deterministic builder as the
+    # standalone social report); `overall_readiness` is the blended Overall Lead-Gen Readiness
+    # score. Both append at the END of the report and never alter the website sections above.
+    social_audit: JsonDict | None = None
+    overall_readiness: JsonDict | None = None
 
 
 def compose_report_payload(job: Any, result: Any) -> ReportPayload:
@@ -617,6 +625,22 @@ def compose_report_payload(job: Any, result: Any) -> ReportPayload:
         _compose_section("lead_generation", result.lead_gen_score, commentary, score_breakdown),
     ]
 
+    # Combined-audit extras (appended at the END of the report). Populated only when social data
+    # is present on the result; for a website-only audit these stay None and the report is
+    # byte-identical to before.
+    social_facts = _dict(getattr(result, "social_facts", None))
+    overall_readiness = score_breakdown.get("overall_readiness")
+    overall_readiness = overall_readiness if isinstance(overall_readiness, dict) else None
+    social_audit = None
+    if social_facts or overall_readiness:
+        social_audit = build_social_report_data(
+            social_facts=social_facts,
+            social_breakdown=score_breakdown.get("social"),
+            social_score=getattr(result, "social_score", None),
+            handles=getattr(job, "social_handles", None),
+            commentary=None,
+        )
+
     return ReportPayload(
         metadata=metadata,
         scores=_score_cards(result, score_breakdown),
@@ -634,6 +658,8 @@ def compose_report_payload(job: Any, result: Any) -> ReportPayload:
         ),
         crawl_summary=_crawl_summary(crawled_pages),
         appendix=_appendix(score_breakdown),
+        social_audit=social_audit,
+        overall_readiness=overall_readiness,
     )
 
 

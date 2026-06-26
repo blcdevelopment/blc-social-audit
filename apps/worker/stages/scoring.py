@@ -82,6 +82,27 @@ class CompositeRubric(BaseModel):
         return self
 
 
+class OverallRubric(BaseModel):
+    """Weights for the combined-audit Overall Lead-Gen Readiness score (rubrics/overall.yaml).
+
+    Blends the website Lead-Gen composite with the standalone Social Score. The website composite
+    ({seo, uxui}) is UNTOUCHED — it is used here only as one of two pre-computed inputs."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    version: str
+    max_score: int = Field(default=100, gt=0)
+    website_weight: float = Field(ge=0, le=1)
+    social_weight: float = Field(ge=0, le=1)
+
+    @model_validator(mode="after")
+    def validate_weights(self) -> OverallRubric:
+        total = self.website_weight + self.social_weight
+        if abs(total - 1.0) > 0.0001:
+            raise ValueError("overall weights (website_weight + social_weight) must sum to 1.0")
+        return self
+
+
 class Evaluation(BaseModel):
     result: RuleResult
     ratio: float = Field(ge=0, le=1)
@@ -237,6 +258,65 @@ def compose_lead_generation_score(
             "seo": seo_score,
             "uxui": uxui_score,
         },
+    }
+
+
+def load_overall_rubric(path: Path) -> OverallRubric:
+    payload = _read_yaml(path)
+    return OverallRubric.model_validate(payload)
+
+
+def _readiness_band(score: int | None) -> str:
+    if score is None:
+        return "unknown"
+    if score >= 75:
+        return "strong"
+    if score >= 50:
+        return "fair"
+    return "weak"
+
+
+def compose_overall_readiness_score(
+    *,
+    website_lead_gen: int | None,
+    social_score: int | None,
+    settings: Settings,
+) -> JsonDict:
+    """Combine the website Lead-Gen composite with the Social Score into one 0-100 Overall
+    Lead-Gen Readiness number (combined audit only). When the social audit produced no score,
+    the readiness rescales to the website Lead-Gen score alone (social weight drops out).
+    Deterministic; half-up rounding to match the rest of the engine. The website composite is
+    untouched — it is consumed here only as a pre-computed input."""
+    rubric = load_overall_rubric(settings.rubric_overall_path)
+    if website_lead_gen is None:
+        return {
+            "status": "skipped",
+            "rubric_version": rubric.version,
+            "score": None,
+            "band": "unknown",
+            "max_score": rubric.max_score,
+            "weights": {"website": rubric.website_weight, "social": rubric.social_weight},
+            "inputs": {"website_lead_gen": website_lead_gen, "social": social_score},
+        }
+
+    if social_score is None:
+        score = _round_score(website_lead_gen, rubric.max_score)
+        status = "website_only"
+        weights = {"website": 1.0, "social": 0.0}
+    else:
+        weighted = website_lead_gen * rubric.website_weight + social_score * rubric.social_weight
+        score = _round_score(weighted, rubric.max_score)
+        status = "complete"
+        weights = {"website": rubric.website_weight, "social": rubric.social_weight}
+
+    return {
+        "status": status,
+        "rubric_version": rubric.version,
+        "score": score,
+        "band": _readiness_band(score),
+        "max_score": rubric.max_score,
+        "weights": weights,
+        "inputs": {"website_lead_gen": website_lead_gen, "social": social_score},
     }
 
 
