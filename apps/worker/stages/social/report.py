@@ -140,6 +140,13 @@ def build_social_report_data(
         "posts_with_cta_caption_pct": summary.get("posts_with_cta_caption_pct"),
         "avg_follower_following_ratio": summary.get("avg_follower_following_ratio"),
     }
+    # None (not an all-None dict) when nothing is derivable — e.g. a Facebook-page-only audit or a
+    # pre-v2 stored result — so every consumer's truthiness guard hides the section uniformly
+    # instead of the PDFs rendering a dangling "Content insights" heading with no body.
+    _ci_values = [v for k, v in content_insights.items() if k != "content_mix"]
+    _ci_values.extend(content_insights["content_mix"].values())
+    if all(v is None for v in _ci_values):
+        content_insights = None
 
     # Top performing posts across all audited profiles (directly answers "are my views low?").
     top_posts: list[JsonDict] = []

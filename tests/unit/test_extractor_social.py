@@ -257,6 +257,34 @@ def test_youtube_surfaces_lifetime_views_and_titles() -> None:
     assert facts["summary"]["total_views"] == p["total_views"]
 
 
+def test_youtube_business_account_is_unknown_not_zero() -> None:
+    # YouTube has no Business/Creator-account concept, so is_business must be None (unknown), and
+    # a YouTube-only audit's profiles_business_account must be None so the scored rule
+    # skip_if_missing-rescales instead of vacuously docking the channel for a setting it can't have.
+    facts = extract_social_facts(
+        [
+            {
+                "platform": "youtube",
+                "handle": "acmebuilders",
+                "raw": _load("social_youtube_strong.json"),
+            }
+        ],
+        now=NOW,
+    )
+    assert facts["platforms"][0]["is_business"] is None
+    assert facts["summary"]["profiles_business_account"] is None
+
+
+def test_dormant_account_max_gap_counts_trailing_silence() -> None:
+    # The weak account posted twice 12 days apart, then went silent for 83 days. The longest gap
+    # must reflect the trailing silence (>= days_since_last_post), so the posting-consistency rule
+    # fails rather than praising a clearly-dormant feed as "posting regularly".
+    facts = extract_social_facts([_entry("social_instagram_weak.json", "weak")], now=NOW)
+    p = facts["platforms"][0]
+    assert p["max_posting_gap_days"] >= p["days_since_last_post"] == 83
+    assert facts["summary"]["max_posting_gap_days"] >= 83
+
+
 def test_no_handles_is_skipped() -> None:
     facts = extract_social_facts([], now=NOW)
     assert facts["status"] == "skipped"

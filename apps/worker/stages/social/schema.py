@@ -41,7 +41,9 @@ class SocialProfileFacts(BaseModel):
     posts_count: int = 0
     verified: bool = False
     private: bool = False
-    is_business: bool = False
+    # None for a platform with no Business/Creator-account concept (YouTube), so the scored
+    # business-account aggregate rescales it away instead of counting it a failure.
+    is_business: bool | None = False
     category: str | None = None
     bio_present: bool = False
     link_in_bio: str | None = None
@@ -102,7 +104,7 @@ class SocialSummary(BaseModel):
     # avg_hashtags_per_post); the rest are surfaced in the report's content-insights section.
     # None (not 0) when no profile supplied the underlying data, so any scored rule skip_if_missing.
     profiles_verified: int = 0
-    profiles_business_account: int = 0
+    profiles_business_account: int | None = 0
     profiles_with_category: int = 0
     avg_follower_following_ratio: float | None = None
     video_share_pct: float | None = None

@@ -1136,7 +1136,7 @@
       {% if social.status not in ["complete", "partial"] %}
         <p class="muted">Social profiles could not be collected for this audit ({{ social.status }}), so the social score is unavailable. Provide reachable public handles and re-run to populate it.</p>
       {% else %}
-        {% if social.platforms %}
+        {% if social.per_platform %}
         <table style="width:100%; border-collapse:collapse; margin:10px 0 16px; font-size:11px;">
           <thead>
             <tr style="text-align:left; border-bottom:2px solid #e4e7ec;">
@@ -1145,18 +1145,22 @@
               <th style="padding:6px 8px; text-align:right;">Followers</th>
               <th style="padding:6px 8px; text-align:right;">Posts/mo</th>
               <th style="padding:6px 8px; text-align:right;">Engagement</th>
+              <th style="padding:6px 8px; text-align:right;">Video %</th>
               <th style="padding:6px 8px; text-align:right;">Last post</th>
+              <th style="padding:6px 8px; text-align:center;">Business</th>
             </tr>
           </thead>
           <tbody>
-            {% for p in social.platforms %}
+            {% for p in social.per_platform %}
             <tr style="border-bottom:1px solid #f0f1f3;">
-              <td style="padding:6px 8px; text-transform:capitalize;">{{ p.get("platform", "&mdash;") }}</td>
-              <td style="padding:6px 8px;">{{ p.get("handle", "&mdash;") }}</td>
-              <td style="padding:6px 8px; text-align:right;">{{ p.get("followers") if p.get("followers") is not none else "&mdash;" }}</td>
-              <td style="padding:6px 8px; text-align:right;">{{ p.get("posts_per_month") if p.get("posts_per_month") is not none else "&mdash;" }}</td>
-              <td style="padding:6px 8px; text-align:right;">{% if p.get("avg_engagement_rate_pct") is not none %}{{ p.get("avg_engagement_rate_pct") }}%{% else %}&mdash;{% endif %}</td>
-              <td style="padding:6px 8px; text-align:right;">{% if p.get("days_since_last_post") is not none %}{{ p.get("days_since_last_post") }}d ago{% else %}&mdash;{% endif %}</td>
+              <td style="padding:6px 8px; text-transform:capitalize;">{{ p.platform or "—" }}</td>
+              <td style="padding:6px 8px;">{{ p.handle or "—" }}</td>
+              <td style="padding:6px 8px; text-align:right;">{% if p.followers is not none %}{{ p.followers }}{% else %}—{% endif %}</td>
+              <td style="padding:6px 8px; text-align:right;">{% if p.posts_per_month is not none %}{{ p.posts_per_month }}{% else %}—{% endif %}</td>
+              <td style="padding:6px 8px; text-align:right;">{% if p.avg_engagement_rate_pct is not none %}{{ p.avg_engagement_rate_pct }}%{% else %}—{% endif %}</td>
+              <td style="padding:6px 8px; text-align:right;">{% if p.video_share_pct is not none %}{{ p.video_share_pct }}%{% else %}—{% endif %}</td>
+              <td style="padding:6px 8px; text-align:right;">{% if p.days_since_last_post is not none %}{{ p.days_since_last_post }}d ago{% else %}—{% endif %}</td>
+              <td style="padding:6px 8px; text-align:center;">{% if p.is_business %}✓{% else %}—{% endif %}</td>
             </tr>
             {% endfor %}
           </tbody>
@@ -1203,10 +1207,10 @@
           <tbody>
             {% for tp in social.get('top_posts') %}
             <tr style="border-bottom:1px solid #f0f1f3;">
-              <td style="padding:5px 8px; text-transform:capitalize;">{{ tp.get("platform", "&mdash;") }}</td>
-              <td style="padding:5px 8px; text-transform:capitalize;">{{ tp.get("type", "&mdash;") }}</td>
-              <td style="padding:5px 8px;">{{ tp.get("title") or "&mdash;" }}</td>
-              <td style="padding:5px 8px; text-align:right;">{{ tp.get("views") if tp.get("views") is not none else "&mdash;" }}</td>
+              <td style="padding:5px 8px; text-transform:capitalize;">{{ tp.get("platform") or "—" }}</td>
+              <td style="padding:5px 8px; text-transform:capitalize;">{{ tp.get("type") or "—" }}</td>
+              <td style="padding:5px 8px;">{{ tp.get("title") or "—" }}</td>
+              <td style="padding:5px 8px; text-align:right;">{{ tp.get("views") if tp.get("views") is not none else "—" }}</td>
               <td style="padding:5px 8px; text-align:right;">{{ tp.get("likes", 0) }}</td>
               <td style="padding:5px 8px; text-align:right;">{{ tp.get("comments", 0) }}</td>
             </tr>
@@ -1248,17 +1252,17 @@
         <tbody>
           <tr style="border-bottom:1px solid #f0f1f3;">
             <td style="padding:6px 8px;">Website Lead-Gen (SEO + UX/UI)</td>
-            <td style="padding:6px 8px; text-align:right;">{{ overall.inputs.website_lead_gen if overall.inputs.website_lead_gen is not none else "&mdash;" }}</td>
+            <td style="padding:6px 8px; text-align:right;">{{ overall.inputs.website_lead_gen if overall.inputs.website_lead_gen is not none else "—" }}</td>
             <td style="padding:6px 8px; text-align:right; color:#667085;">weight {{ (overall.weights.website * 100) | round | int }}%</td>
           </tr>
           <tr style="border-bottom:1px solid #f0f1f3;">
             <td style="padding:6px 8px;">Social Media</td>
-            <td style="padding:6px 8px; text-align:right;">{{ overall.inputs.social if overall.inputs.social is not none else "&mdash;" }}</td>
+            <td style="padding:6px 8px; text-align:right;">{{ overall.inputs.social if overall.inputs.social is not none else "—" }}</td>
             <td style="padding:6px 8px; text-align:right; color:#667085;">weight {{ (overall.weights.social * 100) | round | int }}%</td>
           </tr>
           <tr style="border-top:2px solid #e4e7ec; font-weight:700;">
             <td style="padding:6px 8px;">Overall Lead-Gen Readiness</td>
-            <td style="padding:6px 8px; text-align:right;">{{ oscore if oscore is not none else "&mdash;" }}</td>
+            <td style="padding:6px 8px; text-align:right;">{{ oscore if oscore is not none else "—" }}</td>
             <td style="padding:6px 8px;"></td>
           </tr>
         </tbody>

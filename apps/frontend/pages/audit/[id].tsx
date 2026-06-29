@@ -620,7 +620,11 @@ function SocialReportView({ report }: { report: SocialReport }) {
                   <td>{recordNumberText(platform, "followers")}</td>
                   <td>{recordText(platform, "posts_per_month", "—")}</td>
                   <td>{recordText(platform, "avg_engagement_rate_pct", "—")}</td>
-                  <td>{recordText(platform, "video_share_pct", "—")}</td>
+                  <td>
+                    {typeof platform.video_share_pct === "number"
+                      ? `${platform.video_share_pct}%`
+                      : "—"}
+                  </td>
                   <td>{recordText(platform, "days_since_last_post", "—")}</td>
                 </tr>
               ))}

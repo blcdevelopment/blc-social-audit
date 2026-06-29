@@ -150,6 +150,9 @@ rules:
     evaluator: threshold
     params:
       min: 1
+    # None when no audited profile is on a platform with a Business/Creator-account concept
+    # (e.g. a YouTube-only audit) -> rescale away rather than vacuously failing the rule.
+    skip_if_missing: true
     impact: medium
     tier: quick_win
     finding_label: Not using a Business/Creator account

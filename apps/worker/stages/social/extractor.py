@@ -132,11 +132,18 @@ def _content_mix(posts: list[JsonDict]) -> tuple[float | None, float | None, flo
     return (round(video / n * 100, 1), round(image / n * 100, 1), round(carousel / n * 100, 1))
 
 
-def _max_posting_gap_days(times: list[datetime]) -> int | None:
-    """Longest gap (days) between consecutive sampled posts — a posting-consistency signal."""
-    if len(times) < 2:
+def _max_posting_gap_days(times: list[datetime], now: datetime) -> int | None:
+    """Longest gap (days) between consecutive sampled posts OR since the last post.
+
+    Counting the trailing gap (last post -> now) is load-bearing: otherwise a dormant account
+    whose few sampled posts happen to be close together passes the consistency rule and gets
+    praised as "posting regularly" in the same report that flags it stale (see test).
+    """
+    if not times:
         return None
-    return max((times[i + 1] - times[i]).days for i in range(len(times) - 1))
+    gaps = [(times[i + 1] - times[i]).days for i in range(len(times) - 1)]
+    gaps.append((now - times[-1]).days)
+    return max(gaps)
 
 
 def _like_to_comment_ratio(posts: list[JsonDict]) -> float | None:
@@ -209,15 +216,18 @@ def _top_posts(posts: list[JsonDict], *, limit: int = 3) -> list[JsonDict]:
     return enriched[:limit]
 
 
-def _post_detail_facts(posts: list[JsonDict]) -> JsonDict:
-    """Per-profile content/performance detail derived from the sampled posts (all None-safe)."""
-    times = sorted(t for t in (_parse_ts(p.get("timestamp")) for p in posts) if t)
+def _post_detail_facts(posts: list[JsonDict], times: list[datetime], *, now: datetime) -> JsonDict:
+    """Per-profile content/performance detail derived from the sampled posts (all None-safe).
+
+    ``times`` is the already-parsed/sorted post timestamps the caller computed (reused here so the
+    cadence facts and the posting-gap fact never derive from two separate parses that could drift).
+    """
     video_pct, image_pct, carousel_pct = _content_mix(posts)
     return {
         "video_share_pct": video_pct,
         "image_share_pct": image_pct,
         "carousel_share_pct": carousel_pct,
-        "max_posting_gap_days": _max_posting_gap_days(times),
+        "max_posting_gap_days": _max_posting_gap_days(times, now),
         "like_to_comment_ratio": _like_to_comment_ratio(posts),
         "avg_views_per_post": _avg_views_per_post(posts),
         "best_post_engagement": _best_post_engagement(posts),
@@ -263,7 +273,7 @@ def normalize_instagram_profile(raw: JsonDict, handle: str, *, now: datetime) ->
             "follows_count": follows,
             "follower_following_ratio": round(followers / follows, 1) if follows > 0 else None,
             "total_views": None,
-            **_post_detail_facts(posts),
+            **_post_detail_facts(posts, times, now=now),
         }
     )
 
@@ -322,7 +332,7 @@ def normalize_facebook_profile(raw: JsonDict, handle: str, *, now: datetime) -> 
             "follows_count": 0,
             "follower_following_ratio": None,
             "total_views": None,
-            **_post_detail_facts(posts),
+            **_post_detail_facts(posts, times, now=now),
         }
     )
 
@@ -381,7 +391,9 @@ def normalize_youtube_channel(raw: JsonDict, handle: str, *, now: datetime) -> J
             "posts_count": video_count,
             "verified": False,
             "private": False,
-            "is_business": False,
+            # YouTube has no Business/Creator-account concept -> None (not False) so the
+            # business-account rule skip_if_missing-rescales instead of vacuously failing it.
+            "is_business": None,
             "category": None,
             "bio_present": bool(description),
             "link_in_bio": link or None,
@@ -396,7 +408,7 @@ def normalize_youtube_channel(raw: JsonDict, handle: str, *, now: datetime) -> J
             "follows_count": 0,
             "follower_following_ratio": None,
             "total_views": lifetime_views or None,
-            **_post_detail_facts(posts),
+            **_post_detail_facts(posts, times, now=now),
         }
     )
 
@@ -424,6 +436,10 @@ def summarize_profiles(profiles: list[JsonDict]) -> JsonDict:
     eng = _collect(profiles, "avg_engagement_rate_pct")
     gaps = _collect(profiles, "max_posting_gap_days")
     total_views = _collect(profiles, "total_views")
+    # Only profiles on a platform that HAS a business-account concept report is_business (IG/FB
+    # a real bool, YouTube None). None when none of them do, so the rule skip_if_missing-rescales
+    # rather than penalizing e.g. a YouTube-only audit for a setting YouTube doesn't have.
+    business = _collect(profiles, "is_business")
     return _summary_facts(
         {
             "platforms_audited": count,
@@ -443,7 +459,7 @@ def summarize_profiles(profiles: list[JsonDict]) -> JsonDict:
             "profiles_with_logo_avatar": sum(1 for p in profiles if p.get("has_logo_avatar")),
             # Extended detail aggregates (some scored, the rest surfaced as content insights).
             "profiles_verified": sum(1 for p in profiles if p.get("verified")),
-            "profiles_business_account": sum(1 for p in profiles if p.get("is_business")),
+            "profiles_business_account": sum(1 for v in business if v) if business else None,
             "profiles_with_category": sum(1 for p in profiles if p.get("category")),
             "avg_follower_following_ratio": _mean(_collect(profiles, "follower_following_ratio")),
             "video_share_pct": _mean(_collect(profiles, "video_share_pct")),
