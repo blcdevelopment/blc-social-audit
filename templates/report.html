@@ -1167,11 +1167,59 @@
         <h3 style="margin-top:8px;">What to improve</h3>
         <ul>
           {% for f in social.findings %}
-          <li style="margin-bottom:6px;"><strong>{{ f.label }}</strong>{% if f.remediation %} &mdash; {{ f.remediation }}{% endif %} <span class="muted">({{ f.impact }} impact)</span></li>
+          <li style="margin-bottom:6px;"><strong>{{ f.label }}</strong>{% if f.metric %} <span class="muted">({{ f.metric }})</span>{% endif %}{% if f.remediation %} &mdash; {{ f.remediation }}{% endif %} <span class="muted">({{ f.impact }} impact)</span></li>
           {% endfor %}
         </ul>
         {% else %}
         <p class="muted">No social findings were surfaced &mdash; the audited profiles met the rubric's checks.</p>
+        {% endif %}
+
+        {% set sci = social.get('content_insights') %}
+        {% if sci %}
+        <h3 style="margin-top:10px;">Content insights</h3>
+        <p style="font-size:11px; margin:4px 0;">
+          {% set cm = sci.content_mix %}
+          {% if cm.video is not none %}Video {{ cm.video }}% &middot; Image {{ cm.image }}%{% if cm.carousel %} &middot; Carousel {{ cm.carousel }}%{% endif %}.{% endif %}
+          {% if sci.total_views is not none %} {{ sci.total_views }} total views{% if sci.avg_views_per_post is not none %} ({{ sci.avg_views_per_post }} avg/post){% endif %}.{% endif %}
+          {% if sci.avg_hashtags_per_post is not none %} ~{{ sci.avg_hashtags_per_post }} hashtags/post.{% endif %}
+          {% if sci.posts_with_cta_caption_pct is not none %} {{ sci.posts_with_cta_caption_pct }}% of captions include a CTA.{% endif %}
+          {% if sci.max_posting_gap_days is not none %} Longest posting gap {{ sci.max_posting_gap_days }} days.{% endif %}
+        </p>
+        {% endif %}
+
+        {% if social.get('top_posts') %}
+        <h3 style="margin-top:10px;">Top performing posts</h3>
+        <table style="width:100%; border-collapse:collapse; margin:6px 0 14px; font-size:11px;">
+          <thead>
+            <tr style="text-align:left; border-bottom:2px solid #e4e7ec;">
+              <th style="padding:5px 8px;">Platform</th>
+              <th style="padding:5px 8px;">Type</th>
+              <th style="padding:5px 8px;">Title</th>
+              <th style="padding:5px 8px; text-align:right;">Views</th>
+              <th style="padding:5px 8px; text-align:right;">Likes</th>
+              <th style="padding:5px 8px; text-align:right;">Comments</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for tp in social.get('top_posts') %}
+            <tr style="border-bottom:1px solid #f0f1f3;">
+              <td style="padding:5px 8px; text-transform:capitalize;">{{ tp.get("platform", "&mdash;") }}</td>
+              <td style="padding:5px 8px; text-transform:capitalize;">{{ tp.get("type", "&mdash;") }}</td>
+              <td style="padding:5px 8px;">{{ tp.get("title") or "&mdash;" }}</td>
+              <td style="padding:5px 8px; text-align:right;">{{ tp.get("views") if tp.get("views") is not none else "&mdash;" }}</td>
+              <td style="padding:5px 8px; text-align:right;">{{ tp.get("likes", 0) }}</td>
+              <td style="padding:5px 8px; text-align:right;">{{ tp.get("comments", 0) }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% endif %}
+
+        {% if social.get('strengths') %}
+        <h3 style="margin-top:10px;">What's working</h3>
+        <ul>
+          {% for s in social.get('strengths') %}<li style="margin-bottom:4px;">{{ s.label }}</li>{% endfor %}
+        </ul>
         {% endif %}
       {% endif %}
     </section>

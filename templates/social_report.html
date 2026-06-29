@@ -85,7 +85,7 @@
   <h2>What to improve</h2>
   {% for f in payload.findings %}
   <div class="finding">
-    <div class="ttl">{{ f.label }}</div>
+    <div class="ttl">{{ f.label }}{% if f.metric %} <span class="muted" style="font-weight:400">— {{ f.metric }}</span>{% endif %}</div>
     <div>
       <span class="pill imp-{{ f.impact }}">{{ f.impact }} impact</span>
       <span class="pill tier">{{ f.tier|replace('_', ' ') }}</span>
@@ -98,18 +98,64 @@
   <p class="muted">No major issues detected — the audited profiles meet the rubric's key checks.</p>
   {% endif %}
 
-  <h2>Profiles audited</h2>
+  {% if payload.strengths %}
+  <h2>What's working</h2>
+  <ul>
+    {% for s in payload.strengths %}<li>{{ s.label }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+
+  {% set ci = payload.content_insights %}
+  {% if ci %}
+  <h2>Content insights</h2>
+  <div class="kpis">
+    {% set cm = ci.content_mix %}
+    {% if cm.video is not none %}<div class="kpi"><div class="v">{{ cm.video }}%</div><div class="k">Video / Reels</div></div>{% endif %}
+    {% if cm.image is not none %}<div class="kpi"><div class="v">{{ cm.image }}%</div><div class="k">Image</div></div>{% endif %}
+    {% if cm.carousel is not none %}<div class="kpi"><div class="v">{{ cm.carousel }}%</div><div class="k">Carousel</div></div>{% endif %}
+    {% if ci.total_views is not none %}<div class="kpi"><div class="v">{{ ci.total_views }}</div><div class="k">Total views</div></div>{% endif %}
+    {% if ci.avg_views_per_post is not none %}<div class="kpi"><div class="v">{{ ci.avg_views_per_post }}</div><div class="k">Avg views / post</div></div>{% endif %}
+    {% if ci.avg_hashtags_per_post is not none %}<div class="kpi"><div class="v">{{ ci.avg_hashtags_per_post }}</div><div class="k">Hashtags / post</div></div>{% endif %}
+    {% if ci.posts_with_cta_caption_pct is not none %}<div class="kpi"><div class="v">{{ ci.posts_with_cta_caption_pct }}%</div><div class="k">Captions with CTA</div></div>{% endif %}
+    {% if ci.max_posting_gap_days is not none %}<div class="kpi"><div class="v">{{ ci.max_posting_gap_days }}d</div><div class="k">Longest gap</div></div>{% endif %}
+    {% if ci.avg_follower_following_ratio is not none %}<div class="kpi"><div class="v">{{ ci.avg_follower_following_ratio }}×</div><div class="k">Follower / following</div></div>{% endif %}
+  </div>
+  {% endif %}
+
+  {% if payload.top_posts %}
+  <h2>Top performing posts</h2>
   <table>
-    <thead><tr><th>Platform</th><th>Handle</th><th>Followers</th><th>Posts/mo</th><th>Engagement</th><th>Last post</th></tr></thead>
+    <thead><tr><th>Platform</th><th>Type</th><th>Title</th><th>Views</th><th>Likes</th><th>Comments</th><th>Posted</th></tr></thead>
     <tbody>
-      {% for p in payload.platforms %}
+      {% for tp in payload.top_posts %}
       <tr>
-        <td>{{ p.get('platform', '')|capitalize }}</td>
-        <td>@{{ p.get('handle', '') }}</td>
-        <td>{{ p.get('followers', 0) }}</td>
-        <td>{% if p.get('posts_per_month') is not none %}{{ p.get('posts_per_month') }}{% else %}—{% endif %}</td>
-        <td>{% if p.get('avg_engagement_rate_pct') is not none %}{{ p.get('avg_engagement_rate_pct') }}%{% else %}—{% endif %}</td>
-        <td>{% if p.get('days_since_last_post') is not none %}{{ p.get('days_since_last_post') }}d ago{% else %}—{% endif %}</td>
+        <td>{{ (tp.platform or '')|capitalize }}</td>
+        <td>{{ (tp.type or '')|capitalize }}</td>
+        <td>{{ tp.title or '—' }}</td>
+        <td>{% if tp.views is not none %}{{ tp.views }}{% else %}—{% endif %}</td>
+        <td>{{ tp.likes }}</td>
+        <td>{{ tp.comments }}</td>
+        <td>{{ tp.posted or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  <h2>Per-platform scorecard</h2>
+  <table>
+    <thead><tr><th>Platform</th><th>Handle</th><th>Followers</th><th>Posts/mo</th><th>Engagement</th><th>Video %</th><th>Last post</th><th>Business</th></tr></thead>
+    <tbody>
+      {% for p in payload.per_platform %}
+      <tr>
+        <td>{{ (p.platform or '')|capitalize }}</td>
+        <td>@{{ p.handle }}</td>
+        <td>{% if p.followers is not none %}{{ p.followers }}{% else %}—{% endif %}</td>
+        <td>{% if p.posts_per_month is not none %}{{ p.posts_per_month }}{% else %}—{% endif %}</td>
+        <td>{% if p.avg_engagement_rate_pct is not none %}{{ p.avg_engagement_rate_pct }}%{% else %}—{% endif %}</td>
+        <td>{% if p.video_share_pct is not none %}{{ p.video_share_pct }}%{% else %}—{% endif %}</td>
+        <td>{% if p.days_since_last_post is not none %}{{ p.days_since_last_post }}d ago{% else %}—{% endif %}</td>
+        <td>{% if p.is_business %}✓{% else %}—{% endif %}</td>
       </tr>
       {% endfor %}
     </tbody>

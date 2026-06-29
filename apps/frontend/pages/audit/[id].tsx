@@ -426,6 +426,14 @@ function OverallReadinessBlock({ overall }: { overall: OverallReadiness }) {
 }
 
 function SocialReportView({ report }: { report: SocialReport }) {
+  const ci = report.content_insights;
+  const hasInsights =
+    !!ci &&
+    (ci.content_mix.video != null ||
+      ci.total_views != null ||
+      ci.avg_engagement_rate_pct != null ||
+      ci.avg_hashtags_per_post != null ||
+      ci.max_posting_gap_days != null);
   return (
     <>
       <div className="score-grid">
@@ -463,6 +471,7 @@ function SocialReportView({ report }: { report: SocialReport }) {
                 <span className={`sev sev-${finding.impact}`}>{finding.impact}</span>
                 <div>
                   <strong>{finding.label}</strong>
+                  {finding.metric && <p className="muted">{finding.metric}</p>}
                   {finding.narrative ? (
                     <p>{finding.narrative}</p>
                   ) : (
@@ -479,9 +488,118 @@ function SocialReportView({ report }: { report: SocialReport }) {
         </section>
       )}
 
+      {report.strengths && report.strengths.length > 0 && (
+        <section className="card section-block">
+          <div className="section-head">
+            <h3>What&apos;s working</h3>
+          </div>
+          <ul className="finding-list">
+            {report.strengths.map((strength) => (
+              <li key={strength.id}>
+                <span className="sev sev-low">ok</span>
+                <div>
+                  <strong>{strength.label}</strong>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {hasInsights && ci && (
+        <section className="card">
+          <h3>Content insights</h3>
+          <table className="audit-table">
+            <tbody>
+              {ci.content_mix.video != null && (
+                <tr>
+                  <td>Content mix</td>
+                  <td>
+                    Video {ci.content_mix.video}% · Image {ci.content_mix.image}%
+                    {ci.content_mix.carousel ? ` · Carousel ${ci.content_mix.carousel}%` : ""}
+                  </td>
+                </tr>
+              )}
+              {ci.total_views != null && (
+                <tr>
+                  <td>Total views</td>
+                  <td>{ci.total_views.toLocaleString()}</td>
+                </tr>
+              )}
+              {ci.avg_views_per_post != null && (
+                <tr>
+                  <td>Avg views / post</td>
+                  <td>{ci.avg_views_per_post.toLocaleString()}</td>
+                </tr>
+              )}
+              {ci.avg_engagement_rate_pct != null && (
+                <tr>
+                  <td>Avg engagement</td>
+                  <td>{ci.avg_engagement_rate_pct}%</td>
+                </tr>
+              )}
+              {ci.avg_hashtags_per_post != null && (
+                <tr>
+                  <td>Hashtags / post</td>
+                  <td>{ci.avg_hashtags_per_post}</td>
+                </tr>
+              )}
+              {ci.posts_with_cta_caption_pct != null && (
+                <tr>
+                  <td>Captions with CTA</td>
+                  <td>{ci.posts_with_cta_caption_pct}%</td>
+                </tr>
+              )}
+              {ci.max_posting_gap_days != null && (
+                <tr>
+                  <td>Longest posting gap</td>
+                  <td>{ci.max_posting_gap_days} days</td>
+                </tr>
+              )}
+              {ci.avg_follower_following_ratio != null && (
+                <tr>
+                  <td>Follower / following ratio</td>
+                  <td>{ci.avg_follower_following_ratio}×</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </section>
+      )}
+
+      {report.top_posts && report.top_posts.length > 0 && (
+        <section className="card">
+          <h3>Top performing posts</h3>
+          <table className="audit-table">
+            <thead>
+              <tr>
+                <th>Platform</th>
+                <th>Type</th>
+                <th>Title</th>
+                <th>Views</th>
+                <th>Likes</th>
+                <th>Comments</th>
+              </tr>
+            </thead>
+            <tbody>
+              {report.top_posts.map((post, index) => (
+                <tr key={index}>
+                  <td>{post.platform ?? "—"}</td>
+                  <td>{post.type ?? "—"}</td>
+                  <td>{post.title ?? "—"}</td>
+                  <td>{post.views != null ? post.views.toLocaleString() : "—"}</td>
+                  <td>{post.likes ?? 0}</td>
+                  <td>{post.comments ?? 0}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+
       {report.platforms.length > 0 && (
         <section className="card">
-          <h3>Profiles audited</h3>
+          <h3>Per-platform scorecard</h3>
           <table className="audit-table">
             <thead>
               <tr>
@@ -490,6 +608,7 @@ function SocialReportView({ report }: { report: SocialReport }) {
                 <th>Followers</th>
                 <th>Posts/mo</th>
                 <th>Engagement</th>
+                <th>Video %</th>
                 <th>Last post</th>
               </tr>
             </thead>
@@ -501,6 +620,7 @@ function SocialReportView({ report }: { report: SocialReport }) {
                   <td>{recordNumberText(platform, "followers")}</td>
                   <td>{recordText(platform, "posts_per_month", "—")}</td>
                   <td>{recordText(platform, "avg_engagement_rate_pct", "—")}</td>
+                  <td>{recordText(platform, "video_share_pct", "—")}</td>
                   <td>{recordText(platform, "days_since_last_post", "—")}</td>
                 </tr>
               ))}

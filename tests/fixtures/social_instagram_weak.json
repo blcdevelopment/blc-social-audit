@@ -14,7 +14,21 @@
   "igtvVideoCount": 0,
   "url": "https://www.instagram.com/weakco/",
   "latestPosts": [
-    {"type": "Image", "likesCount": 3, "commentsCount": 0, "timestamp": "2026-04-01T00:00:00.000Z"},
-    {"type": "Image", "likesCount": 5, "commentsCount": 1, "timestamp": "2026-03-20T00:00:00.000Z"}
+    {
+      "type": "Image",
+      "likesCount": 3,
+      "commentsCount": 0,
+      "timestamp": "2026-04-01T00:00:00.000Z",
+      "caption": "another day at the shop",
+      "hashtags": []
+    },
+    {
+      "type": "Image",
+      "likesCount": 5,
+      "commentsCount": 1,
+      "timestamp": "2026-03-20T00:00:00.000Z",
+      "caption": "another day at the shop",
+      "hashtags": []
+    }
   ]
 }

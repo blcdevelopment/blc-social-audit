@@ -1,7 +1,7 @@
 {
   "username": "acmestudio",
   "fullName": "Acme Studio",
-  "biography": "Acme Studio — independent design studio. Book a free consult 📩",
+  "biography": "Acme Studio \u2014 independent design studio. Book a free consult \ud83d\udce9",
   "followersCount": 5000,
   "followsCount": 310,
   "postsCount": 220,
@@ -14,11 +14,90 @@
   "igtvVideoCount": 4,
   "url": "https://www.instagram.com/acmestudio/",
   "latestPosts": [
-    {"type": "Video", "likesCount": 300, "commentsCount": 20, "videoViewCount": 4000, "timestamp": "2026-06-21T00:00:00.000Z"},
-    {"type": "Image", "likesCount": 250, "commentsCount": 15, "timestamp": "2026-06-18T00:00:00.000Z"},
-    {"type": "Image", "likesCount": 200, "commentsCount": 10, "timestamp": "2026-06-15T00:00:00.000Z"},
-    {"type": "Image", "likesCount": 280, "commentsCount": 18, "timestamp": "2026-06-12T00:00:00.000Z"},
-    {"type": "Image", "likesCount": 220, "commentsCount": 12, "timestamp": "2026-06-08T00:00:00.000Z"},
-    {"type": "Image", "likesCount": 260, "commentsCount": 14, "timestamp": "2026-06-03T00:00:00.000Z"}
+    {
+      "type": "Video",
+      "likesCount": 300,
+      "commentsCount": 20,
+      "videoViewCount": 4000,
+      "timestamp": "2026-06-21T00:00:00.000Z",
+      "caption": "Custom home reveal \u2014 book a free consultation today! #customhomes #homebuilder #renovation #luxuryhomes #design",
+      "hashtags": [
+        "customhomes",
+        "homebuilder",
+        "renovation",
+        "luxuryhomes",
+        "design"
+      ]
+    },
+    {
+      "type": "Image",
+      "likesCount": 250,
+      "commentsCount": 15,
+      "timestamp": "2026-06-18T00:00:00.000Z",
+      "caption": "Custom home reveal \u2014 book a free consultation today! #customhomes #homebuilder #renovation #luxuryhomes #design",
+      "hashtags": [
+        "customhomes",
+        "homebuilder",
+        "renovation",
+        "luxuryhomes",
+        "design"
+      ]
+    },
+    {
+      "type": "Image",
+      "likesCount": 200,
+      "commentsCount": 10,
+      "timestamp": "2026-06-15T00:00:00.000Z",
+      "caption": "Custom home reveal \u2014 book a free consultation today! #customhomes #homebuilder #renovation #luxuryhomes #design",
+      "hashtags": [
+        "customhomes",
+        "homebuilder",
+        "renovation",
+        "luxuryhomes",
+        "design"
+      ]
+    },
+    {
+      "type": "Image",
+      "likesCount": 280,
+      "commentsCount": 18,
+      "timestamp": "2026-06-12T00:00:00.000Z",
+      "caption": "Custom home reveal \u2014 book a free consultation today! #customhomes #homebuilder #renovation #luxuryhomes #design",
+      "hashtags": [
+        "customhomes",
+        "homebuilder",
+        "renovation",
+        "luxuryhomes",
+        "design"
+      ]
+    },
+    {
+      "type": "Image",
+      "likesCount": 220,
+      "commentsCount": 12,
+      "timestamp": "2026-06-08T00:00:00.000Z",
+      "caption": "Custom home reveal \u2014 book a free consultation today! #customhomes #homebuilder #renovation #luxuryhomes #design",
+      "hashtags": [
+        "customhomes",
+        "homebuilder",
+        "renovation",
+        "luxuryhomes",
+        "design"
+      ]
+    },
+    {
+      "type": "Image",
+      "likesCount": 260,
+      "commentsCount": 14,
+      "timestamp": "2026-06-03T00:00:00.000Z",
+      "caption": "Custom home reveal \u2014 book a free consultation today! #customhomes #homebuilder #renovation #luxuryhomes #design",
+      "hashtags": [
+        "customhomes",
+        "homebuilder",
+        "renovation",
+        "luxuryhomes",
+        "design"
+      ]
+    }
   ]
 }

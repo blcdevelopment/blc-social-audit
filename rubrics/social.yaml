@@ -5,7 +5,12 @@
 # Calibrated against tests/fixtures/social_instagram_{strong,weak}.json (strong scores high,
 # weak scores low — see tests/unit/test_social_scoring.py). Tune thresholds against real
 # example accounts in the niche being audited before treating scores as authoritative.
-version: "phase2-social-v1"
+#
+# v2 (2026): added content-depth rules (business/creator account, video share, posting
+# consistency, hashtag usage) scoring facts the extractor already derives from the sampled
+# posts. Several more detail facts (content mix, views, follower ratio, like:comment, caption
+# CTA) are surfaced in the report's content-insights section without being scored here.
+version: "phase2-social-v2"
 category: social
 max_score: 100
 normalization: rescale_to_max
@@ -137,3 +142,57 @@ rules:
     tier: quick_win
     finding_label: Inconsistent profile branding
     remediation: Use the same logo, handle, and brand colors across every profile for recognizability.
+
+  - id: social.profile.business_account
+    description: Profiles are set up as Business/Creator accounts (analytics + contact actions).
+    weight: 7
+    fact_path: social.summary.profiles_business_account
+    evaluator: threshold
+    params:
+      min: 1
+    impact: medium
+    tier: quick_win
+    finding_label: Not using a Business/Creator account
+    remediation: Switch each profile to a Business/Creator account to unlock insights, contact buttons, and ads.
+
+  - id: social.content.video_share
+    description: A healthy share of posts are video/Reels (video drives the most reach).
+    weight: 6
+    fact_path: social.summary.video_share_pct
+    evaluator: threshold
+    params:
+      min: 25
+      partial_min: 10
+    skip_if_missing: true
+    impact: medium
+    tier: mid_term
+    finding_label: Too little video content
+    remediation: Aim for ~1 in 4 posts to be short-form video/Reels — it earns the most reach and discovery.
+
+  - id: social.posting.consistency
+    description: Posting is regular, without long gaps (longest gap between posts, in days).
+    weight: 6
+    fact_path: social.summary.max_posting_gap_days
+    evaluator: threshold
+    params:
+      max: 45
+      partial_max: 60
+    skip_if_missing: true
+    impact: medium
+    tier: mid_term
+    finding_label: Irregular posting (long gaps)
+    remediation: Keep a consistent schedule; long gaps lose momentum with the algorithm and followers.
+
+  - id: social.content.hashtags
+    description: Posts use hashtags to extend reach to non-followers (avg hashtags per post).
+    weight: 4
+    fact_path: social.summary.avg_hashtags_per_post
+    evaluator: threshold
+    params:
+      min: 3
+      partial_min: 1
+    skip_if_missing: true
+    impact: low
+    tier: quick_win
+    finding_label: Few or no hashtags
+    remediation: Add a handful of relevant, location- and niche-specific hashtags to each post to widen reach.

@@ -208,6 +208,55 @@ def test_youtube_hidden_engagement_skips_instead_of_zero() -> None:
     assert facts["summary"]["avg_engagement_rate_pct"] is None
 
 
+def test_instagram_content_and_performance_detail() -> None:
+    facts = extract_social_facts([_entry("social_instagram_strong.json", "acme")], now=NOW)
+    p = facts["platforms"][0]
+    # 1 of 6 sampled posts is a Video -> content mix.
+    assert p["video_share_pct"] == 16.7
+    assert p["image_share_pct"] == 83.3
+    assert p["carousel_share_pct"] == 0.0
+    assert p["follows_count"] == 310
+    assert p["follower_following_ratio"] == 16.1  # 5000 / 310
+    assert p["avg_hashtags_per_post"] == 5.0
+    assert p["posts_with_cta_caption_pct"] == 100.0  # every caption has a "book a consult" CTA
+    assert p["max_posting_gap_days"] is not None
+    assert len(p["top_posts"]) == 3
+    assert p["top_posts"][0]["views"] == 4000  # the video has the most views
+    s = facts["summary"]
+    assert s["profiles_business_account"] == 1
+    assert s["video_share_pct"] == 16.7
+    assert s["avg_hashtags_per_post"] == 5.0
+
+
+def test_weak_instagram_has_no_hashtags_or_cta() -> None:
+    facts = extract_social_facts([_entry("social_instagram_weak.json", "weak")], now=NOW)
+    s = facts["summary"]
+    assert (
+        s["avg_hashtags_per_post"] == 0.0
+    )  # present-but-zero -> the hashtag rule fails (not skip)
+    assert s["posts_with_cta_caption_pct"] == 0.0
+    assert s["profiles_business_account"] == 0
+
+
+def test_youtube_surfaces_lifetime_views_and_titles() -> None:
+    facts = extract_social_facts(
+        [
+            {
+                "platform": "youtube",
+                "handle": "acmebuilders",
+                "raw": _load("social_youtube_strong.json"),
+            }
+        ],
+        now=NOW,
+    )
+    p = facts["platforms"][0]
+    assert p["total_views"] is not None and p["total_views"] > 0  # channel lifetime views
+    assert p["avg_views_per_post"] is not None
+    assert p["video_share_pct"] == 100.0
+    assert p["top_posts"] and p["top_posts"][0]["title"]  # YouTube videos carry titles
+    assert facts["summary"]["total_views"] == p["total_views"]
+
+
 def test_no_handles_is_skipped() -> None:
     facts = extract_social_facts([], now=NOW)
     assert facts["status"] == "skipped"
