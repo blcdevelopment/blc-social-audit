@@ -29,6 +29,8 @@ from apps.worker.stages.scoring import (
     score_social_audit,
 )
 from apps.worker.stages.social.collector import collect_social_facts
+from apps.worker.stages.social.discovery import discover_social_links
+from apps.worker.stages.social.providers import get_provider
 from apps.worker.stages.social.report import compose_social_report_payload
 
 JsonDict = dict[str, Any]
@@ -331,19 +333,75 @@ def _run_social_pipeline(
     _mark_job(db, job, AuditStatus.COMPLETE, "Social audit complete", 100)
 
 
+def _explicit_social_handles(job: AuditJob) -> dict[str, str]:
+    """The operator's typed, non-empty social handles (blanks dropped)."""
+    return {k: v for k, v in (job.social_handles or {}).items() if v}
+
+
+def _has_usable_social_credential(handles: dict[str, str], settings: Settings) -> bool:
+    """True when at least one of ``handles``' platforms has a configured provider credential, so a
+    social collection can actually return data (an Apify token / YouTube key)."""
+    return any(
+        (provider := get_provider(platform)) is not None and provider.credential_available(settings)
+        for platform in handles
+    )
+
+
+def _resolve_social_handles(
+    job: AuditJob,
+    crawl_result: CrawlResult,
+    settings: Settings,
+) -> dict[str, str]:
+    """Effective social handles for the social step: the operator's explicit handles, with any
+    platform they left blank auto-filled from social profile links found on the crawled site (when
+    ``social_autodiscovery_enabled``) — the per-platform blank-fill the new-audit form promises.
+    Explicit handles always win per platform, so a typed Instagram link is kept verbatim while
+    Facebook/YouTube get discovered from the page. ``site_url`` lets discovery prefer handles
+    matching the audited brand. Pure over already-crawled HTML — no extra network call, so audits
+    stay reproducible."""
+    explicit = _explicit_social_handles(job)
+    if not settings.social_autodiscovery_enabled:
+        return explicit
+    site_url = getattr(crawl_result, "final_url", None) or job.url
+    discovered = discover_social_links(crawl_result.pages, site_url=site_url)
+    # Discovery fills only the gaps; explicit entries override per platform.
+    return {**discovered, **explicit}
+
+
+def _resolve_social_handles_safely(
+    job: AuditJob,
+    crawl_result: CrawlResult,
+    settings: Settings,
+) -> dict[str, str]:
+    """Auto-discovery is a best-effort add-on that runs AFTER the website result is committed, so —
+    like every other optional stage in this file (``_collect_external_seo_safely``,
+    ``_render_docx_safely``) — it must never sink an already-scored website audit. Any failure
+    resolving handles (e.g. an unexpected error parsing a page for social links) degrades to the
+    operator's explicit handles. Only ``SoftTimeLimitExceeded`` propagates (task is out of time)."""
+    try:
+        return _resolve_social_handles(job, crawl_result, settings)
+    except SoftTimeLimitExceeded:
+        raise
+    except Exception:
+        return _explicit_social_handles(job)
+
+
 def _augment_with_social(
     db: Session,
     job: AuditJob,
     result: AuditResult,
     settings: Settings,
     social_collector: SocialCollectorFunc,
+    handles: dict[str, str],
 ) -> None:
     """Combined audit: after the (untouched) website pipeline has scored + persisted, run the
-    social audit and merge it onto the SAME result, then compute the Overall Lead-Gen Readiness
-    score. The website columns and score_breakdown are left intact — we only ADD social_score,
-    social_facts, and the ``social`` / ``overall_readiness`` keys. The existing RENDERING stage
-    then produces ONE combined PDF (compose_report_payload appends the social + overall sections
-    when it sees this data). Social findings here are deterministic (no LLM)."""
+    social audit (over the resolved ``handles``) and merge it onto the SAME result, then compute the
+    Overall Lead-Gen Readiness score. The website columns and score_breakdown are left intact — we
+    only ADD social_score, social_facts, and the ``social`` / ``overall_readiness`` keys. The
+    existing RENDERING stage then produces ONE combined PDF (compose_report_payload appends the
+    social + overall sections when it sees this data). Social findings here are deterministic (no
+    LLM). Handles are passed in (not re-read off ``job``) so the data flow doesn't depend on a DB
+    refresh landing first."""
     _mark_job(db, job, AuditStatus.RENDERING, "Auditing social profiles", 96)
     # Graceful degradation: the social add-on must never sink an already-scored, already-committed
     # website audit. Do all the fallible work (network collect, rubric load, scoring) BEFORE
@@ -351,7 +409,7 @@ def _augment_with_social(
     # renders website-only (no social/overall sections) — mirroring the website pipeline's
     # skip-on-failure contract. Only SoftTimeLimitExceeded propagates (the task is out of time).
     try:
-        social_facts = social_collector(settings, job.social_handles)
+        social_facts = social_collector(settings, handles)
         social_result = score_social_audit(social_facts, settings)
         overall = compose_overall_readiness_score(
             website_lead_gen=result.lead_gen_score,
@@ -487,11 +545,24 @@ def run_collection_audit(
                 accessibility_facts=accessibility_facts,
             )
 
-            # Combined audit: run the social audit AFTER the website pipeline and merge it onto the
-            # same result, so the single report rendered below appends the social + overall
-            # sections. A plain website audit skips this and is byte-identical to before.
-            if (job.audit_type or "website") == "combined":
-                _augment_with_social(db, job, result, settings, social_collector)
+            # Social: the operator's handles, plus (for a plain website submission) any platform
+            # auto-filled from social profile links found on the crawled site. Promote a website
+            # audit to combined and append the social + overall sections ONLY when the social step
+            # can actually produce data — i.e. a provider credential is configured for a resolved
+            # platform; an explicit combined audit always runs (and degrades gracefully if its key
+            # is absent). A website audit that links to no profiles — or links to them but has no
+            # provider credential — skips this and stays byte-identical to before.
+            effective_handles = _resolve_social_handles_safely(job, crawl_result, settings)
+            already_combined = (job.audit_type or "website") == "combined"
+            if effective_handles and (
+                already_combined or _has_usable_social_credential(effective_handles, settings)
+            ):
+                job.social_handles = effective_handles
+                if not already_combined:
+                    job.audit_type = "combined"
+                db.commit()
+                db.refresh(job)
+                _augment_with_social(db, job, result, settings, social_collector, effective_handles)
 
             _mark_job(db, job, AuditStatus.RENDERING, "Rendering report exports", 98)
             pdf_result = render_audit_pdf(job, result, settings)

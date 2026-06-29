@@ -140,21 +140,22 @@ def _session(tmp_path):
     return sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
 
 
-def _patch_settings(monkeypatch, TestingSession, tmp_path) -> None:
+def _patch_settings(monkeypatch, TestingSession, tmp_path, **overrides) -> None:
     monkeypatch.setattr(tasks, "SessionLocal", TestingSession)
-    monkeypatch.setattr(
-        tasks,
-        "get_settings",
-        lambda: Settings(
-            _env_file=None,
-            google_psi_api_key=None,
-            crawler_screenshots_enabled=False,
-            site_health_enabled=False,
-            screaming_frog_enabled=False,
-            google_oauth_client_id="",
-            local_report_storage_dir=tmp_path / "reports",
-        ),
+    kwargs = dict(
+        _env_file=None,
+        google_psi_api_key=None,
+        crawler_screenshots_enabled=False,
+        site_health_enabled=False,
+        screaming_frog_enabled=False,
+        google_oauth_client_id="",
+        local_report_storage_dir=tmp_path / "reports",
+        # A configured Apify token so auto-discovery's credential gate lets a discovered website
+        # audit promote to combined (tests inject a fake collector for the actual social data).
+        apify_api_token="test-apify-token",
     )
+    kwargs.update(overrides)
+    monkeypatch.setattr(tasks, "get_settings", lambda: Settings(**kwargs))
 
 
 def test_combined_audit_renders_one_report_with_social_and_overall(tmp_path, monkeypatch) -> None:
@@ -306,6 +307,222 @@ def test_rerun_enrichment_preserves_combined_sections(tmp_path, monkeypatch) -> 
         assert isinstance(result.score_breakdown.get("social"), dict)
         overall = result.score_breakdown.get("overall_readiness")
         assert overall is not None and overall["score"] == before_overall
+
+
+def _fake_crawler_with_social_footer(
+    url: str, settings: Settings, audit_id: str | None
+) -> CrawlResult:
+    now = datetime.now(UTC).isoformat()
+    page = CrawledPage(
+        url=url,
+        final_url="https://example.com/",
+        status_code=200,
+        title="Example Builder",
+        html="""
+        <html><head>
+          <title>Example Builder Website</title>
+          <meta name="description" content="Custom builder serving local homeowners." />
+        </head><body>
+          <h1>Example Builder</h1>
+          <a class="btn cta" href="/estimate">Request Estimate</a>
+          <img src="/home.jpg" alt="Finished custom home" />
+          <footer class="site-footer">
+            <a href="https://www.instagram.com/acmebuilders/">Instagram</a>
+          </footer>
+        </body></html>
+        """,
+        text="Example Builder Request Estimate",
+        fetched_at=now,
+    )
+    return CrawlResult(
+        requested_url=url,
+        start_url=url,
+        final_url="https://example.com/",
+        status="complete",
+        pages=[page],
+        discovered_links=[],
+        skipped_pages=[],
+        failed_pages=[],
+        robots=RobotsPolicy(status="disabled", robots_url=None),
+        started_at=now,
+        completed_at=now,
+        max_pages=settings.crawler_max_pages,
+        user_agent=settings.crawler_user_agent,
+    )
+
+
+def test_website_audit_with_footer_social_is_promoted_to_combined(tmp_path, monkeypatch) -> None:
+    # Auto-discovery: a plain website audit whose page links to a social profile becomes a combined
+    # audit (handles back-filled, audit_type promoted, social + overall sections appended).
+    TestingSession = _session(tmp_path)
+    _patch_settings(monkeypatch, TestingSession, tmp_path)
+
+    strong = json.loads((FIXTURES / "social_instagram_strong.json").read_text())
+    seen_handles: dict[str, str] = {}
+
+    def fake_collector(settings, handles):
+        seen_handles.update(handles or {})
+        return extract_social_facts(
+            [{"platform": "instagram", "handle": "acmebuilders", "raw": strong}], now=NOW
+        )
+
+    with TestingSession() as db:
+        job = AuditJob(
+            url="https://example.com/",
+            audit_type="website",  # operator gave NO social handles
+            status="queued",
+            current_stage="Queued",
+            progress_pct=0,
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        job_id = str(job.id)
+
+    tasks.run_collection_audit(
+        job_id,
+        crawler=_fake_crawler_with_social_footer,
+        psi_collector=_fake_psi,
+        social_collector=fake_collector,
+    )
+
+    with TestingSession() as db:
+        job = db.get(AuditJob, UUID(job_id))
+        assert job.status == "complete"
+        # Promoted: discovered the footer Instagram link and back-filled it onto the job.
+        assert job.audit_type == "combined"
+        assert job.social_handles == {"instagram": "https://www.instagram.com/acmebuilders/"}
+        # The discovered handle was the one handed to the social collector.
+        assert seen_handles == {"instagram": "https://www.instagram.com/acmebuilders/"}
+        result = job.result
+        assert result.seo_score is not None and result.lead_gen_score is not None
+        assert result.social_score is not None
+        overall = result.score_breakdown.get("overall_readiness")
+        assert overall is not None and overall["status"] == "complete"
+        payload = compose_report_payload(job, result)
+        assert payload.social_audit is not None
+        assert payload.overall_readiness is not None
+
+
+def test_website_audit_with_no_social_links_stays_website(tmp_path, monkeypatch) -> None:
+    # Auto-discovery on, but the page links to no social profiles -> no social step, stays a plain
+    # website audit (byte-identical behaviour). The collector must never run.
+    TestingSession = _session(tmp_path)
+    _patch_settings(monkeypatch, TestingSession, tmp_path)
+
+    def boom_collector(settings, handles):
+        raise AssertionError("social collector must NOT run when no social links are found")
+
+    with TestingSession() as db:
+        job = AuditJob(
+            url="https://example.com/",
+            audit_type="website",
+            status="queued",
+            current_stage="Queued",
+            progress_pct=0,
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        job_id = str(job.id)
+
+    # _fake_crawler's HTML has no social links.
+    tasks.run_collection_audit(
+        job_id, crawler=_fake_crawler, psi_collector=_fake_psi, social_collector=boom_collector
+    )
+
+    with TestingSession() as db:
+        job = db.get(AuditJob, UUID(job_id))
+        assert job.status == "complete"
+        assert job.audit_type == "website"
+        assert job.social_handles in (None, {})
+        assert job.result.social_score is None
+        assert "overall_readiness" not in (job.result.score_breakdown or {})
+
+
+def test_website_audit_survives_social_discovery_error(tmp_path, monkeypatch) -> None:
+    # Exception isolation: a crash in the optional auto-discovery step must NOT fail the already-
+    # scored website audit (discovery runs after the website result is committed). The audit
+    # completes as a plain website report and the social collector is never reached.
+    TestingSession = _session(tmp_path)
+    _patch_settings(monkeypatch, TestingSession, tmp_path)
+
+    def boom_discovery(pages):
+        raise RuntimeError("discovery parser blew up")
+
+    monkeypatch.setattr(tasks, "discover_social_links", boom_discovery)
+
+    def boom_collector(settings, handles):
+        raise AssertionError("social collector must NOT run when discovery fails with no handles")
+
+    with TestingSession() as db:
+        job = AuditJob(
+            url="https://example.com/",
+            audit_type="website",
+            status="queued",
+            current_stage="Queued",
+            progress_pct=0,
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        job_id = str(job.id)
+
+    # The crawled page has a footer Instagram link, so discovery WOULD run — but it raises.
+    tasks.run_collection_audit(
+        job_id,
+        crawler=_fake_crawler_with_social_footer,
+        psi_collector=_fake_psi,
+        social_collector=boom_collector,
+    )
+
+    with TestingSession() as db:
+        job = db.get(AuditJob, UUID(job_id))
+        assert job.status == "complete"  # NOT failed
+        assert job.audit_type == "website"
+        assert job.result.social_score is None
+        assert "overall_readiness" not in (job.result.score_breakdown or {})
+        assert job.result.pdf_path and Path(job.result.pdf_path).exists()
+
+
+def test_website_with_social_link_but_no_token_stays_website(tmp_path, monkeypatch) -> None:
+    # Credential gate: auto-discovery finds the footer Instagram link, but with NO Apify token the
+    # social collection can't return data — so the audit must NOT be promoted to combined (no hollow
+    # social/overall sections) and the collector must never run.
+    TestingSession = _session(tmp_path)
+    _patch_settings(monkeypatch, TestingSession, tmp_path, apify_api_token=None)
+
+    def boom_collector(settings, handles):
+        raise AssertionError("social collector must NOT run without a usable provider credential")
+
+    with TestingSession() as db:
+        job = AuditJob(
+            url="https://example.com/",
+            audit_type="website",
+            status="queued",
+            current_stage="Queued",
+            progress_pct=0,
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        job_id = str(job.id)
+
+    # The crawled page HAS a footer Instagram link (discovery would find it) — but there's no token.
+    tasks.run_collection_audit(
+        job_id,
+        crawler=_fake_crawler_with_social_footer,
+        psi_collector=_fake_psi,
+        social_collector=boom_collector,
+    )
+
+    with TestingSession() as db:
+        job = db.get(AuditJob, UUID(job_id))
+        assert job.status == "complete"
+        assert job.audit_type == "website"  # NOT promoted
+        assert job.social_handles in (None, {})
+        assert job.result.social_score is None
+        assert "overall_readiness" not in (job.result.score_breakdown or {})
 
 
 def test_website_audit_is_unchanged_by_combined_feature(tmp_path, monkeypatch) -> None:

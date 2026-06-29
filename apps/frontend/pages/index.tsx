@@ -215,11 +215,13 @@ export default function SubmitAuditPage() {
           </div>
 
           <details className="brand-panel">
-            <summary>Social media (optional — runs a combined audit)</summary>
+            <summary>Social media (optional — auto-detected from the site if left blank)</summary>
             <p className="muted">
-              Paste profile links or @handles. Adding any of these runs the social audit after the
-              website audit and produces one combined report with a social section and an overall
-              lead-gen readiness score. Leave them blank for a website-only audit.
+              Paste profile links or @handles to audit specific accounts. Leave any blank and we
+              auto-detect that platform&apos;s link from the website itself (the footer/header
+              icons). When any profile is provided or found, the social audit runs after the website
+              audit and produces one combined report with a social section and an overall lead-gen
+              readiness score.
             </p>
 
             <div className="field">
