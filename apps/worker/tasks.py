@@ -14,6 +14,7 @@ from apps.shared.config import Settings, get_settings
 from apps.shared.database import SessionLocal
 from apps.shared.models import AuditJob, AuditResult
 from apps.worker.celery_app import celery_app
+from apps.worker.stages.benchmarking.collector import collect_benchmark_facts
 from apps.worker.stages.commentary import generate_commentary, generate_social_commentary
 from apps.worker.stages.crawler import CrawlResult, crawl_site_sync
 from apps.worker.stages.docx_renderer import DocxRenderResult, render_audit_docx
@@ -432,6 +433,43 @@ def _augment_with_social(
     db.refresh(result)
 
 
+def _augment_with_benchmark_safely(
+    db: Session,
+    job: AuditJob,
+    result: AuditResult,
+    settings: Settings,
+) -> None:
+    """Enrichment (P2-26 / SMWA-79 — deferred v3): after the website/social result is committed,
+    optionally present the audited scores relative to competitor / industry baselines by stashing
+    normalized benchmark facts in ``score_breakdown["benchmark"]`` (no new DB column — same trick
+    as ``overall_readiness``); ``compose_report_payload`` then appends the section. Benchmarking is
+    presentation only — it NEVER changes a score.
+
+    Best-effort and graceful like every other optional stage here: OFF by default
+    (``benchmark_enabled``), and the collector skips at every not-ready state (no vendor / no key /
+    the deferred stub no-op). A skip — or any failure — leaves the committed result intact, so the
+    report renders without a benchmark section. Only ``SoftTimeLimitExceeded`` propagates."""
+    if not settings.benchmark_enabled:
+        return
+    try:
+        facts = collect_benchmark_facts(settings, target_url=job.url, niche=job.niche)
+        if facts.get("status") not in {"complete", "partial"}:
+            return
+        breakdown = dict(result.score_breakdown or {})
+        breakdown["benchmark"] = facts
+        result.score_breakdown = breakdown
+        db.commit()
+        db.refresh(result)
+    except SoftTimeLimitExceeded:
+        raise
+    except Exception:
+        # Roll back so a failed commit doesn't leave the session in a poisoned
+        # (PendingRollback) state that would sink the next _mark_job commit and flip the
+        # already-committed website audit to FAILED. Leaves the website result intact.
+        db.rollback()
+        return
+
+
 def run_collection_audit(
     job_id: str,
     *,
@@ -564,6 +602,10 @@ def run_collection_audit(
                 db.refresh(job)
                 _augment_with_social(db, job, result, settings, social_collector, effective_handles)
 
+            # Enrichment (deferred v3): optionally present the scores vs competitor/industry
+            # baselines. No-op unless benchmark_enabled; never sinks the committed result.
+            _augment_with_benchmark_safely(db, job, result, settings)
+
             _mark_job(db, job, AuditStatus.RENDERING, "Rendering report exports", 98)
             pdf_result = render_audit_pdf(job, result, settings)
             docx_result, docx_error = _render_docx_safely(job, result, settings)
@@ -688,17 +730,18 @@ def rerun_external_enrichment_for_audit(job_id: str) -> None:
                 },
             )
 
-            # Combined audit: the rescore above is website-only, so it lost the `social` and
-            # `overall_readiness` keys _augment_with_social had added. Re-attach the (unchanged)
-            # social breakdown and recompute the Overall Lead-Gen Readiness from the NEW lead-gen
-            # score + the stored Social Score (social is not re-collected here), so a rerun keeps
-            # the combined report intact instead of silently dropping the headline score.
+            # The rescore above is website-only (`score_audit` only emits scores/categories/
+            # rubric_version/etc.), so it lost every enrichment add-on key the pipeline had stored
+            # — `social`, `benchmark`, and any future one. Enrichment is NOT re-run here, so carry
+            # forward every stored key the website rescore didn't produce, generically, instead of
+            # naming each (a named re-attach silently drops the next add-on on rerun). Then
+            # recompute only `overall_readiness` from the new lead-gen score + the stored Social
+            # Score, so the combined headline reflects the rescore.
+            prev_breakdown = previous["score_breakdown"]
+            if isinstance(prev_breakdown, dict):
+                for key, value in prev_breakdown.items():
+                    score_breakdown.setdefault(key, value)
             if (job.audit_type or "website") == "combined":
-                prev_breakdown = previous["score_breakdown"]
-                if isinstance(prev_breakdown, dict) and isinstance(
-                    prev_breakdown.get("social"), dict
-                ):
-                    score_breakdown["social"] = prev_breakdown["social"]
                 score_breakdown["overall_readiness"] = compose_overall_readiness_score(
                     website_lead_gen=score_breakdown["scores"]["lead_gen"],
                     social_score=result.social_score,

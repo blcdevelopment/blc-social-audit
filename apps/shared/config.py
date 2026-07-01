@@ -149,6 +149,19 @@ class Settings(BaseSettings):
     # free-tier credits) — a kill-switch, the audit still completes.
     social_autodiscovery_enabled: bool = True
 
+    # Competitor benchmarking (P2-26 / SMWA-79 — Epic P2-E5 Enrichment, v3). Presents the audited
+    # scores relative to competitor / industry baselines from a paid provider (SEMrush / Ahrefs /
+    # Similarweb — no free reliable source). DEFERRED: OFF by default, and there is no live vendor
+    # client yet, so the benchmark collector SKIPS gracefully unless (a) `benchmark_enabled` is set,
+    # (b) `benchmark_provider` names a supported vendor, and (c) `benchmark_api_key` is configured —
+    # and even then it no-ops until the vendor client is built and its recurring cost approved (the
+    # acceptance gate). Until then the report is byte-identical and no cost is incurred (mirrors the
+    # Apify / PSI / GSC missing-key skip pattern). Benchmarking is presentation only — it never
+    # changes a score.
+    benchmark_enabled: bool = False
+    benchmark_provider: str = ""  # "" | "semrush" | "ahrefs" | "similarweb"
+    benchmark_api_key: SecretStr | None = None
+
     crawler_user_agent: str = "BLC-Audit-Bot/1.0 (+https://builderleadconverter.com/audit-bot)"
     crawler_max_pages: int = Field(default=10, ge=1, le=50)
     crawler_concurrency: int = Field(default=3, ge=1, le=10)

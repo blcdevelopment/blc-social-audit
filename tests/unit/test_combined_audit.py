@@ -290,10 +290,32 @@ def test_rerun_enrichment_preserves_combined_sections(tmp_path, monkeypatch) -> 
     tasks.run_collection_audit(
         job_id, crawler=_fake_crawler, psi_collector=_fake_psi, social_collector=fake_collector
     )
+    # A benchmark can be present alongside social/overall; it is presentation-only and, like them,
+    # is not re-collected on enrichment — so the rerun must re-attach it, not drop it.
+    benchmark_blob = {
+        "status": "complete",
+        "provider": "semrush",
+        "target_url": "https://example.com/",
+        "niche": None,
+        "competitors": [
+            {
+                "label": "rival.com",
+                "is_industry": False,
+                "source": "semrush",
+                "seo": 60,
+                "uxui": 70,
+                "lead_gen": 65,
+                "social": 40,
+                "overall": 55,
+            }
+        ],
+    }
     with TestingSession() as db:
         result = db.get(AuditJob, UUID(job_id)).result
         before_overall = result.score_breakdown["overall_readiness"]["score"]
         before_social = result.social_score
+        result.score_breakdown = {**result.score_breakdown, "benchmark": benchmark_blob}
+        db.commit()
 
     # Rerun external enrichment (runs synchronously). External sources all skip in this config,
     # so the website score is unchanged — but the combined sections must survive.
@@ -307,6 +329,8 @@ def test_rerun_enrichment_preserves_combined_sections(tmp_path, monkeypatch) -> 
         assert isinstance(result.score_breakdown.get("social"), dict)
         overall = result.score_breakdown.get("overall_readiness")
         assert overall is not None and overall["score"] == before_overall
+        # The benchmark section is re-attached, not silently dropped by the website-only rescore.
+        assert result.score_breakdown.get("benchmark") == benchmark_blob
 
 
 def _fake_crawler_with_social_footer(

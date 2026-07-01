@@ -373,12 +373,13 @@ def _append_search_rows(parts: list[str], title: str, rows: list[JsonDict], labe
 
 
 def _combined_xml(payload: ReportPayload) -> list[str]:
-    """Combined-audit social + overall sections, appended at the end of the website DOCX. Returns
-    [] for a website-only audit (social_audit/overall_readiness are None), leaving the DOCX
-    unchanged. Mirrors the PDF's appended sections."""
+    """Combined-audit social + overall + benchmark sections, appended at the end of the website
+    DOCX. Returns [] for a website-only audit (social_audit/overall_readiness/benchmark are None),
+    leaving the DOCX unchanged. Mirrors the PDF's appended sections."""
     parts: list[str] = []
     social = payload.social_audit
     overall = payload.overall_readiness
+    benchmark = payload.benchmark
 
     if social:
         parts.append(_heading("Social Media Audit", 1))
@@ -475,6 +476,37 @@ def _combined_xml(payload: ReportPayload) -> list[str]:
                     "Social data was unavailable, so this score reflects the website audit only."
                 )
             )
+
+    if benchmark and benchmark.get("competitors"):
+        parts.append(_heading("Competitor Benchmarking", 1))
+        parts.append(
+            _paragraph(
+                "How this site's scores compare to competitor and industry baselines. Benchmarks "
+                "are presentation only and do not change any audit score."
+            )
+        )
+        for competitor in benchmark.get("competitors") or []:
+            if not isinstance(competitor, dict):
+                continue
+            label = competitor.get("label", "-")
+            if competitor.get("is_industry"):
+                label = f"{label} (industry baseline)"
+            parts.append(_heading(label, 2))
+            for m in competitor.get("metrics") or []:
+                if not isinstance(m, dict):
+                    continue
+                # Presentation strings (delta_display / verdict_label) come pre-formatted from
+                # build_benchmark_report_data, so PDF and DOCX stay in lockstep.
+                parts.append(
+                    _bullet(
+                        f"{m.get('label', m.get('metric', '-'))}: this site "
+                        f"{m.get('your_score', '-')} vs baseline {m.get('baseline', '-')} "
+                        f"({m.get('delta_display', '-')}, {m.get('verdict_label', '-')})"
+                    )
+                )
+        provider = benchmark.get("provider")
+        if provider:
+            parts.append(_paragraph(f"Benchmark source: {provider}.", "Meta"))
 
     return parts
 
