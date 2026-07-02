@@ -7,7 +7,8 @@
 > token-gated share endpoints.)*
 >
 > **Update (2026-06-23):** the **standalone Social audit is now BUILT and runnable** (not just a
-> data layer). Ops impact: migration head is now **`20260623_0004`** (additive; auto-runs on
+> data layer). Ops impact: migration head became **`20260623_0004`** at this point (current head is
+> now **`20260625_0005`**; see §5 step 5) (additive; auto-runs on
 > deploy) and **`APIFY_API_TOKEN` is required on the box for social audits** (blank ⇒ social
 > collection is skipped; website audits unaffected). The provider is **Apify** with **two
 > actors** — Instagram Scraper (`apify~instagram-scraper`) + Facebook Pages Scraper
@@ -283,13 +284,14 @@ docker compose -f docker-compose.prod.yml ps
 > newly-added `sentry-sdk` is already picked up at build time. `poetry.lock` has **not** yet been
 > regenerated — run `poetry lock` (laptop) and commit it before the next build so the lock and
 > `requirements.txt` mirror match `pyproject.toml`. This is a dev-sync chore, not a deploy blocker.
-On first boot the API runs `alembic upgrade head` (current head **`20260623_0004`** — chain
-`0001 → 0002 → 0003 → 0004`; `0004` adds the `audit_type` discriminator + `social_handles` to
-`audit_jobs`, `social_score` + `social_facts` to `audit_results`, and makes the website
+On first boot the API runs `alembic upgrade head` (current head **`20260625_0005`** — chain
+`0001 → 0002 → 0003 → 0004 → 0005`; `0004` adds the `audit_type` discriminator + `social_handles`
+to `audit_jobs`, `social_score` + `social_facts` to `audit_results`, and makes the website
 `seo_score` / `uxui_score` / `lead_gen_score` columns nullable so a social result can leave them
-empty — all **additive and safe** to apply over an existing DB; `0003` added `share_token` /
-`share_expires_at` / `brand_overrides`), and Caddy requests the TLS cert automatically
-(allow ~30 s).
+empty; `0005` adds the nullable `audit_results.accessibility_facts` column (advisory-only axe-core
+findings, never scored) — all **additive and safe** to apply over an existing DB; `0003` added
+`share_token` / `share_expires_at` / `brand_overrides`), and Caddy requests the TLS cert
+automatically (allow ~30 s).
 
 ### Step 6 — Clerk dashboard
 - **Restrictions → invitation-only.** Disable open sign-up and invite your 2–3 teammates

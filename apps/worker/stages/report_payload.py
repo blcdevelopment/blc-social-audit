@@ -7,6 +7,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from apps.worker.stages.benchmarking.report import build_benchmark_report_data
 from apps.worker.stages.social.report import build_social_report_data
 
 JsonDict = dict[str, Any]
@@ -593,6 +594,10 @@ class ReportPayload(BaseModel):
     # score. Both append at the END of the report and never alter the website sections above.
     social_audit: JsonDict | None = None
     overall_readiness: JsonDict | None = None
+    # Enrichment: Competitor Benchmarking (P2-26 / SMWA-79 — deferred v3, default None => not
+    # rendered; a report without benchmark data is byte-identical). Presentation only — appended at
+    # the END and never alters the sections above.
+    benchmark: JsonDict | None = None
 
 
 def compose_report_payload(job: Any, result: Any) -> ReportPayload:
@@ -641,6 +646,22 @@ def compose_report_payload(job: Any, result: Any) -> ReportPayload:
             commentary=None,
         )
 
+    # Enrichment: Competitor Benchmarking (deferred v3). Populated only when a benchmark ran and
+    # left facts in score_breakdown["benchmark"]; otherwise None => the section is not rendered.
+    # `overall` is present only for combined audits (a website-only audit has no Overall Readiness),
+    # so an overall-only baseline is intentionally not compared on a website audit — you cannot
+    # benchmark a score that does not exist; the other four metrics still compare.
+    benchmark = build_benchmark_report_data(
+        scores={
+            "seo": result.seo_score,
+            "uxui": result.uxui_score,
+            "lead_gen": result.lead_gen_score,
+            "social": getattr(result, "social_score", None),
+            "overall": (overall_readiness or {}).get("score"),
+        },
+        benchmark_facts=score_breakdown.get("benchmark"),
+    )
+
     return ReportPayload(
         metadata=metadata,
         scores=_score_cards(result, score_breakdown),
@@ -660,6 +681,7 @@ def compose_report_payload(job: Any, result: Any) -> ReportPayload:
         appendix=_appendix(score_breakdown),
         social_audit=social_audit,
         overall_readiness=overall_readiness,
+        benchmark=benchmark,
     )
 
 

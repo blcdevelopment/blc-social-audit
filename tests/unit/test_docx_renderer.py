@@ -29,6 +29,44 @@ def test_render_report_docx_writes_valid_package(tmp_path) -> None:
     assert "Lead Generation Roadmap" in document
 
 
+def test_render_report_docx_appends_benchmark_section(tmp_path) -> None:
+    # When a benchmark ran, the DOCX must append the Competitor Benchmarking section too (parity
+    # with the PDF) — otherwise the same audit's PDF and DOCX diverge.
+    result = _result()
+    result.score_breakdown = {
+        **result.score_breakdown,
+        "benchmark": {
+            "status": "complete",
+            "provider": "semrush",
+            "competitors": [
+                {"label": "rival.com", "is_industry": False, "source": "semrush", "seo": 60},
+            ],
+        },
+    }
+    payload = compose_report_payload(_job(), result)
+    output_path = tmp_path / "audit.docx"
+
+    render_report_docx(payload, output_path=output_path)
+
+    with ZipFile(output_path) as archive:
+        document = archive.read("word/document.xml").decode("utf-8")
+    assert "Competitor Benchmarking" in document
+    assert "rival.com" in document
+    assert "Benchmark source: semrush" in document
+
+
+def test_render_report_docx_omits_benchmark_when_absent(tmp_path) -> None:
+    # No benchmark => no section (byte-identical to a plain website DOCX).
+    payload = compose_report_payload(_job(), _result())
+    output_path = tmp_path / "audit.docx"
+
+    render_report_docx(payload, output_path=output_path)
+
+    with ZipFile(output_path) as archive:
+        document = archive.read("word/document.xml").decode("utf-8")
+    assert "Competitor Benchmarking" not in document
+
+
 def _job() -> SimpleNamespace:
     return SimpleNamespace(
         id=uuid4(),

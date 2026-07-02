@@ -494,8 +494,15 @@ def _as_number(value: Any) -> float | None:
     return None
 
 
-def _round_score(value: float, max_score: int) -> int:
+def round_score(value: float, max_score: int) -> int:
+    """Half-up round to an int, then clamp to ``[0, max_score]`` — the codebase-wide rounding
+    convention (CLAUDE.md §10). Public so other stages (e.g. benchmarking) can reuse it instead of
+    re-implementing the clamp or importing a private name."""
     return min(max(int(value + 0.5), 0), max_score)
+
+
+# Back-compat alias for this module's many internal callers.
+_round_score = round_score
 
 
 def resolve_fact_path(facts: Any, path: str) -> Any:

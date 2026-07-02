@@ -1273,5 +1273,53 @@
       {% endif %}
     </section>
     {% endif %}
+
+    {# Rendered only when a competitor benchmark ran (payload.benchmark populated). Deferred v3. #}
+    {% if payload.get('benchmark') %}
+    {% set benchmark = payload.get('benchmark') %}
+    {# Colour is PDF-only; the verdict wording + signed delta come pre-formatted from the builder
+       (m.verdict_label / m.delta_display) so PDF and DOCX never drift. #}
+    {% set verdict_colors = {"ahead": "#28864b", "behind": "#b42318", "on_par": "#667085"} %}
+    <section class="page-section" id="competitor-benchmark">
+      <p class="eyebrow">Enrichment</p>
+      <h2>Competitor Benchmarking</h2>
+      <p class="helper-copy">
+        How this site's scores compare to competitor and industry baselines. Benchmarks are
+        presentation only — they do not change any audit score.
+      </p>
+
+      {% for competitor in benchmark.competitors %}
+      <h3 style="margin:16px 0 6px;">
+        {{ competitor.label }}{% if competitor.is_industry %} <span class="muted">(industry baseline)</span>{% endif %}
+      </h3>
+      <table style="width:100%; border-collapse:collapse; font-size:11px;">
+        <thead>
+          <tr style="border-bottom:2px solid #e4e7ec; text-align:left; color:#667085;">
+            <th style="padding:6px 8px;">Metric</th>
+            <th style="padding:6px 8px; text-align:right;">This site</th>
+            <th style="padding:6px 8px; text-align:right;">Baseline</th>
+            <th style="padding:6px 8px; text-align:right;">Delta</th>
+            <th style="padding:6px 8px; text-align:right;">Verdict</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for m in competitor.metrics %}
+          <tr style="border-bottom:1px solid #f0f1f3;">
+            <td style="padding:6px 8px;">{{ m.label }}</td>
+            <td style="padding:6px 8px; text-align:right;">{{ m.your_score }}</td>
+            <td style="padding:6px 8px; text-align:right;">{{ m.baseline }}</td>
+            <td style="padding:6px 8px; text-align:right;">{{ m.delta_display }}</td>
+            <td style="padding:6px 8px; text-align:right; color:{{ verdict_colors.get(m.verdict, '#667085') }};">{{ m.verdict_label }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endfor %}
+
+      {% if benchmark.provider %}
+      <p class="muted" style="margin-top:8px;">Benchmark source: {{ benchmark.provider }}.</p>
+      {% endif %}
+    </section>
+    {% endif %}
   </body>
 </html>
