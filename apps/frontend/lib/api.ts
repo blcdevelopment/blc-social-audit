@@ -32,11 +32,57 @@ export interface AuditCreateRequest {
 export interface SocialReportFinding {
   id: string;
   label: string;
+  metric?: string | null;
   remediation: string | null;
   impact: string;
   tier: string;
   result: string;
   narrative?: string;
+}
+
+export interface SocialStrength {
+  id: string;
+  label: string;
+}
+
+export interface SocialTopPost {
+  platform?: string;
+  type?: string;
+  title?: string | null;
+  views?: number | null;
+  likes?: number;
+  comments?: number;
+  engagement?: number;
+  posted?: string | null;
+}
+
+export interface SocialPlatformScore {
+  platform?: string;
+  handle?: string;
+  followers?: number | null;
+  posts_per_month?: number | null;
+  days_since_last_post?: number | null;
+  avg_engagement_rate_pct?: number | null;
+  video_share_pct?: number | null;
+  avg_views_per_post?: number | null;
+  total_views?: number | null;
+  verified?: boolean;
+  is_business?: boolean;
+  profile_complete?: boolean;
+  link_in_bio?: boolean;
+  has_cta?: boolean;
+}
+
+export interface SocialContentInsights {
+  content_mix: { video: number | null; image: number | null; carousel: number | null };
+  total_views: number | null;
+  avg_views_per_post: number | null;
+  avg_engagement_rate_pct: number | null;
+  avg_like_to_comment_ratio: number | null;
+  max_posting_gap_days: number | null;
+  avg_hashtags_per_post: number | null;
+  posts_with_cta_caption_pct: number | null;
+  avg_follower_following_ratio: number | null;
 }
 
 export interface SocialReport {
@@ -51,6 +97,10 @@ export interface SocialReport {
   executive_summary?: string;
   commentary_provider?: string;
   findings: SocialReportFinding[];
+  strengths?: SocialStrength[];
+  content_insights?: SocialContentInsights | null;
+  top_posts?: SocialTopPost[];
+  per_platform?: SocialPlatformScore[];
   roadmap: Record<string, SocialReportFinding[]>;
 }
 

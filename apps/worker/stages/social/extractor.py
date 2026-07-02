@@ -36,6 +36,7 @@ _CTA_RE = re.compile(
     re.IGNORECASE,
 )
 _URL_RE = re.compile(r"https?://[^\s)]+", re.IGNORECASE)
+_HASHTAG_RE = re.compile(r"#\w+")
 
 
 def _clean(value: Any) -> str:
@@ -105,12 +106,144 @@ def _has_video(raw: JsonDict, posts: list[JsonDict]) -> bool:
     return False
 
 
+def _short_date(value: Any) -> str | None:
+    ts = _parse_ts(value)
+    return ts.strftime("%b %d, %Y") if ts else None
+
+
+def _post_kind(post: JsonDict) -> str:
+    """image | video | carousel for a normalized post (provider 'type' + video-view fallback)."""
+    kind = str(post.get("type", "")).lower()
+    if kind in {"sidecar", "carousel", "carousel_album"}:
+        return "carousel"
+    if kind == "video" or _int(post.get("videoViewCount")) > 0:
+        return "video"
+    return "image"
+
+
+def _content_mix(posts: list[JsonDict]) -> tuple[float | None, float | None, float | None]:
+    """(video%, image%, carousel%) of the sampled posts, or (None, None, None) when no posts."""
+    if not posts:
+        return (None, None, None)
+    n = len(posts)
+    video = sum(1 for p in posts if _post_kind(p) == "video")
+    carousel = sum(1 for p in posts if _post_kind(p) == "carousel")
+    image = n - video - carousel
+    return (round(video / n * 100, 1), round(image / n * 100, 1), round(carousel / n * 100, 1))
+
+
+def _max_posting_gap_days(times: list[datetime], now: datetime) -> int | None:
+    """Longest gap (days) between consecutive sampled posts OR since the last post.
+
+    Counting the trailing gap (last post -> now) is load-bearing: otherwise a dormant account
+    whose few sampled posts happen to be close together passes the consistency rule and gets
+    praised as "posting regularly" in the same report that flags it stale (see test).
+    """
+    if not times:
+        return None
+    gaps = [(times[i + 1] - times[i]).days for i in range(len(times) - 1)]
+    gaps.append((now - times[-1]).days)
+    return max(gaps)
+
+
+def _like_to_comment_ratio(posts: list[JsonDict]) -> float | None:
+    likes = sum(max(_int(p.get("likesCount")), 0) for p in posts if p.get("likesCount") is not None)
+    comments = sum(
+        max(_int(p.get("commentsCount")), 0) for p in posts if p.get("commentsCount") is not None
+    )
+    return round(likes / comments, 1) if comments > 0 else None
+
+
+def _avg_views_per_post(posts: list[JsonDict]) -> float | None:
+    views = [_int(p.get("videoViewCount")) for p in posts if p.get("videoViewCount") is not None]
+    views = [v for v in views if v > 0]
+    return round(sum(views) / len(views), 1) if views else None
+
+
+def _best_post_engagement(posts: list[JsonDict]) -> int | None:
+    totals = [
+        max(_int(p.get("likesCount")), 0) + max(_int(p.get("commentsCount")), 0)
+        for p in posts
+        if p.get("likesCount") is not None or p.get("commentsCount") is not None
+    ]
+    return max(totals) if totals else None
+
+
+def _avg_hashtags_per_post(posts: list[JsonDict]) -> float | None:
+    """Mean hashtags/post from an explicit ``hashtags`` list or, failing that, the caption text.
+    None when no post has hashtag/caption data (so the hashtag rule skip_if_missing-rescales)."""
+    counts: list[int] = []
+    for post in posts:
+        tags = post.get("hashtags")
+        if isinstance(tags, list):
+            counts.append(len([t for t in tags if t]))
+        elif isinstance(post.get("caption"), str):
+            counts.append(len(_HASHTAG_RE.findall(post["caption"])))
+    return round(sum(counts) / len(counts), 1) if counts else None
+
+
+def _caption_cta_pct(posts: list[JsonDict]) -> float | None:
+    captions = [
+        p["caption"] for p in posts if isinstance(p.get("caption"), str) and p["caption"].strip()
+    ]
+    if not captions:
+        return None
+    hits = sum(1 for caption in captions if _CTA_RE.search(caption))
+    return round(hits / len(captions) * 100, 1)
+
+
+def _top_posts(posts: list[JsonDict], *, limit: int = 3) -> list[JsonDict]:
+    """Best sampled posts (by views, then likes+comments) — the 'top performing content' table."""
+    enriched: list[JsonDict] = []
+    for post in posts:
+        likes = max(_int(post.get("likesCount")), 0)
+        comments = max(_int(post.get("commentsCount")), 0)
+        views = _int(post.get("videoViewCount"))
+        if post.get("likesCount") is None and post.get("commentsCount") is None and views <= 0:
+            continue
+        enriched.append(
+            {
+                "type": _post_kind(post),
+                "views": views or None,
+                "likes": likes,
+                "comments": comments,
+                "engagement": likes + comments,
+                "posted": _short_date(post.get("timestamp")),
+                "title": _clean(post.get("title")) or None,
+            }
+        )
+    enriched.sort(key=lambda p: ((p["views"] or 0), p["engagement"]), reverse=True)
+    return enriched[:limit]
+
+
+def _post_detail_facts(posts: list[JsonDict], times: list[datetime], *, now: datetime) -> JsonDict:
+    """Per-profile content/performance detail derived from the sampled posts (all None-safe).
+
+    ``times`` is the already-parsed/sorted post timestamps the caller computed (reused here so the
+    cadence facts and the posting-gap fact never derive from two separate parses that could drift).
+    """
+    video_pct, image_pct, carousel_pct = _content_mix(posts)
+    return {
+        "video_share_pct": video_pct,
+        "image_share_pct": image_pct,
+        "carousel_share_pct": carousel_pct,
+        "max_posting_gap_days": _max_posting_gap_days(times, now),
+        "like_to_comment_ratio": _like_to_comment_ratio(posts),
+        "avg_views_per_post": _avg_views_per_post(posts),
+        "best_post_engagement": _best_post_engagement(posts),
+        "avg_hashtags_per_post": _avg_hashtags_per_post(posts),
+        "posts_with_cta_caption_pct": _caption_cta_pct(posts),
+        "top_posts": _top_posts(posts),
+    }
+
+
 def normalize_instagram_profile(raw: JsonDict, handle: str, *, now: datetime) -> JsonDict:
     bio = _clean(raw.get("biography"))
     external = _clean(raw.get("externalUrl"))
     full_name = _clean(raw.get("fullName"))
     followers = _int(raw.get("followersCount"))
     is_business = bool(raw.get("isBusinessAccount"))
+    follows = _int(raw.get("followsCount"))
     posts = raw.get("latestPosts")
     posts = [p for p in posts if isinstance(p, dict)] if isinstance(posts, list) else []
     times = sorted(t for t in (_parse_ts(p.get("timestamp")) for p in posts) if t)
@@ -137,6 +270,10 @@ def normalize_instagram_profile(raw: JsonDict, handle: str, *, now: datetime) ->
             "days_since_last_post": (now - times[-1]).days if times else None,
             "avg_engagement_rate_pct": _avg_engagement(posts, followers),
             "has_video": _has_video(raw, posts),
+            "follows_count": follows,
+            "follower_following_ratio": round(followers / follows, 1) if follows > 0 else None,
+            "total_views": None,
+            **_post_detail_facts(posts, times, now=now),
         }
     )
 
@@ -162,6 +299,7 @@ def normalize_facebook_profile(raw: JsonDict, handle: str, *, now: datetime) -> 
             "type": "video"
             if (p.get("video") or p.get("videoUrl") or p.get("isVideo"))
             else "post",
+            "caption": _first(p, ("text", "message", "caption")),
         }
         for p in raw_posts
     ]
@@ -191,6 +329,10 @@ def normalize_facebook_profile(raw: JsonDict, handle: str, *, now: datetime) -> 
             "days_since_last_post": (now - times[-1]).days if times else None,
             "avg_engagement_rate_pct": _avg_engagement(posts, followers),
             "has_video": any(p.get("type") == "video" for p in posts),
+            "follows_count": 0,
+            "follower_following_ratio": None,
+            "total_views": None,
+            **_post_detail_facts(posts, times, now=now),
         }
     )
 
@@ -214,6 +356,7 @@ def normalize_youtube_channel(raw: JsonDict, handle: str, *, now: datetime) -> J
     banner = _clean((branding.get("image") or {}).get("bannerExternalUrl"))
     followers = _int(stats.get("subscriberCount"))
     video_count = _int(stats.get("videoCount"))
+    lifetime_views = _int(stats.get("viewCount"))
     custom_url = _clean(snippet.get("customUrl")).lstrip("@").strip("/")
 
     posts = [
@@ -223,6 +366,7 @@ def normalize_youtube_channel(raw: JsonDict, handle: str, *, now: datetime) -> J
             "videoViewCount": (v.get("statistics") or {}).get("viewCount"),
             "timestamp": (v.get("snippet") or {}).get("publishedAt"),
             "type": "video",
+            "title": (v.get("snippet") or {}).get("title"),
         }
         for v in videos
     ]
@@ -247,7 +391,9 @@ def normalize_youtube_channel(raw: JsonDict, handle: str, *, now: datetime) -> J
             "posts_count": video_count,
             "verified": False,
             "private": False,
-            "is_business": False,
+            # YouTube has no Business/Creator-account concept -> None (not False) so the
+            # business-account rule skip_if_missing-rescales instead of vacuously failing it.
+            "is_business": None,
             "category": None,
             "bio_present": bool(description),
             "link_in_bio": link or None,
@@ -259,6 +405,10 @@ def normalize_youtube_channel(raw: JsonDict, handle: str, *, now: datetime) -> J
             "days_since_last_post": (now - times[-1]).days if times else None,
             "avg_engagement_rate_pct": _avg_engagement(posts, followers),
             "has_video": bool(videos) or video_count > 0,
+            "follows_count": 0,
+            "follower_following_ratio": None,
+            "total_views": lifetime_views or None,
+            **_post_detail_facts(posts, times, now=now),
         }
     )
 
@@ -268,17 +418,28 @@ def _empty_summary() -> JsonDict:
     return SocialSummary().as_facts()
 
 
+def _collect(profiles: list[JsonDict], key: str) -> list[Any]:
+    """Non-None values of ``key`` across profiles (skips platforms lacking that fact)."""
+    return [p[key] for p in profiles if p.get(key) is not None]
+
+
+def _mean(values: list[Any], digits: int = 1) -> float | None:
+    return round(sum(values) / len(values), digits) if values else None
+
+
 def summarize_profiles(profiles: list[JsonDict]) -> JsonDict:
     count = len(profiles)
     if count == 0:
         return _empty_summary()
-    ppm = [p["posts_per_month"] for p in profiles if p.get("posts_per_month") is not None]
-    dsp = [p["days_since_last_post"] for p in profiles if p.get("days_since_last_post") is not None]
-    eng = [
-        p["avg_engagement_rate_pct"]
-        for p in profiles
-        if p.get("avg_engagement_rate_pct") is not None
-    ]
+    ppm = _collect(profiles, "posts_per_month")
+    dsp = _collect(profiles, "days_since_last_post")
+    eng = _collect(profiles, "avg_engagement_rate_pct")
+    gaps = _collect(profiles, "max_posting_gap_days")
+    total_views = _collect(profiles, "total_views")
+    # Only profiles on a platform that HAS a business-account concept report is_business (IG/FB
+    # a real bool, YouTube None). None when none of them do, so the rule skip_if_missing-rescales
+    # rather than penalizing e.g. a YouTube-only audit for a setting YouTube doesn't have.
+    business = _collect(profiles, "is_business")
     return _summary_facts(
         {
             "platforms_audited": count,
@@ -296,6 +457,20 @@ def summarize_profiles(profiles: list[JsonDict]) -> JsonDict:
             "profiles_with_cta": sum(1 for p in profiles if p.get("has_cta")),
             "has_video_content": any(p.get("has_video") for p in profiles),
             "profiles_with_logo_avatar": sum(1 for p in profiles if p.get("has_logo_avatar")),
+            # Extended detail aggregates (some scored, the rest surfaced as content insights).
+            "profiles_verified": sum(1 for p in profiles if p.get("verified")),
+            "profiles_business_account": sum(1 for v in business if v) if business else None,
+            "profiles_with_category": sum(1 for p in profiles if p.get("category")),
+            "avg_follower_following_ratio": _mean(_collect(profiles, "follower_following_ratio")),
+            "video_share_pct": _mean(_collect(profiles, "video_share_pct")),
+            "image_share_pct": _mean(_collect(profiles, "image_share_pct")),
+            "carousel_share_pct": _mean(_collect(profiles, "carousel_share_pct")),
+            "max_posting_gap_days": max(gaps) if gaps else None,
+            "avg_views_per_post": _mean(_collect(profiles, "avg_views_per_post")),
+            "total_views": sum(_int(v) for v in total_views) if total_views else None,
+            "avg_like_to_comment_ratio": _mean(_collect(profiles, "like_to_comment_ratio")),
+            "avg_hashtags_per_post": _mean(_collect(profiles, "avg_hashtags_per_post")),
+            "posts_with_cta_caption_pct": _mean(_collect(profiles, "posts_with_cta_caption_pct")),
         }
     )
 

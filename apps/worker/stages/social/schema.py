@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 JsonDict = dict[str, Any]
 
@@ -41,7 +41,9 @@ class SocialProfileFacts(BaseModel):
     posts_count: int = 0
     verified: bool = False
     private: bool = False
-    is_business: bool = False
+    # None for a platform with no Business/Creator-account concept (YouTube), so the scored
+    # business-account aggregate rescales it away instead of counting it a failure.
+    is_business: bool | None = False
     category: str | None = None
     bio_present: bool = False
     link_in_bio: str | None = None
@@ -53,6 +55,23 @@ class SocialProfileFacts(BaseModel):
     days_since_last_post: int | None = None
     avg_engagement_rate_pct: float | None = None
     has_video: bool = False
+
+    # Content & performance detail derived from the sampled posts (None when not derivable, e.g.
+    # a Facebook page with no posts, or hashtags/captions a provider didn't return). These power
+    # the report's content-insights / top-posts / per-platform sections and a few of the rules.
+    follows_count: int = 0
+    follower_following_ratio: float | None = None
+    video_share_pct: float | None = None
+    image_share_pct: float | None = None
+    carousel_share_pct: float | None = None
+    max_posting_gap_days: int | None = None
+    like_to_comment_ratio: float | None = None
+    avg_views_per_post: float | None = None
+    total_views: int | None = None
+    best_post_engagement: int | None = None
+    avg_hashtags_per_post: float | None = None
+    posts_with_cta_caption_pct: float | None = None
+    top_posts: list[JsonDict] = Field(default_factory=list)
 
     def as_facts(self) -> JsonDict:
         """The plain-dict form the pipeline consumes (scoring reads it by ``fact_path``)."""
@@ -79,6 +98,24 @@ class SocialSummary(BaseModel):
     profiles_with_cta: int = 0
     has_video_content: bool = False
     profiles_with_logo_avatar: int = 0
+
+    # Extended detail aggregates. Those whose name is a rule ``fact_path`` in social.yaml are
+    # SCORED (profiles_business_account, video_share_pct, max_posting_gap_days,
+    # avg_hashtags_per_post); the rest are surfaced in the report's content-insights section.
+    # None (not 0) when no profile supplied the underlying data, so any scored rule skip_if_missing.
+    profiles_verified: int = 0
+    profiles_business_account: int | None = 0
+    profiles_with_category: int = 0
+    avg_follower_following_ratio: float | None = None
+    video_share_pct: float | None = None
+    image_share_pct: float | None = None
+    carousel_share_pct: float | None = None
+    max_posting_gap_days: int | None = None
+    avg_views_per_post: float | None = None
+    total_views: int | None = None
+    avg_like_to_comment_ratio: float | None = None
+    avg_hashtags_per_post: float | None = None
+    posts_with_cta_caption_pct: float | None = None
 
     def as_facts(self) -> JsonDict:
         return self.model_dump()

@@ -138,6 +138,17 @@ class Settings(BaseSettings):
     youtube_api_key: SecretStr | None = None
     youtube_timeout_seconds: int = Field(default=30, ge=5)
 
+    # Auto-discover social profile links (Instagram/Facebook/YouTube) from the crawled HTML to fill
+    # any platform the operator left blank (explicit handles always win per platform — the
+    # per-platform blank-fill the new-audit form promises). For a plain WEBSITE submission this
+    # promotes it to a combined audit (appending the Social Media Audit + Overall Lead-Gen
+    # Readiness sections), but ONLY when a matching provider credential (APIFY_API_TOKEN /
+    # YOUTUBE_API_KEY) is configured — without those keys a website audit stays website-only and
+    # the flag has no effect. Discovery is pure HTML parsing (no extra network), so audits stay
+    # reproducible. Default ON; set false to stop the extra Apify/YouTube scrapes (conserve
+    # free-tier credits) — a kill-switch, the audit still completes.
+    social_autodiscovery_enabled: bool = True
+
     crawler_user_agent: str = "BLC-Audit-Bot/1.0 (+https://builderleadconverter.com/audit-bot)"
     crawler_max_pages: int = Field(default=10, ge=1, le=50)
     crawler_concurrency: int = Field(default=3, ge=1, le=10)

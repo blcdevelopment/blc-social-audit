@@ -40,6 +40,16 @@ def test_skipped_collection_yields_no_score() -> None:
     assert result["score"] is None
 
 
+def test_youtube_only_audit_skips_business_account_rule() -> None:
+    # A YouTube-only audit must not be penalized by the Business/Creator-account rule (YouTube has
+    # no such concept) — the rule should skip_if_missing-rescale, not surface a vacuous failure.
+    raw = json.loads((FIXTURES / "social_youtube_strong.json").read_text())
+    facts = extract_social_facts([{"platform": "youtube", "handle": "acme", "raw": raw}], now=NOW)
+    result = score_social_audit(facts, Settings())
+    by_id = {r["rule_id"]: r for r in result["category"]["rules"]}
+    assert by_id["social.profile.business_account"]["result"] == "skipped"
+
+
 def test_social_rubric_does_not_change_website_composite() -> None:
     # Guard: allowing category="social" must not let "social" into the website composite.
     from apps.worker.stages.scoring import load_composite_rubric
