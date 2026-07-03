@@ -25,6 +25,10 @@ def _settings(**overrides) -> SimpleNamespace:
         "site_health_max_external_urls": 50,
         "site_health_check_external_links": False,
         "site_health_concurrency": 4,
+        "site_health_per_host_concurrency": 2,
+        # Tests run against a local fixture server; politeness pacing would only slow them.
+        "site_health_request_delay_ms": 0,
+        "site_health_breaker_threshold": 5,
         "site_health_request_timeout_seconds": 5,
         "site_health_total_budget_seconds": 30,
         "site_health_sitemap_max_urls": 100,
@@ -381,3 +385,108 @@ def test_external_seo_uses_site_health_when_screaming_frog_disabled() -> None:
     assert facts["sources"]["technical_crawl_tool"] == "site_health_sweep"
     assert facts["technical_crawl"]["summary"]["duplicate_titles"] == 2
     assert facts["gsc"]["status"] == "skipped"
+
+
+def test_breaker_trips_and_reports_bot_blocked(monkeypatch) -> None:
+    # Consecutive connection failures (a WAF dropping the checker, or a dead host) must
+    # stop the sweep and mark the source partial:bot_blocked instead of emitting mass
+    # false "dead link" findings — the non-complete status keeps it out of scoring.
+    async def _fake_recheck(url, settings):
+        return True
+
+    monkeypatch.setattr(site_health, "_browser_ua_recheck", _fake_recheck)
+    dead = [{"url": f"http://127.0.0.1:9/page-{i}"} for i in range(10)]
+    facts = collect_site_health_facts(
+        url="http://127.0.0.1:9/",
+        seo_facts={"status": "complete", "pages": []},
+        crawled_pages={"final_url": "http://127.0.0.1:9/", "discovered_links": dead},
+        rendered_pages=None,
+        settings=_settings(
+            site_health_breaker_threshold=3,
+            site_health_per_host_concurrency=1,
+            site_health_sitemap_max_urls=0,
+        ),
+    )
+
+    assert facts["status"] == "partial"
+    assert facts["reason"] == "bot_blocked"
+    assert facts["checks"]["browser_recheck_ok"] is True
+    # The breaker stopped the run: at most threshold failures counted, the rest skipped.
+    assert facts["summary"]["unreachable_internal_urls"] <= 4
+    assert facts["checks"]["skipped_breaker"] >= 1
+    assert facts["summary"]["unreachable_error_classes"].get("connection_failed", 0) >= 3
+    assert any("stopped early" in note for note in facts["notes"])
+    assert any("regular browser profile" in note for note in facts["notes"])
+
+
+def test_healthy_sweep_stays_complete_and_reports_rate() -> None:
+    with _serve() as base:
+        crawled_pages = {
+            "final_url": f"{base}/",
+            "pages": [{"url": f"{base}/", "final_url": f"{base}/"}],
+            "discovered_links": [{"url": f"{base}/ok"}],
+        }
+        facts = collect_site_health_facts(
+            url=f"{base}/",
+            seo_facts={"status": "complete", "pages": []},
+            crawled_pages=crawled_pages,
+            rendered_pages=None,
+            settings=_settings(site_health_sitemap_max_urls=0),
+        )
+
+    assert facts["status"] == "complete"
+    assert "reason" not in facts
+    assert any("ran politely" in note for note in facts["notes"])
+
+
+def test_rate_limited_url_is_retried_after_retry_after(monkeypatch) -> None:
+    # A 429 must be honored (Retry-After) and retried — never insta-hammered with a GET.
+    class _Handler429(_Handler):
+        attempts: dict[str, int] = {}
+
+        def _respond(self, include_body: bool) -> None:
+            if self.path == "/limited":
+                count = self.attempts.get(self.path, 0) + 1
+                self.attempts[self.path] = count
+                if count == 1:
+                    self.send_response(429)
+                    self.send_header("Retry-After", "0")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                body = b"ok now"
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                if include_body:
+                    self.wfile.write(body)
+                return
+            super()._respond(include_body)
+
+    handler = functools.partial(_Handler429)
+    httpd = socketserver.TCPServer(("127.0.0.1", 0), handler)
+    port = int(httpd.server_address[1])
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        base = f"http://127.0.0.1:{port}"
+        facts = collect_site_health_facts(
+            url=f"{base}/",
+            seo_facts={"status": "complete", "pages": []},
+            crawled_pages={
+                "final_url": f"{base}/",
+                "pages": [{"url": f"{base}/", "final_url": f"{base}/"}],
+                "discovered_links": [{"url": f"{base}/limited"}],
+            },
+            rendered_pages=None,
+            settings=_settings(site_health_sitemap_max_urls=0),
+        )
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+    assert facts["status"] == "complete"
+    # The retried request succeeded, so the URL is NOT a client error or unreachable.
+    assert facts["summary"]["client_error_internal_urls"] == 0
+    assert facts["summary"]["unreachable_internal_urls"] == 0
+    assert facts["summary"]["internal_urls_checked"] == 1

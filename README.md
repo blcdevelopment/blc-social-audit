@@ -346,4 +346,6 @@ python scripts/check_apify_social.py [handle_or_url]        # live Apify social 
 | [docs/13_AI_INSIGHTS_INTEGRATION_PLAN.md](docs/13_AI_INSIGHTS_INTEGRATION_PLAN.md) | AI-visibility insights integration plan (parked) |
 | [docs/14_AI_VISIBILITY_VENDOR_SELECTION.md](docs/14_AI_VISIBILITY_VENDOR_SELECTION.md) | AI-visibility vendor selection (parked) |
 | [docs/15_FUTURE_ARCHITECTURE_OPTIONS.md](docs/15_FUTURE_ARCHITECTURE_OPTIONS.md) | Future design reference: combine social into the website Lead-Gen score; Apify→Bright Data swap; S3 |
+| [docs/17_REPORT_QUALITY_PLAN.md](docs/17_REPORT_QUALITY_PLAN.md) | Report credibility & accuracy plan (expert-review hardening; root causes + research) |
+| [docs/18_REPORT_QUALITY_JIRA_PLAN.md](docs/18_REPORT_QUALITY_JIRA_PLAN.md) | Report-quality Jira epic & tasks (RQ-1..RQ-19, copy-paste ready) |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Authoritative production deployment reference (live stack, CI/CD) |

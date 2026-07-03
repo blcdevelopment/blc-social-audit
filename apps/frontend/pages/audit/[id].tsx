@@ -69,6 +69,10 @@ function SectionBlock({ section }: { section: ReportSection }) {
       {section.findings.length > 0 && (
         <div className="section-sub">
           <h4>Findings</h4>
+          {/* One card per issue: the fix ("Do this") travels with its finding; the
+              roadmap groups the same fixes by timeline, so a separate Recommendations
+              list would repeat every sentence. Older stored results without
+              action_items fall back to the recommendations list below. */}
           <ul className="finding-list">
             {section.findings.map((finding, index) => (
               <li key={index}>
@@ -76,6 +80,13 @@ function SectionBlock({ section }: { section: ReportSection }) {
                 <div>
                   <strong>{finding.title}</strong>
                   <p>{finding.explanation}</p>
+                  {(finding.action_items ?? []).length > 0 && (
+                    <ul className="action-list">
+                      {(finding.action_items ?? []).map((item, itemIndex) => (
+                        <li key={itemIndex}>Do this: {item}</li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
               </li>
             ))}
@@ -83,26 +94,27 @@ function SectionBlock({ section }: { section: ReportSection }) {
         </div>
       )}
 
-      {section.recommendations.length > 0 && (
-        <div className="section-sub">
-          <h4>Recommendations</h4>
-          <ul className="rec-list">
-            {section.recommendations.map((rec, index) => (
-              <li key={index}>
-                <strong>{rec.title}</strong>
-                <p>{rec.rationale}</p>
-                {rec.action_items.length > 0 && (
-                  <ul className="action-list">
-                    {rec.action_items.map((item, itemIndex) => (
-                      <li key={itemIndex}>{item}</li>
-                    ))}
-                  </ul>
-                )}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+      {section.findings.every((finding) => (finding.action_items ?? []).length === 0) &&
+        section.recommendations.length > 0 && (
+          <div className="section-sub">
+            <h4>Recommendations</h4>
+            <ul className="rec-list">
+              {section.recommendations.map((rec, index) => (
+                <li key={index}>
+                  <strong>{rec.title}</strong>
+                  <p>{rec.rationale}</p>
+                  {rec.action_items.length > 0 && (
+                    <ul className="action-list">
+                      {rec.action_items.map((item, itemIndex) => (
+                        <li key={itemIndex}>{item}</li>
+                      ))}
+                    </ul>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
     </section>
   );
 }

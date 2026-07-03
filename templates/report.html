@@ -13,6 +13,11 @@
 {% macro va_seg_arc(pct, start, color) -%}
 {% if pct and pct > 0 %}<circle class="va-donut-arc" cx="18" cy="18" r="15.915" fill="none" stroke="{{ color }}" stroke-dasharray="{{ pct }} {{ 100 - pct }}" transform="rotate({{ (start * 3.6) - 90 }} 18 18)"></circle>{% endif %}
 {%- endmacro %}
+{# Chart labels show the path only — full URLs all truncate to the same scheme+host prefix. #}
+{% macro display_path(u) -%}
+{%- set no_scheme = (u or "").split("://", 1)[-1] -%}
+{%- if "/" in no_scheme -%}/{{ no_scheme.split("/", 1)[1] }}{%- else -%}/{%- endif -%}
+{%- endmacro %}
 <!doctype html>
 <html lang="en">
   <head>
@@ -41,15 +46,25 @@
           </div>
         {% endif %}
       </div>
+      {% set cover_overall = payload.get('overall_readiness') %}
+      {% set cover_combined = cover_overall and cover_overall.get('score') is not none %}
       <div class="cover-main">
-        <p class="cover-eyebrow">Comprehensive Website Audit</p>
-        <h1>Website Audit Report</h1>
+        <p class="cover-eyebrow">{% if cover_combined %}Comprehensive Website &amp; Social Media Audit{% else %}Comprehensive Website Audit{% endif %}</p>
+        <h1>{% if cover_combined %}Website &amp; Social Media Audit Report{% else %}Website Audit Report{% endif %}</h1>
         <p class="cover-url">{{ payload.metadata.final_url }}</p>
         <div class="cover-scores">
+          {% if cover_combined %}
+            {% set oring = {"strong": "#28864b", "fair": "#c98a16", "weak": "#b42318"}.get(cover_overall.get('band'), "#667085") %}
+            <div class="cover-score score-band-{{ cover_overall.get('band') }}">
+              {{ score_gauge(cover_overall.get('score'), cover_overall.get('max_score', 100), oring, "lg") }}
+              <p class="cover-score-label">Overall Lead-Gen Readiness</p>
+              <p class="cover-score-band">{{ (cover_overall.get('band') or '') | title }}</p>
+            </div>
+          {% endif %}
           {% for score in payload.scores %}
             {% set ring = {"strong": "#28864b", "fair": "#c98a16", "weak": "#b42318"}[score.band] %}
             <div class="cover-score score-band-{{ score.band }}">
-              {{ score_gauge(score.score, score.max_score, ring, "lg") }}
+              {{ score_gauge(score.score, score.max_score, ring, "md" if cover_combined else "lg") }}
               <p class="cover-score-label">{{ score.label }}</p>
               <p class="cover-score-band">{{ score.band_label }}</p>
             </div>
@@ -63,7 +78,7 @@
             <dd>{{ payload.metadata.generated_date }}</dd>
           </div>
           <div>
-            <dt>Pages Crawled</dt>
+            <dt>Pages Reviewed</dt>
             <dd>{{ payload.metadata.pages_crawled }}</dd>
           </div>
           {% if payload.metadata.niche %}
@@ -86,12 +101,13 @@
     <section class="page-section toc" id="contents">
       <p class="eyebrow">Report Contents</p>
       <h2>Contents</h2>
+      {# Entries listed in body order so the printed page numbers read in sequence. #}
       <ol>
         <li><a href="#executive">Executive Summary</a></li>
         <li><a href="#seo">SEO Findings</a></li>
-        <li><a href="#technical-seo">Technical SEO</a></li>
-        <li><a href="#search-performance">Search Performance</a></li>
         <li><a href="#uxui">UX/UI Findings</a></li>
+        <li><a href="#technical-seo">Site Health</a></li>
+        <li><a href="#search-performance">Search Performance</a></li>
         {% if payload.accessibility_advisory_section.status == "complete" %}
         <li><a href="#accessibility">Accessibility (Advisory)</a></li>
         {% endif %}
@@ -104,6 +120,9 @@
         {% endif %}
         {% if payload.get('overall_readiness') %}
         <li><a href="#overall-readiness">Overall Lead-Gen Readiness</a></li>
+        {% endif %}
+        {% if payload.get('benchmark') %}
+        <li><a href="#competitor-benchmark">Competitor Benchmarking</a></li>
         {% endif %}
       </ol>
     </section>
@@ -217,6 +236,9 @@
               <article class="finding-card severity-{{ finding.severity }}">
                 <div class="finding-head">
                   <span class="sev-pill sev-{{ finding.severity }}">{{ finding.severity }}</span>
+                  {% if finding.tier %}
+                    <span class="tier-pill tier-pill-{{ finding.tier }}">{{ finding.tier.replace("_", " ") }}</span>
+                  {% endif %}
                   <h4>{{ finding.title }}</h4>
                 </div>
                 {% if finding.meaning %}
@@ -228,6 +250,14 @@
                   </div>
                 {% else %}
                   <p class="finding-body">{{ finding.explanation }}</p>
+                {% endif %}
+                {% if finding.action_items %}
+                  <p class="rec-action-label">Do this</p>
+                  <ul class="action-items">
+                    {% for item in finding.action_items %}
+                      <li>{{ item }}</li>
+                    {% endfor %}
+                  </ul>
                 {% endif %}
                 {% if finding.location_urls %}
                   <div class="issue-locations">
@@ -242,42 +272,16 @@
               </article>
             {% endfor %}
           </div>
-
-          <h3>Recommendations</h3>
-          <div class="recommendation-list">
-            {% for recommendation in section.recommendations %}
-              <article class="recommendation tier-{{ recommendation.tier }}">
-                <span class="tier-pill tier-pill-{{ recommendation.tier }}">{{ recommendation.tier.replace("_", " ") }}</span>
-                <h4>{{ recommendation.title }}</h4>
-                <p>{{ recommendation.rationale }}</p>
-                {% if recommendation.action_items %}
-                  <p class="rec-action-label">Do this</p>
-                  <ul class="action-items">
-                    {% for item in recommendation.action_items %}
-                      <li>{{ item }}</li>
-                    {% endfor %}
-                  </ul>
-                {% endif %}
-                {% if recommendation.location_urls %}
-                  <div class="issue-locations">
-                    <p class="location-label">{{ recommendation.location_label or "Where to start" }}:</p>
-                    <ul class="url-list">
-                      {% for url in recommendation.location_urls %}
-                        <li>{{ url }}</li>
-                      {% endfor %}
-                    </ul>
-                  </div>
-                {% endif %}
-              </article>
-            {% endfor %}
-          </div>
+          {# Each finding card above carries its own fix; the roadmap groups the same
+             fixes by timeline, so a separate per-section Recommendations list would
+             repeat every sentence a third time. #}
         </section>
       {% endif %}
     {% endfor %}
 
     <section class="page-section" id="technical-seo">
-      <p class="eyebrow">Technical SEO</p>
-      <h2>Site-wide technical crawl</h2>
+      <p class="eyebrow">SEO &middot; Site Health</p>
+      <h2>Site health check</h2>
       {% set technical_available = payload.technical_seo_section.status == "complete" %}
       <dl class="metric-list inline">
         <div><dt>Status</dt><dd>{{ payload.technical_seo_section.status_label }}</dd></div>
@@ -304,7 +308,7 @@
         <article>
           <h3>How to use it</h3>
           <p>
-            Fix high-severity crawl issues first, especially errors on important service,
+            Fix high-severity issues first, especially errors on important service,
             location, or lead pages. Use the example URLs as the starting list for the
             web team or CMS editor. In lead-generation terms: pages search engines cannot
             reach or read cannot earn the calls and form fills that grow the business.
@@ -354,12 +358,12 @@
         </div>
       {% elif technical_available %}
         <p class="muted">
-          The technical crawl completed for this audit and did not find issue groups that
+          The site health check completed for this audit and did not find issue groups that
           matched the report thresholds.
         </p>
       {% else %}
         <p class="muted">
-          Technical crawl data was not available for this report, so this section does not
+          Site health data was not available for this report, so this section does not
           make clean-or-broken claims.
           {% if payload.technical_seo_section.reason_label %}
             Reason: {{ payload.technical_seo_section.reason_label }}
@@ -373,12 +377,23 @@
       <h2>Search Console opportunities</h2>
       {% set search_available = payload.search_performance_section.status == "complete" %}
       {% set search_has_opportunities = payload.search_performance_section.high_impression_low_ctr_pages or payload.search_performance_section.ranking_opportunities or payload.search_performance_section.declining_pages %}
+      {% set window = payload.search_performance_section.date_range %}
+      {% set prev_window = payload.search_performance_section.previous_date_range %}
       <dl class="metric-list inline">
         <div><dt>Status</dt><dd>{{ payload.search_performance_section.status_label }}</dd></div>
         <div><dt>Property</dt><dd>{{ payload.search_performance_section.site_url or "N/A" }}</dd></div>
         <div><dt>Top queries analyzed</dt><dd>{{ payload.search_performance_section.summary.get("top_query_count", "N/A") if search_available else "N/A" }}</dd></div>
         <div><dt>Top pages analyzed</dt><dd>{{ payload.search_performance_section.summary.get("top_page_count", "N/A") if search_available else "N/A" }}</dd></div>
       </dl>
+      {% if search_available and window.get("start") %}
+        <p class="muted">
+          Data window: {{ window.get("start") }} to {{ window.get("end") }}
+          ({{ window.get("days") }} days){% if prev_window.get("start") %}, compared with the
+          preceding {{ prev_window.get("days") }} days ({{ prev_window.get("start") }} to
+          {{ prev_window.get("end") }}){% endif %}. Table figures are totals over this window;
+          the opportunity estimate below is stated per month.
+        </p>
+      {% endif %}
       <div class="section-guide">
         <article>
           <h3>What this section tells you</h3>
@@ -405,22 +420,43 @@
         <div class="opportunity-callout">
           <p class="eyebrow">The opportunity</p>
           <p class="opportunity-headline">
-            Your site already shows up for about {{ opp.total_striking_impressions }} searches a
-            month on its {{ opp.striking_query_count }} near-miss pages, but captures only about
-            {{ opp.current_clicks }} of those clicks. Lifting them to the top of the first page
-            could bring an estimated
-            <strong>{{ opp.opportunity_clicks_low }}–{{ opp.opportunity_clicks_high }} more
-            visits/month</strong> — roughly {{ opp.estimated_leads_low }}–{{ opp.estimated_leads_high }}
-            more leads at a {{ opp.lead_rate_low_pct }}–{{ opp.lead_rate_high_pct }}% contact rate.
+            {% if opp.get("site_monthly_clicks") %}The site currently earns about
+            {{ opp.site_monthly_clicks }} Google clicks a month.{% endif %}
+            Searchers see it about {{ opp.total_striking_impressions }} times a month for its
+            {{ opp.striking_query_count }} near-miss queries — searches where it already ranks in
+            positions {{ opp.striking_position_min }}–{{ opp.striking_position_max }}, just below
+            the top results. A <strong>conservative</strong> scenario that lifts the top
+            {{ opp.modeled_query_count }} of them toward the top of page one could add an estimated
+            <strong>{{ opp.opportunity_clicks_low }}–{{ opp.opportunity_clicks_high }} visits per
+            month</strong> — roughly {{ opp.estimated_leads_low }}–{{ opp.estimated_leads_high }}
+            more inquiries at a {{ opp.lead_rate_low_pct }}–{{ opp.lead_rate_high_pct }}% contact
+            rate.
           </p>
+          {% set sc = opp.get("scenarios") or {} %}
+          {% if sc.get("expected") %}
+            <p class="opportunity-scenarios">
+              Scenarios (visits per month):
+              conservative ({{ sc.conservative.capture_pct }}% capture)
+              {{ sc.conservative.clicks_low }}–{{ sc.conservative.clicks_high }} ·
+              expected ({{ sc.expected.capture_pct }}% capture)
+              {{ sc.expected.clicks_low }}–{{ sc.expected.clicks_high }} ·
+              optimistic ({{ sc.optimistic.capture_pct }}% capture)
+              {{ sc.optimistic.clicks_low }}–{{ sc.optimistic.clicks_high }}
+            </p>
+          {% endif %}
           <p class="muted">
-            Estimate — models your near-miss pages (positions 4–20) reaching positions
-            {{ opp.target_position_high }}–{{ opp.target_position_low }}, using your real Search
-            Console impressions and published click-through rates ({{ opp.ctr_curve_source }}). The
-            {{ opp.lead_rate_low_pct }}–{{ opp.lead_rate_high_pct }}% contact rate is a home-services
-            industry benchmark, not measured on your site. These are leading indicators that predict
-            lead flow; your booked revenue lives in your CRM and call tracking, which this audit does
-            not measure. Not a guarantee.
+            A projection, not a promise. Assumptions: only the top
+            {{ opp.modeled_query_count }} near-miss queries are modeled, reaching positions
+            {{ opp.target_position_high }}–{{ opp.target_position_low }} (never position 1);
+            click-through rates come from a {{ opp.ctr_curve_source }}; modeled upside is
+            discounted {{ opp.aio_discount_pct }}% for AI-Overview results; figures are monthly
+            averages from the last {{ opp.window_days }} days
+            {%- if opp.get("capture_capped") %} and are capped at {{ opp.cap_multiple }}&times;
+            the site's current monthly clicks{% endif %}. The
+            {{ opp.lead_rate_low_pct }}–{{ opp.lead_rate_high_pct }}% contact rate is a
+            home-services industry benchmark, not measured on your site. Gains of this kind
+            typically ramp over 6–12 months of implementation; booked revenue lives in your CRM
+            and call tracking, which this audit does not measure.
           </p>
         </div>
       {% endif %}
@@ -514,8 +550,14 @@
       {% if search_available and payload.search_performance_section.declining_pages %}
         <h3>Declining pages</h3>
         <p class="helper-copy">
-          These pages lost clicks compared with the period immediately before the data
-          window above. Check whether content, rankings, seasonality, or technical changes
+          These pages lost clicks
+          {%- if window.get("start") and prev_window.get("start") %}
+          between the previous window ({{ prev_window.get("start") }} to
+          {{ prev_window.get("end") }}) and the current window ({{ window.get("start") }} to
+          {{ window.get("end") }})
+          {%- else %}
+          compared with the period immediately before the data window
+          {%- endif %}. Check whether content, rankings, seasonality, or technical changes
           caused the drop.
         </p>
         <table class="compact-table">
@@ -537,28 +579,51 @@
 
       {% if payload.search_performance_section.url_inspection_items %}
         <h3>URL inspection</h3>
+        {% set inspected = payload.search_performance_section.url_inspection_items[:10] %}
+        {% set canon = namespace(mismatch=false) %}
+        {% for item in inspected %}
+          {% if item.get("google_canonical") and item.get("google_canonical") != item.get("url") %}
+            {% set canon.mismatch = true %}
+          {% endif %}
+        {% endfor %}
         <p class="helper-copy">
-          This asks Google directly whether each important page is in its index ("On
-          Google"). "Google's status" is Google's own wording for how it handled the page.
+          This asks Google directly whether each inspected page is in its index ("On
+          Google") — the pages checked are the homepage plus the most prominent pages
+          found during the review (up to 20). "Google's status" is Google's own wording
+          for how it handled the page.
+          {% if canon.mismatch %}
           "Canonical chosen by Google" is the page version Google decided to index — if it
           differs from the page address, Google is treating another URL as the main copy.
+          {% endif %}
           If a page is not on Google, fix that before judging its content quality.
         </p>
         <table class="compact-table">
           <thead>
-            <tr><th>URL</th><th>On Google</th><th>Google's status</th><th>Canonical chosen by Google</th></tr>
+            <tr><th>URL</th><th>On Google</th><th>Google's status</th>{% if canon.mismatch %}<th>Canonical chosen by Google</th>{% endif %}</tr>
           </thead>
           <tbody>
-            {% for item in payload.search_performance_section.url_inspection_items[:10] %}
+            {% for item in inspected %}
               <tr>
                 <td class="url-cell">{{ item.get("url") }}</td>
                 <td>{{ item.get("on_google_label") or "Unknown" }}</td>
                 <td>{{ item.get("coverage_state") or item.get("status") }}</td>
-                <td class="url-cell">{{ item.get("google_canonical") or "N/A" }}</td>
+                {% if canon.mismatch %}
+                  {% if item.get("google_canonical") and item.get("google_canonical") != item.get("url") %}
+                    <td class="url-cell">{{ item.get("google_canonical") }}</td>
+                  {% else %}
+                    <td>&#10003; matches</td>
+                  {% endif %}
+                {% endif %}
               </tr>
             {% endfor %}
           </tbody>
         </table>
+        {% if not canon.mismatch %}
+          <p class="muted">
+            Google's chosen canonical matches the page address for every inspected page —
+            no duplicate-version issues detected.
+          </p>
+        {% endif %}
       {% endif %}
 
       {% if not search_available %}
@@ -707,7 +772,6 @@
                     <span class="roadmap-card-index">{{ loop.index }}</span>
                     <h4>{{ recommendation.title }}</h4>
                   </div>
-                  <p>{{ recommendation.rationale }}</p>
                   {% if recommendation.action_items %}
                     <ul class="action-items">
                       {% for item in recommendation.action_items %}
@@ -715,6 +779,7 @@
                       {% endfor %}
                     </ul>
                   {% endif %}
+                  <p class="muted">Details: see this item's finding card in the SEO / UX-UI sections.</p>
                 </article>
               {% endfor %}
             {% else %}
@@ -765,14 +830,15 @@
       {% if payload.core_web_vitals.available %}
         <h3>Core Web Vitals</h3>
         <p class="helper-copy">
-          The detailed PageSpeed Insights metrics behind the performance score, rated the
-          way Google rates them: green is good, amber needs improvement, red is poor. These
+          Detailed PageSpeed Insights metrics for the homepage, rated the way Google rates
+          them: green is good, amber needs improvement, red is poor. This lab table measures
+          the homepage only; the PageSpeed score above averages every analyzed page. These
           are a conversion lever, not just a score: slow pages on a phone lose visitors before
           they ever call or fill in the form.
         </p>
         <table class="cwv-table">
           <thead>
-            <tr><th>Metric</th><th>Mobile (lab)</th><th>Desktop (lab)</th></tr>
+            <tr><th>Metric</th><th>Mobile (homepage lab test)</th><th>Desktop (homepage lab test)</th></tr>
           </thead>
           <tbody>
             {% for row in payload.core_web_vitals.lab_rows %}
@@ -823,11 +889,11 @@
         {% endif %}
       {% endif %}
 
-      <h3>Crawl QA</h3>
+      <h3>Page coverage</h3>
       <p class="helper-copy">
         The audit rendered {{ payload.crawl_summary.successful_pages }} pages of the site
         in a real browser — the homepage plus its most prominent internal pages. On-page
-        findings come from those pages; the site-wide technical crawl additionally checks
+        findings come from those pages; the site-wide health check additionally checks
         the links and sitemap URLs it discovered.
       </p>
       <dl class="metric-list inline">
@@ -929,7 +995,7 @@
         </div>
       {% else %}
         <p class="muted">
-          Technical crawl data was not collected for this audit, so there are no
+          Site health data was not collected for this audit, so there are no
           issue-volume bars to show.
           {% if tech.reason_label %}Reason: {{ tech.reason_label }}{% endif %}
         </p>
@@ -937,7 +1003,7 @@
 
       <div class="va-grid-2">
         <div class="va-card">
-          <h4>Crawl coverage</h4>
+          <h4>Page coverage</h4>
           {% set cs = payload.crawl_summary %}
           {% set cs_total = cs.successful_pages + cs.failed_pages + cs.skipped_pages %}
           {% if cs_total > 0 %}
@@ -964,7 +1030,7 @@
               </div>
             </div>
           {% else %}
-            <p class="muted">No crawl coverage data is available.</p>
+            <p class="muted">No page-coverage data is available.</p>
           {% endif %}
         </div>
 
@@ -997,7 +1063,7 @@
                 {% if avg is not none %}
                   {% set a_color = "#28864b" if avg >= 90 else ("#c98a16" if avg >= 50 else "#b42318") %}
                   <div class="va-bar-row">
-                    <span class="va-bar-label va-bar-label-url">{{ row.get("url", "") }}</span>
+                    <span class="va-bar-label va-bar-label-url">{{ display_path(row.get("url", "")) }}</span>
                     <span class="va-bar-track"><span class="va-bar-fill" style="width: {{ avg }}%; background: {{ a_color }};"></span></span>
                     <span class="va-bar-value">{{ avg }}</span>
                   </div>
@@ -1054,7 +1120,7 @@
             {% for row in decl[:6] %}
               {% set drop = 0 - (row.get("click_delta", 0) or 0) %}
               <div class="va-bar-row">
-                <span class="va-bar-label va-bar-label-url">{{ row.get("page", "") }}</span>
+                <span class="va-bar-label va-bar-label-url">{{ display_path(row.get("page", "")) }}</span>
                 <span class="va-bar-track"><span class="va-bar-fill" style="width: {{ ((drop / worst * 100) if worst else 0) | round(2) }}%; background: #b42318;"></span></span>
                 <span class="va-bar-value">-{{ drop | round | int }}</span>
               </div>
@@ -1251,6 +1317,13 @@
       <p class="helper-copy">
         A single headline score combining the website audit (SEO + UX/UI) and the social media
         audit, weighted toward the website because that is where leads are captured.
+      </p>
+      <p class="muted">
+        How the scores fit together: Overall Lead-Gen Readiness =
+        {{ (overall.weights.website * 100) | round | int }}% &times; the Website Lead-Gen Score
+        + {{ (overall.weights.social * 100) | round | int }}% &times; the Social Score. The
+        Website Lead-Gen Score itself blends SEO (45%) and UX/UI (55%) &mdash; the same number
+        shown on the cover and the score cards at the front of this report.
       </p>
 
       <div style="display:flex; align-items:flex-end; gap:16px; margin:16px 0 12px;">

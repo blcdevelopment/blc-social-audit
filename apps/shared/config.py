@@ -113,6 +113,13 @@ class Settings(BaseSettings):
     site_health_request_timeout_seconds: int = Field(default=10, ge=1, le=60)
     site_health_total_budget_seconds: int = Field(default=180, ge=10)
     site_health_sitemap_max_urls: int = Field(default=500, ge=0, le=5000)
+    # Politeness: the sweep hits ONE host, so it must behave like a considerate crawler
+    # (~1-2 req/s), or WAFs rate-limit it and dead-link findings become false positives.
+    site_health_per_host_concurrency: int = Field(default=2, ge=1, le=8)
+    site_health_request_delay_ms: int = Field(default=750, ge=0, le=5000)
+    # Circuit breaker: after this many CONSECUTIVE internal network failures the sweep
+    # stops and reports itself bot-blocked instead of emitting mass false "dead links".
+    site_health_breaker_threshold: int = Field(default=5, ge=2, le=50)
 
     google_oauth_client_id: str = ""
     google_oauth_client_secret: SecretStr | None = None

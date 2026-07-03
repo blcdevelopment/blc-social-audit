@@ -40,18 +40,31 @@ def test_opportunity_estimate_math_and_grounding_shape() -> None:
     striking = _ranking_opportunities(_STRIKING)
     # only impressions>=50 AND position 4-20 qualify (drops the 10-impression and the pos-2 rows)
     assert len(striking) == 3
-    opp = _opportunity_estimate(striking)
+    opp = _opportunity_estimate(striking, window_days=91, site_total_clicks=3000)
 
     assert opp["striking_query_count"] == 3
-    assert opp["total_striking_impressions"] == 5000
+    assert opp["modeled_query_count"] == 3
+    # Window totals are converted to true monthly rates: 5000 impressions over 91 days
+    # = 5000 / (91 / 30.44) = 1673/month (half-up).
+    assert opp["per_month"] is True and opp["window_days"] == 91
+    assert opp["total_striking_impressions"] == 1673
     # low end models to position 5, high end to position 3 -> low <= high, both positive
     assert 0 < opp["opportunity_clicks_low"] <= opp["opportunity_clicks_high"]
+    # The headline IS the conservative scenario, and scenarios are ordered.
+    assert opp["opportunity_clicks_low"] == opp["scenarios"]["conservative"]["clicks_low"]
+    assert (
+        opp["scenarios"]["conservative"]["clicks_high"]
+        <= opp["scenarios"]["expected"]["clicks_high"]
+        <= opp["scenarios"]["optimistic"]["clicks_high"]
+    )
     assert opp["estimated_leads_low"] <= opp["estimated_leads_high"]
     assert opp["lead_rate_low_pct"] == 5 and opp["lead_rate_high_pct"] == 10
+    assert opp["ctr_curve_version"] == "blended-conservative-v1"
     # Every surfaced number must be an int (clean grounding token) — no floats/derived precision.
     for key in (
         "total_striking_impressions",
         "current_clicks",
+        "site_monthly_clicks",
         "opportunity_clicks_low",
         "opportunity_clicks_high",
         "estimated_leads_low",
@@ -60,12 +73,12 @@ def test_opportunity_estimate_math_and_grounding_shape() -> None:
         assert isinstance(opp[key], int)
     # deterministic
     assert json.dumps(opp, sort_keys=True) == json.dumps(
-        _opportunity_estimate(striking), sort_keys=True
+        _opportunity_estimate(striking, window_days=91, site_total_clicks=3000), sort_keys=True
     )
 
 
 def test_opportunity_estimate_empty_is_safe() -> None:
-    assert _opportunity_estimate([]) == {}
+    assert _opportunity_estimate([], window_days=91, site_total_clicks=0) == {}
 
 
 def test_opportunity_estimate_returns_empty_when_no_headroom() -> None:
@@ -74,7 +87,25 @@ def test_opportunity_estimate_returns_empty_when_no_headroom() -> None:
     over_performing = [
         {"query": "q", "impressions": 1000, "clicks": 500, "ctr": 0.5, "position": 4},
     ]
-    assert _opportunity_estimate(over_performing) == {}
+    assert _opportunity_estimate(over_performing, window_days=91, site_total_clicks=500) == {}
+
+
+def test_opportunity_estimate_caps_at_multiple_of_current_clicks() -> None:
+    # A huge modeled upside on a low-traffic site must not produce a many-times-current
+    # step-function projection: every scenario is capped at 3x current monthly clicks,
+    # and only the top-25 striking queries are modeled at all.
+    rows = [
+        {"query": f"q{i}", "impressions": 100000, "clicks": 10, "ctr": 0.0001, "position": 15}
+        for i in range(30)
+    ]
+    opp = _opportunity_estimate(rows, window_days=91, site_total_clicks=300)
+    assert opp["modeled_query_count"] == 25
+    assert opp["striking_query_count"] == 30
+    assert opp["capture_capped"] is True
+    cap = 3 * opp["site_monthly_clicks"]
+    for name in ("conservative", "expected", "optimistic"):
+        assert opp["scenarios"][name]["clicks_high"] <= cap
+        assert opp["scenarios"][name]["clicks_low"] <= cap
 
 
 def test_branded_split_matches_spaced_brand_queries() -> None:
@@ -125,3 +156,20 @@ def test_match_search_console_property_returns_none_without_verified_match() -> 
     properties = [{"siteUrl": "sc-domain:other.com", "permissionLevel": "siteOwner"}]
 
     assert match_search_console_property("https://example.com/", properties) is None
+
+
+def test_topic_clusters_prefer_readable_phrases() -> None:
+    # Labels must read like topics ("per square foot"), not disjoint fragments — the old
+    # unigram seeding surfaced "square" and "foot" as two separate topics.
+    rows = [
+        {"query": "cost per square foot to build", "impressions": 1000, "position": 6},
+        {"query": "average cost per square foot", "impressions": 800, "position": 7},
+        {"query": "price per square foot to build a house", "impressions": 600, "position": 8},
+    ]
+    clusters = _topic_clusters(rows, "")
+    labels = [cluster["cluster"] for cluster in clusters]
+    assert any(" " in label for label in labels)
+    assert "square" not in labels
+    assert "foot" not in labels
+    # Deterministic across runs.
+    assert labels == [cluster["cluster"] for cluster in _topic_clusters(rows, "")]

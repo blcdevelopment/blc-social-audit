@@ -1,4 +1,9 @@
-version: "phase1-uxui-v2"
+# v3 (2026): the email-visible rule became a low-pressure contact-path rule (a visible
+# email OR a contact page link OR a lead form) — many sites hide raw emails deliberately
+# as an anti-spam choice and must not be penalized for it. Form detection also credits
+# embedded/popup/lazy-iframe forms (provider signatures + the crawler's frame pass), and
+# the homepage field-count rule skips when an embed's fields cannot be counted.
+version: "phase2-uxui-v3"
 category: uxui
 max_score: 100
 normalization: rescale_to_max
@@ -59,9 +64,9 @@ rules:
     remediation: Place at least one call to action early in the page, before the visitor scrolls.
 
   - id: uxui.forms.present
-    description: The site includes a lead capture form.
+    description: The site includes a lead capture form (on the page or as an embedded/popup form).
     weight: 8
-    fact_path: uxui.summary.total_forms
+    fact_path: uxui.summary.pages_with_form_capture
     evaluator: threshold
     params:
       min: 1
@@ -79,6 +84,9 @@ rules:
       full_credit: [1, 5]
       partial_credit:
         - [6, 8]
+    # An embedded/popup form's fields cannot be counted from the page HTML — the fact is
+    # None in that case, and this rule rescales instead of failing with "0 fields".
+    skip_if_missing: true
     impact: low
     tier: mid_term
     finding_label: Homepage form is not sized for practical lead capture
@@ -96,17 +104,17 @@ rules:
     finding_label: No phone number is visible on the crawled pages
     remediation: Display a clickable phone number prominently in the header or hero.
 
-  - id: uxui.email.visible
-    description: An email address is available on crawled pages.
+  - id: uxui.contact_path.low_pressure
+    description: A low-pressure contact path (visible email, contact page link, or lead form) is available on crawled pages.
     weight: 6
-    fact_path: uxui.summary.pages_with_email
+    fact_path: uxui.summary.pages_with_contact_path
     evaluator: threshold
     params:
       min: 1
     impact: medium
     tier: quick_win
-    finding_label: No email address is visible on the crawled pages
-    remediation: Show a contact email address (or a clear contact link) on key pages.
+    finding_label: No low-pressure contact path is visible on the crawled pages
+    remediation: Give visitors an easy first step - a visible contact email, a clear contact page link, or a short lead form.
 
   - id: uxui.trust.present
     description: Trust signals are visible on at least one crawled page.

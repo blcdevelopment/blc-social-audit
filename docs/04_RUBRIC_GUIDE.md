@@ -17,13 +17,13 @@ _Last reconciled: 2026-07-02._
 | File | `version` | Category | Rules | Used by |
 |---|---|---|---|---|
 | `rubrics/seo.yaml` | `phase2-seo-v11` | `seo` | 48 | website + combined |
-| `rubrics/uxui.yaml` | `phase1-uxui-v2` | `uxui` | 14 | website + combined |
+| `rubrics/uxui.yaml` | `phase2-uxui-v3` | `uxui` | 14 | website + combined |
 | `rubrics/composite.yaml` | `phase1-composite-v1` | (weights) | — | website + combined |
 | `rubrics/social.yaml` | `phase2-social-v3` | `social` | 14 | social + combined |
 | `rubrics/overall.yaml` | `phase2-overall-v1` | (weights) | — | combined only |
 
 The first three are the **website** rubrics; their combined `rubric_version` stored on a
-website result is `phase2-seo-v11+phase1-uxui-v2+phase1-composite-v1`. `social.yaml` scores the
+website result is `phase2-seo-v11+phase2-uxui-v3+phase1-composite-v1`. `social.yaml` scores the
 standalone **Social Score** (§5a). `overall.yaml` blends the website Lead-Gen composite with the
 Social Score for a **combined** audit only (§5b). **Bump a version whenever you change a rubric**
 so historical results remain interpretable.

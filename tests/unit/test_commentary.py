@@ -39,7 +39,7 @@ def _rule(
 def _score_breakdown() -> dict:
     return {
         "status": "complete",
-        "rubric_version": "phase1-seo-v2+phase1-uxui-v2+phase1-composite-v1",
+        "rubric_version": "phase1-seo-v2+phase2-uxui-v3+phase1-composite-v1",
         "scores": {"seo": 42, "uxui": 38, "lead_gen": 40},
         "categories": {
             "seo": {

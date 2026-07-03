@@ -63,7 +63,7 @@ def test_render_report_pdf_qa_variants(
     # Visual-analytics section (charts) is appended at the end and renders in every variant.
     assert "Performance at a glance" in text
     assert "Rule health by category" in text
-    assert "Crawl coverage" in text
+    assert "Page coverage" in text
 
     if variant == "long":
         assert len(reader.pages) >= 8
@@ -158,7 +158,9 @@ def test_render_report_pdf_shows_opportunity_and_local_context(tmp_path) -> None
             "position": 1,
         },
     ]
-    opportunity = _opportunity_estimate(_ranking_opportunities(rows))
+    opportunity = _opportunity_estimate(
+        _ranking_opportunities(rows), window_days=90, site_total_clicks=305
+    )
     result = _result(
         extra_items=0,
         psi_facts=_complete_psi(),
@@ -170,7 +172,8 @@ def test_render_report_pdf_shows_opportunity_and_local_context(tmp_path) -> None
         "gsc": {
             "status": "complete",
             "site_url": "https://example.com/",
-            "date_range": {"start": "2026-01-01", "end": "2026-03-31"},
+            "date_range": {"start": "2026-01-01", "end": "2026-03-31", "days": 90},
+            "previous_date_range": {"start": "2025-10-03", "end": "2025-12-31", "days": 90},
             "summary": {
                 "top_query_count": 3,
                 "top_page_count": 0,
@@ -200,10 +203,12 @@ def test_render_report_pdf_shows_opportunity_and_local_context(tmp_path) -> None
     normalized = " ".join(text.split())
     # P1/P2 opportunity callout — assert the (non-uppercased) headline + a stored opportunity
     # number, so this proves the real GSC-derived figure reaches the page.
-    assert "already shows up for about" in normalized
+    assert "near-miss queries" in normalized
     assert str(opportunity["opportunity_clicks_low"]) in normalized
-    assert "visits/month" in normalized
-    assert "Not a guarantee" in normalized
+    assert "visits per month" in normalized
+    assert "conservative" in normalized
+    assert "A projection, not a promise" in normalized
+    assert "Data window: 2026-01-01 to 2026-03-31" in normalized
     # P3 branded + P4 clusters
     assert "Branded vs non-branded" in normalized
     assert "Visibility by topic" in normalized

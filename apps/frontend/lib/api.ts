@@ -164,6 +164,9 @@ export interface ReportFinding {
   explanation: string;
   evidence_refs: string[];
   source: "commentary" | "rubric";
+  // The fix carried on the finding card ("Do this"); absent on older stored results.
+  action_items?: string[];
+  tier?: string;
 }
 
 export interface ReportRecommendation {

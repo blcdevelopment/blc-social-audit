@@ -358,3 +358,95 @@ def test_extractors_handle_malformed_html_fixture() -> None:
     assert seo["pages_analyzed"] == expected["seo"]["pages_analyzed"]
     assert uxui["status"] == expected["uxui"]["status"]
     assert uxui["pages_analyzed"] == expected["uxui"]["pages_analyzed"]
+
+
+def test_popup_embed_form_gets_credit_without_static_form() -> None:
+    # Sites built on popup/lazy-iframe form stacks (e.g. LeadConnector) have NO <form>
+    # in the page HTML — the provider signature must still credit lead capture, and the
+    # homepage field-count fact must be None (rule skips) instead of a false "0 fields".
+    from types import SimpleNamespace
+
+    from apps.worker.stages.extractor_uxui import extract_uxui_facts
+
+    html = (
+        "<html><body>"
+        '<a href="#" class="btn">Get a quote</a>'
+        '<script src="https://link.msgsndr.com/js/form_embed.js"></script>'
+        '<iframe src="https://api.leadconnectorhq.com/widget/form/ABC123" loading="lazy">'
+        "</iframe>"
+        "</body></html>"
+    )
+    facts = extract_uxui_facts(
+        [SimpleNamespace(url="https://x.test/", final_url="https://x.test/", html=html)]
+    )
+    page = facts["pages"][0]
+    assert page["forms"]["count"] == 0
+    assert page["forms"]["form_detected"] == "provider_embed"
+    assert "leadconnector" in page["forms"]["embedded_providers"]
+    assert page["forms"]["total_field_count"] is None
+    assert page["lead_capture"]["has_form"] is True
+    assert page["lead_capture"]["has_low_pressure_path"] is True
+    assert facts["summary"]["pages_with_form_capture"] == 1
+
+
+def test_runtime_iframe_form_counts_from_frame_pass() -> None:
+    from types import SimpleNamespace
+
+    from apps.worker.stages.extractor_uxui import extract_uxui_facts
+
+    page_obj = SimpleNamespace(
+        url="https://x.test/",
+        final_url="https://x.test/",
+        html="<html><body><p>No visible form.</p></body></html>",
+        frame_form_count=1,
+        frame_form_field_count=4,
+    )
+    facts = extract_uxui_facts([page_obj])
+    page = facts["pages"][0]
+    assert page["forms"]["form_detected"] == "runtime_iframe_form"
+    assert page["forms"]["total_field_count"] == 4
+    assert facts["summary"]["pages_with_form_capture"] == 1
+
+
+def test_page_with_no_form_of_any_kind_still_fails_honestly() -> None:
+    from types import SimpleNamespace
+
+    from apps.worker.stages.extractor_uxui import extract_uxui_facts
+
+    facts = extract_uxui_facts(
+        [
+            SimpleNamespace(
+                url="https://x.test/",
+                final_url="https://x.test/",
+                html="<html><body><p>Just text.</p></body></html>",
+            )
+        ]
+    )
+    page = facts["pages"][0]
+    assert page["forms"]["form_detected"] == "none"
+    assert page["forms"]["total_field_count"] == 0
+    assert facts["summary"]["pages_with_form_capture"] == 0
+
+
+def test_popup_embed_passes_form_rule_and_skips_field_count() -> None:
+    # Rule-level proof against the real uxui rubric: an embed-only page passes
+    # uxui.forms.present and the homepage field-count rule SKIPS (rescales).
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from apps.worker.stages.extractor_uxui import extract_uxui_facts
+    from apps.worker.stages.scoring import load_rubric, score_category
+
+    html = (
+        "<html><body>"
+        '<iframe src="https://api.leadconnectorhq.com/widget/form/ABC123"></iframe>'
+        "</body></html>"
+    )
+    uxui_facts = extract_uxui_facts(
+        [SimpleNamespace(url="https://x.test/", final_url="https://x.test/", html=html)]
+    )
+    rubric = load_rubric(Path("rubrics/uxui.yaml"))
+    category = score_category({"uxui": uxui_facts}, rubric)
+    by_id = {rule["rule_id"]: rule for rule in category["rules"]}
+    assert by_id["uxui.forms.present"]["result"] == "pass"
+    assert by_id["uxui.homepage_form.field_count"]["result"] == "skipped"

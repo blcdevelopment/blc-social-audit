@@ -276,17 +276,33 @@ def collect_search_analytics(
     low_ctr_pages = _low_ctr_pages(top_pages)
     declining_pages = _declining_pages(top_pages, previous_pages)
     brand_token = _brand_token(site_url)
+    window_days = (end_date - start_date).days + 1
+    # Site totals from the page dimension, computed BEFORE truncation — used to cap the
+    # opportunity model and to let prose reconcile against the site's real click volume.
+    site_total_clicks = sum(float(row.get("clicks") or 0) for row in top_pages)
+    site_total_impressions = sum(float(row.get("impressions") or 0) for row in top_pages)
     return {
         "status": "complete",
         "source": "search_console_api",
         "site_url": site_url,
-        "date_range": {"start": start_date.isoformat(), "end": end_date.isoformat()},
+        "date_range": {
+            "start": start_date.isoformat(),
+            "end": end_date.isoformat(),
+            "days": window_days,
+        },
+        "previous_date_range": {
+            "start": previous_start.isoformat(),
+            "end": previous_end.isoformat(),
+            "days": window_days,
+        },
         "summary": {
             "top_query_count": len(top_queries),
             "top_page_count": len(top_pages),
             "ranking_opportunities": len(opportunities),
             "high_impression_low_ctr_pages": len(low_ctr_pages),
             "declining_pages": len(declining_pages),
+            "total_clicks": int(site_total_clicks + 0.5),
+            "total_impressions": int(site_total_impressions + 0.5),
         },
         "top_queries": top_queries[:50],
         "top_pages": top_pages[:50],
@@ -295,7 +311,9 @@ def collect_search_analytics(
         "declining_pages": declining_pages[:25],
         # Business-opportunity framing (P1-P4); see helpers above. Stored as facts so the grounding
         # validator keeps any executive-summary prose that cites these numbers.
-        "opportunity": _opportunity_estimate(opportunities),
+        "opportunity": _opportunity_estimate(
+            opportunities, window_days=window_days, site_total_clicks=site_total_clicks
+        ),
         "branded": _branded_split(top_queries, site_url),
         "topic_clusters": _topic_clusters(top_queries, brand_token)[:8],
         "started_at": started_at,
@@ -449,7 +467,8 @@ def _ranking_opportunities(rows: list[JsonDict]) -> list[JsonDict]:
     return [
         row
         for row in rows
-        if float(row.get("impressions") or 0) >= 50 and 4 <= float(row.get("position") or 0) <= 20
+        if float(row.get("impressions") or 0) >= 50
+        and _STRIKING_POSITION_MIN <= float(row.get("position") or 0) <= _STRIKING_POSITION_MAX
     ]
 
 
@@ -469,24 +488,45 @@ def _low_ctr_pages(rows: list[JsonDict]) -> list[JsonDict]:
 # and never a revenue/CAC figure (out of scope without CRM data). Half-up rounding (int(x + 0.5))
 # matches the project convention.
 
-# Published organic CTR-by-position meta-analysis (First Page Sage, 2025). Used only to model the
-# opportunity range from real impressions; positions past 10 fall back to the position-10 CTR.
+# Blended organic CTR-by-position curve, deliberately conservative: the position-1 value
+# sits in the 20-28% band reported by the large GSC-derived studies (Backlinko, SISTRIX,
+# seoClarity). The First Page Sage meta-analysis (P1 = 39.8%) is the optimistic outlier
+# and is no longer the default. Versioned like a rubric so stored estimates stay
+# explainable; positions past 10 fall back to the position-10 CTR.
+_CTR_CURVE_VERSION = "blended-conservative-v1"
 _CTR_CURVE: dict[int, float] = {
-    1: 0.398,
-    2: 0.187,
-    3: 0.102,
-    4: 0.072,
-    5: 0.051,
-    6: 0.044,
-    7: 0.030,
-    8: 0.021,
-    9: 0.019,
-    10: 0.016,
+    1: 0.276,
+    2: 0.157,
+    3: 0.110,
+    4: 0.080,
+    5: 0.061,
+    6: 0.047,
+    7: 0.038,
+    8: 0.031,
+    9: 0.026,
+    10: 0.022,
 }
-_CTR_CURVE_SOURCE = "First Page Sage organic CTR-by-position meta-analysis (2025)"
-# Conservative target band: model near-miss pages reaching the top of page 1 (position 5 = low end,
-# position 3 = high end). Never position 1 — that would overstate the opportunity.
+_CTR_CURVE_SOURCE = (
+    "blended average of GSC-derived organic CTR studies (Backlinko / SISTRIX / seoClarity)"
+)
+# Conservative target band: model near-miss queries reaching the top of page 1 (position 5 =
+# low end, position 3 = high end). Never position 1 — that would overstate the opportunity.
 _OPPORTUNITY_TARGET_LOW, _OPPORTUNITY_TARGET_HIGH = 5, 3
+# The striking-distance ("near-miss") definition, stored as facts so grounded prose can
+# state it: queries already ranking just below the top results.
+_STRIKING_POSITION_MIN, _STRIKING_POSITION_MAX = 4, 20
+# Model only the highest-impression striking queries — projecting every ranking query
+# moving at once is not defensible.
+_OPPORTUNITY_MAX_QUERIES = 25
+# AI Overviews appear on roughly 30% of queries and roughly halve top-position CTR there,
+# so modeled upside carries a flat 1 - (0.30 * 0.50) = 0.85 discount.
+_AIO_UPSIDE_FACTOR = 0.85
+# Even correct fixes rarely capture 100% of modeled upside; the headline is conservative.
+_SCENARIO_CAPTURE = {"conservative": 0.5, "expected": 0.7, "optimistic": 1.0}
+# No scenario may exceed this multiple of the site's CURRENT monthly clicks — a
+# step-function projection of many times current traffic is not defensible.
+_OPPORTUNITY_CAP_MULTIPLE = 3
+_AVG_DAYS_PER_MONTH = 30.44
 # Published home-services service-page contact (call/form) conversion benchmark RANGE — an industry
 # figure, NOT measured on the audited site; only ever applied as a labeled range, never x job value.
 _LEAD_RATE_LOW_PCT, _LEAD_RATE_HIGH_PCT = 5, 10
@@ -502,6 +542,7 @@ _CLUSTER_STOPWORDS = frozenset(
         "our",
         "best",
         "near",
+        "me",
         "are",
         "can",
         "does",
@@ -515,7 +556,6 @@ _CLUSTER_STOPWORDS = frozenset(
         "costs",
         "price",
         "prices",
-        "near me",
         "company",
         "companies",
         "service",
@@ -543,35 +583,81 @@ def _opportunity_for_target(rows: list[JsonDict], target_position: int) -> float
     return total
 
 
-def _opportunity_estimate(striking_rows: list[JsonDict]) -> JsonDict:
-    """P1+P2: deterministic 'clicks/leads left on the table' from the striking-distance set."""
+def _per_month(value: float, window_days: int) -> int:
+    """Convert a collection-window total to a true monthly rate (half-up)."""
+    months = max(window_days, 1) / _AVG_DAYS_PER_MONTH
+    return int(value / months + 0.5)
+
+
+def _opportunity_estimate(
+    striking_rows: list[JsonDict], *, window_days: int, site_total_clicks: float
+) -> JsonDict:
+    """Deterministic 'clicks/leads left on the table' from the striking-distance set.
+
+    Defensibility rules: model only the top-N striking queries; target positions 3-5,
+    never 1; discount for AI Overviews; present conservative/expected/optimistic capture
+    scenarios and lead with conservative; cap every scenario at a small multiple of the
+    site's current monthly clicks; state true monthly rates with the window recorded.
+    Every figure is stored as a fact so grounded prose can cite it.
+    """
     if not striking_rows:
         return {}
+    modeled = sorted(
+        striking_rows, key=lambda row: float(row.get("impressions") or 0), reverse=True
+    )[:_OPPORTUNITY_MAX_QUERIES]
     total_impressions = sum(float(row.get("impressions") or 0) for row in striking_rows)
     current_clicks = sum(
         float(row.get("impressions") or 0) * float(row.get("ctr") or 0) for row in striking_rows
     )
-    opp_low = _opportunity_for_target(striking_rows, _OPPORTUNITY_TARGET_LOW)
-    opp_high = _opportunity_for_target(striking_rows, _OPPORTUNITY_TARGET_HIGH)
-    opp_clicks_low, opp_clicks_high = int(opp_low + 0.5), int(opp_high + 0.5)
-    # No modeled headroom (every near-miss query already out-performs the target CTR) => emit
-    # nothing rather than a degenerate "0 to 0 more visits" estimate; the callout simply won't show.
-    if opp_clicks_high <= 0:
+    upside_low = _opportunity_for_target(modeled, _OPPORTUNITY_TARGET_LOW) * _AIO_UPSIDE_FACTOR
+    upside_high = _opportunity_for_target(modeled, _OPPORTUNITY_TARGET_HIGH) * _AIO_UPSIDE_FACTOR
+    # No modeled headroom (every modeled query already out-performs the target CTR) => emit
+    # nothing rather than a degenerate "0 to 0 more visits" estimate; the callout won't show.
+    if int(upside_high + 0.5) <= 0:
         return {}
+
+    site_monthly_clicks = _per_month(site_total_clicks, window_days)
+    cap = max(_OPPORTUNITY_CAP_MULTIPLE * site_monthly_clicks, 1)
+    capped = False
+    scenarios: JsonDict = {}
+    for name, capture in _SCENARIO_CAPTURE.items():
+        low = _per_month(upside_low * capture, window_days)
+        high = _per_month(upside_high * capture, window_days)
+        if low > cap or high > cap:
+            capped = True
+        scenarios[name] = {
+            "clicks_low": min(low, cap),
+            "clicks_high": min(high, cap),
+            "capture_pct": int(capture * 100),
+        }
+
+    headline = scenarios["conservative"]
     return {
         "is_estimate": True,
+        "per_month": True,
+        "window_days": window_days,
         "striking_query_count": len(striking_rows),
-        "total_striking_impressions": int(total_impressions + 0.5),
-        "current_clicks": int(current_clicks + 0.5),
-        "opportunity_clicks_low": opp_clicks_low,
-        "opportunity_clicks_high": opp_clicks_high,
-        "estimated_leads_low": int(opp_clicks_low * _LEAD_RATE_LOW_PCT / 100 + 0.5),
-        "estimated_leads_high": int(opp_clicks_high * _LEAD_RATE_HIGH_PCT / 100 + 0.5),
+        "modeled_query_count": len(modeled),
+        "striking_position_min": _STRIKING_POSITION_MIN,
+        "striking_position_max": _STRIKING_POSITION_MAX,
+        "total_striking_impressions": _per_month(total_impressions, window_days),
+        "current_clicks": _per_month(current_clicks, window_days),
+        "site_monthly_clicks": site_monthly_clicks,
+        "scenarios": scenarios,
+        # Headline = the conservative scenario, by design.
+        "opportunity_clicks_low": headline["clicks_low"],
+        "opportunity_clicks_high": headline["clicks_high"],
+        "estimated_leads_low": int(headline["clicks_low"] * _LEAD_RATE_LOW_PCT / 100 + 0.5),
+        "estimated_leads_high": int(headline["clicks_high"] * _LEAD_RATE_HIGH_PCT / 100 + 0.5),
         "lead_rate_low_pct": _LEAD_RATE_LOW_PCT,
         "lead_rate_high_pct": _LEAD_RATE_HIGH_PCT,
         "target_position_low": _OPPORTUNITY_TARGET_LOW,
         "target_position_high": _OPPORTUNITY_TARGET_HIGH,
+        "aio_discount_pct": int((1 - _AIO_UPSIDE_FACTOR) * 100 + 0.5),
+        "capture_capped": capped,
+        "cap_multiple": _OPPORTUNITY_CAP_MULTIPLE,
         "ctr_curve_source": _CTR_CURVE_SOURCE,
+        "ctr_curve_version": _CTR_CURVE_VERSION,
     }
 
 
@@ -612,6 +698,33 @@ def _branded_split(rows: list[JsonDict], site_url: str) -> JsonDict:
     }
 
 
+def _query_terms(query: str) -> list[str]:
+    return [term for term in re.split(r"[^a-z0-9]+", query.lower()) if term]
+
+
+def _query_ngrams(query: str, brand_token: str) -> list[str]:
+    """Candidate topic labels for one query: readable phrases first (tri/bi-grams over the
+    raw word sequence, so labels read like "cost per square foot" instead of disjoint
+    tokens), with single content tokens as fallback granularity."""
+    words = _query_terms(query)
+    grams: list[str] = []
+    for size in (3, 2):
+        for start in range(len(words) - size + 1):
+            piece = words[start : start + size]
+            if brand_token and brand_token in piece:
+                continue
+            # A phrase must carry at least one content word to be a topic label.
+            if not any(len(word) >= 4 and word not in _CLUSTER_STOPWORDS for word in piece):
+                continue
+            grams.append(" ".join(piece))
+    grams.extend(_query_tokens(query, brand_token))
+    return grams
+
+
+def _contains_phrase(container: str, phrase: str) -> bool:
+    return f" {phrase} " in f" {container} "
+
+
 def _query_tokens(query: str, brand_token: str) -> list[str]:
     tokens = re.split(r"[^a-z0-9]+", query.lower())
     return [
@@ -630,21 +743,31 @@ def _topic_clusters(
     weights: dict[str, float] = {}
     for row in rows:
         impressions = float(row.get("impressions") or 0)
-        for token in _query_tokens(str(row.get("query") or ""), brand_token):
-            weights[token] = weights.get(token, 0.0) + impressions
+        for gram in set(_query_ngrams(str(row.get("query") or ""), brand_token)):
+            weights[gram] = weights.get(gram, 0.0) + impressions
     if not weights:
         return []
-    seeds = [token for token, _ in sorted(weights.items(), key=lambda kv: (-kv[1], kv[0]))][
-        :max_clusters
-    ]
+    # Longer phrases win ties so "cost per square foot" beats its own fragments, and a
+    # candidate that contains (or is contained by) a picked seed is skipped — the split
+    # that used to surface "square" and "foot" as two separate topics.
+    candidates = sorted(weights.items(), key=lambda kv: (-kv[1], -len(kv[0].split()), kv[0]))
+    seeds: list[str] = []
+    for gram, _weight in candidates:
+        if len(seeds) >= max_clusters:
+            break
+        if any(_contains_phrase(seed, gram) or _contains_phrase(gram, seed) for seed in seeds):
+            continue
+        seeds.append(gram)
     buckets: dict[str, dict[str, float]] = {
         seed: {"impressions": 0.0, "position_weight": 0.0, "count": 0.0} for seed in seeds
     }
     for row in rows:
         impressions = float(row.get("impressions") or 0)
         position = float(row.get("position") or 0)
-        tokens = set(_query_tokens(str(row.get("query") or ""), brand_token))
-        seed = next((candidate for candidate in seeds if candidate in tokens), None)
+        normalized = " ".join(_query_terms(str(row.get("query") or "")))
+        seed = next(
+            (candidate for candidate in seeds if _contains_phrase(normalized, candidate)), None
+        )
         if seed is None:
             continue
         bucket = buckets[seed]

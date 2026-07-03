@@ -141,7 +141,9 @@ def test_top_n_truncation_is_deterministic() -> None:
         commentary_max_recommendations_per_section=2,
     )
     assert len(plan.seo.findings) == 3
-    assert len(plan.seo.recommendations) == 2
+    # Recommendations pair 1:1 with the rendered findings — a finding without its fix
+    # reads as unanswered, so the findings cap governs both lists.
+    assert len(plan.seo.recommendations) == 3
     # Lowest rule_id wins ties deterministically.
     assert [f.title for f in plan.seo.findings] == ["R0", "R1", "R2"]
 
@@ -226,7 +228,9 @@ def test_executive_summary_leads_with_grounded_opportunity_when_gsc_present() ->
             "position": 6,
         },
     ]
-    opportunity = _opportunity_estimate(_ranking_opportunities(rows))
+    opportunity = _opportunity_estimate(
+        _ranking_opportunities(rows), window_days=91, site_total_clicks=105
+    )
     external_seo_facts = {
         "status": "complete",
         "gsc": {"status": "complete", "opportunity": opportunity},
@@ -252,9 +256,12 @@ def test_executive_summary_leads_with_grounded_opportunity_when_gsc_present() ->
         score_breakdown=breakdown,
         settings=_settings(),
     )
-    # The summary now LEADS with the business outcome, not the score.
-    assert plan.executive_summary.startswith("Your site already appears in Google")
-    assert "more visits a month" in plan.executive_summary
+    # The summary now LEADS with the business outcome, not the score — windowed,
+    # reconciled against total site clicks, and framed as a conservative scenario.
+    assert plan.executive_summary.startswith("Based on your last 91 days")
+    assert "visits a month" in plan.executive_summary
+    assert "near-miss queries" in plan.executive_summary
+    assert "not a promise" in plan.executive_summary
     assert "Lead Generation Readiness" in plan.executive_summary  # score still present, demoted
 
     # Every opportunity number is a stored GSC fact, so grounding strips nothing.
@@ -457,3 +464,93 @@ def test_range_finding_states_measured_value_and_baseline() -> None:
     )
     assert log["unsupported_claim_count"] == 0
     assert "240 characters" in sanitized["content"]["seo"]["findings"][0]["meaning"]
+
+
+def test_every_surfaced_finding_carries_its_fix_including_long_term() -> None:
+    # Six quick-win rules plus one heavy long_term PageSpeed rule: severity-first
+    # selection keeps the PageSpeed finding, and the paired recommendation keeps its fix
+    # in the section AND the roadmap — the old tier-first sort dropped it past the cap.
+    rules = [
+        _rule(f"seo.r{i}", "fail", weight=5, impact="medium", tier="quick_win", label=f"R{i}")
+        for i in range(6)
+    ]
+    rules.append(
+        _rule(
+            "seo.psi.mobile_performance",
+            "partial",
+            weight=10,
+            impact="high",
+            tier="long_term",
+            label="Mobile page performance needs improvement",
+        )
+    )
+    plan = _plan(_breakdown(rules))
+    finding_titles = [f.title for f in plan.seo.findings]
+    rec_titles = [r.title for r in plan.seo.recommendations]
+    assert "Mobile page performance needs improvement" in finding_titles
+    assert "Speed up page loads on mobile" in rec_titles
+    assert len(rec_titles) == len(finding_titles)
+
+
+def test_overlapping_rules_merge_into_one_card() -> None:
+    # H1 + heading-outline and on-page alt + technical-crawl alt each collapse into one
+    # card with a covered-by note; scores are untouched (presentation-only merge).
+    rules = [
+        _rule(
+            "seo.h1.present_once",
+            "fail",
+            weight=8,
+            impact="medium",
+            tier="quick_win",
+            label="Pages do not use a single clear H1 heading",
+        ),
+        _rule(
+            "seo.aeo.heading_hierarchy",
+            "partial",
+            weight=3,
+            impact="low",
+            tier="quick_win",
+            label="Heading outline is broken",
+        ),
+        _rule(
+            "seo.images.alt_coverage",
+            "fail",
+            weight=6,
+            impact="medium",
+            tier="quick_win",
+            label="Image alt-text coverage is low",
+        ),
+        _rule(
+            "seo.technical_crawl.missing_image_alt",
+            "fail",
+            weight=4,
+            impact="medium",
+            tier="quick_win",
+            label="Images missing alt text",
+        ),
+    ]
+    plan = _plan(_breakdown(rules))
+    titles = [f.title for f in plan.seo.findings]
+    assert len(titles) == 2
+    h1_card = next(f for f in plan.seo.findings if "H1" in f.title)
+    assert "Heading outline is broken" in h1_card.why
+    alt_card = next(f for f in plan.seo.findings if "alt-text" in f.title)
+    assert "Images missing alt text" in alt_card.why
+
+
+def test_secondary_rule_alone_still_surfaces() -> None:
+    solo = _plan(
+        _breakdown(
+            [
+                _rule(
+                    "seo.aeo.heading_hierarchy",
+                    "partial",
+                    weight=3,
+                    impact="low",
+                    tier="quick_win",
+                    label="Heading outline is broken",
+                )
+            ]
+        )
+    )
+    assert [f.title for f in solo.seo.findings] == ["Heading outline is broken"]

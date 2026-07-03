@@ -67,10 +67,17 @@ def render_report_docx(payload: ReportPayload, *, output_path: Path) -> DocxRend
 def _document_xml(payload: ReportPayload) -> str:
     parts: list[str] = []
     metadata = payload.metadata
-    parts.append(_paragraph("Website Audit Report", "Title"))
+    overall = payload.overall_readiness if isinstance(payload.overall_readiness, dict) else None
+    is_combined = bool(overall and overall.get("score") is not None)
+    parts.append(
+        _paragraph(
+            "Website & Social Media Audit Report" if is_combined else "Website Audit Report",
+            "Title",
+        )
+    )
     parts.append(_paragraph(metadata.final_url, "Subtitle"))
     parts.append(_paragraph(f"Generated: {metadata.generated_date}", "Meta"))
-    parts.append(_paragraph(f"Pages crawled: {metadata.pages_crawled}", "Meta"))
+    parts.append(_paragraph(f"Pages reviewed: {metadata.pages_crawled}", "Meta"))
     if metadata.niche:
         parts.append(_paragraph(f"Niche: {metadata.niche}", "Meta"))
     if metadata.target_audience:
@@ -116,23 +123,17 @@ def _document_xml(payload: ReportPayload) -> str:
 
         if section.findings:
             parts.append(_heading("Findings", 2))
+            # One entry per issue: the fix travels with its finding; the roadmap
+            # re-groups the same fixes by timeline (no separate recommendations list).
             for finding in section.findings:
-                parts.append(
-                    _paragraph(
-                        f"{finding.severity.upper()}: {finding.title}",
-                        "Strong",
-                    )
-                )
+                tier_label = finding.tier.replace("_", " ").title() if finding.tier else ""
+                title_line = f"{finding.severity.upper()}: {finding.title}"
+                if tier_label:
+                    title_line = f"{title_line} ({tier_label})"
+                parts.append(_paragraph(title_line, "Strong"))
                 parts.append(_paragraph(finding.explanation))
-
-        if section.recommendations:
-            parts.append(_heading("Recommendations", 2))
-            for recommendation in section.recommendations:
-                tier_label = recommendation.tier.replace("_", " ").title()
-                parts.append(_paragraph(f"{tier_label}: {recommendation.title}", "Strong"))
-                parts.append(_paragraph(recommendation.rationale))
-                for item in recommendation.action_items:
-                    parts.append(_paragraph(item))
+                for item in finding.action_items:
+                    parts.append(_paragraph(f"Do this: {item}"))
 
     parts.extend(_external_seo_xml(payload))
 
@@ -144,7 +145,6 @@ def _document_xml(payload: ReportPayload) -> str:
             continue
         for recommendation in tier.recommendations:
             parts.append(_paragraph(recommendation.title, "Strong"))
-            parts.append(_paragraph(recommendation.rationale))
             for item in recommendation.action_items:
                 parts.append(_paragraph(item))
 
@@ -162,6 +162,13 @@ def _document_xml(payload: ReportPayload) -> str:
     cwv = payload.core_web_vitals
     if cwv.available:
         parts.append(_heading("Core Web Vitals", 2))
+        parts.append(
+            _paragraph(
+                "Lab metrics below measure the homepage only; the PageSpeed score above "
+                "averages every analyzed page.",
+                "Meta",
+            )
+        )
         for row in cwv.lab_rows:
             mobile = (
                 f"{row.mobile.value_label} ({row.mobile.rating_label})" if row.mobile else "N/A"
@@ -218,7 +225,7 @@ def _external_seo_xml(payload: ReportPayload) -> list[str]:
     technical_available = technical.status == "complete"
     search_available = search.status == "complete"
 
-    parts.append(_heading("Technical SEO", 1))
+    parts.append(_heading("Site Health", 1))
     parts.append(
         _paragraph(
             f"Status: {technical.status_label}"
@@ -268,7 +275,7 @@ def _external_seo_xml(payload: ReportPayload) -> list[str]:
     elif technical_available:
         parts.append(
             _paragraph(
-                "The technical crawl completed for this audit and did not find issue "
+                "The site health check completed for this audit and did not find issue "
                 "groups that matched the report thresholds."
             )
         )
@@ -288,6 +295,22 @@ def _external_seo_xml(payload: ReportPayload) -> list[str]:
             "Meta",
         )
     )
+    if search.date_range.get("start"):
+        prev = search.previous_date_range
+        prev_text = (
+            f", compared with the preceding {prev.get('days')} days "
+            f"({prev.get('start')} to {prev.get('end')})"
+            if prev.get("start")
+            else ""
+        )
+        parts.append(
+            _paragraph(
+                f"Data window: {search.date_range.get('start')} to "
+                f"{search.date_range.get('end')} ({search.date_range.get('days')} days)"
+                f"{prev_text}. Table figures are totals over this window.",
+                "Meta",
+            )
+        )
     parts.append(
         _paragraph(
             "What this section tells you: Search Console shows how people already find the "
@@ -322,9 +345,10 @@ def _external_seo_xml(payload: ReportPayload) -> list[str]:
         parts.append(_heading("URL Inspection", 2))
         parts.append(
             _paragraph(
-                "This asks Google directly whether each important page is in its index. "
-                "'On Google' is Google's answer; the status text is Google's own wording "
-                "for how it handled the page.",
+                "This asks Google directly whether each inspected page is in its index — "
+                "the homepage plus the most prominent pages found during the review (up "
+                "to 20). 'On Google' is Google's answer; the status text is Google's own "
+                "wording for how it handled the page.",
                 "Meta",
             )
         )

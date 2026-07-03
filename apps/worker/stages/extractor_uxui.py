@@ -144,6 +144,57 @@ def _extract_ctas(soup: BeautifulSoup) -> list[JsonDict]:
     return sorted(ctas, key=lambda cta: (-cta["score"], cta["text"]))
 
 
+# Known lead-capture embeds: the provider's loader script or iframe src is present in the
+# initial HTML even when the <form> element only mounts later (click-triggered popups,
+# lazy-loaded iframes) — the exact pattern form builders produce, including the
+# LeadConnector/GoHighLevel stack BLC's own sites use. Signature-scanning the stored HTML
+# detects "lead capture present" with zero extra network (Wappalyzer-style).
+_EMBED_PROVIDER_SIGNATURES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "leadconnector",
+        (
+            "api.leadconnectorhq.com/widget/form",
+            "api.leadconnectorhq.com/widget/survey",
+            "api.leadconnectorhq.com/widget/booking",
+            "link.msgsndr.com/js/form_embed.js",
+            "widgets.leadconnectorhq.com",
+        ),
+    ),
+    ("hubspot", ("js.hsforms.net", "js.hs-scripts.com", "hbspt.forms.create", ".hsforms.com")),
+    (
+        "typeform",
+        (
+            "embed.typeform.com",
+            "data-tf-widget",
+            "data-tf-popup",
+            "data-tf-live",
+            "form.typeform.com/to/",
+        ),
+    ),
+    ("jotform", ("form.jotform.com", "jotform.com/jsform", "jotformiframe")),
+    (
+        "calendly",
+        (
+            "assets.calendly.com/assets/external/widget.js",
+            "calendly-inline-widget",
+            "calendly-badge-widget",
+        ),
+    ),
+    ("gravity_forms", ("gform_wrapper", "/wp-content/plugins/gravityforms/")),
+    ("intercom", ("widget.intercom.io/widget",)),
+    ("drift", ("js.driftt.com/include",)),
+)
+
+
+def _detect_embedded_providers(html: str) -> list[str]:
+    lowered = html.lower()
+    return [
+        name
+        for name, tokens in _EMBED_PROVIDER_SIGNATURES
+        if any(token in lowered for token in tokens)
+    ]
+
+
 def _extract_forms(soup: BeautifulSoup) -> list[JsonDict]:
     forms: list[JsonDict] = []
     for form in soup.find_all("form"):
@@ -165,6 +216,21 @@ def _extract_forms(soup: BeautifulSoup) -> list[JsonDict]:
     return forms
 
 
+def _has_contact_page_link(soup: BeautifulSoup) -> bool:
+    """A link to a contact page counts as a low-pressure contact path even when the site
+    deliberately hides raw email addresses (a common anti-spam choice)."""
+    for tag in soup.find_all("a", href=True):
+        if not isinstance(tag, Tag):
+            continue
+        href = str(tag.get("href", "")).lower()
+        if href.startswith(("mailto:", "tel:")):
+            continue
+        text = " ".join(tag.get_text(" ", strip=True).lower().split())
+        if "contact" in href or text in {"contact", "contact us", "get in touch"}:
+            return True
+    return False
+
+
 def _extract_contact_signals(soup: BeautifulSoup, visible_text: str) -> JsonDict:
     hrefs = " ".join(
         str(tag.get("href", "")) for tag in soup.find_all("a", href=True) if isinstance(tag, Tag)
@@ -176,6 +242,7 @@ def _extract_contact_signals(soup: BeautifulSoup, visible_text: str) -> JsonDict
         "emails": emails[:10],
         "has_phone": bool(phones),
         "has_email": bool(emails),
+        "has_contact_page_link": _has_contact_page_link(soup),
         "tel_links": sum(
             1
             for tag in soup.find_all("a", href=True)
@@ -217,6 +284,29 @@ def extract_uxui_facts_for_page(page: object) -> JsonDict:
     forms = _extract_forms(soup)
     contact = _extract_contact_signals(soup, visible_text)
     trust = _extract_trust_signals(soup, visible_text)
+    embedded_providers = _detect_embedded_providers(html)
+    # Populated by the crawler's runtime frame pass (forms living inside iframes are
+    # invisible to page HTML); 0 for stored results that predate it.
+    frame_form_count = int(_get_page_value(page, "frame_form_count", 0) or 0)
+    frame_form_field_count = int(_get_page_value(page, "frame_form_field_count", 0) or 0)
+    if forms:
+        form_detected = "static_form"
+    elif frame_form_count:
+        form_detected = "runtime_iframe_form"
+    elif embedded_providers:
+        form_detected = "provider_embed"
+    else:
+        form_detected = "none"
+    if forms:
+        total_field_count: int | None = sum(form["field_count"] for form in forms)
+    elif frame_form_count and frame_form_field_count:
+        total_field_count = frame_form_field_count
+    elif form_detected != "none":
+        # An embedded/popup form exists but its fields can't be counted from here —
+        # None (not 0) so the field-count rule skips and rescales instead of failing.
+        total_field_count = None
+    else:
+        total_field_count = 0
 
     nav_links = [
         anchor
@@ -243,8 +333,11 @@ def extract_uxui_facts_for_page(page: object) -> JsonDict:
         },
         "forms": {
             "count": len(forms),
-            "total_field_count": sum(form["field_count"] for form in forms),
+            "total_field_count": total_field_count,
             "items": forms,
+            "embedded_providers": embedded_providers,
+            "frame_form_count": frame_form_count,
+            "form_detected": form_detected,
         },
         "contact": contact,
         "trust_signals": trust,
@@ -259,8 +352,13 @@ def extract_uxui_facts_for_page(page: object) -> JsonDict:
         },
         "lead_capture": {
             "has_cta": bool(ctas),
-            "has_form": bool(forms),
+            "has_form": form_detected != "none",
             "has_direct_contact": contact["has_phone"] or contact["has_email"],
+            # A visitor who isn't ready to call still has an easy first step: a visible
+            # email, a contact page link, or a lead form (static or embedded/popup).
+            "has_low_pressure_path": (
+                contact["has_email"] or contact["has_contact_page_link"] or form_detected != "none"
+            ),
         },
     }
 
@@ -276,8 +374,16 @@ def extract_uxui_facts(pages: Iterable[object]) -> JsonDict:
             "above_fold_ctas": sum(page["ctas"]["above_fold_count"] for page in page_facts),
             "total_forms": sum(page["forms"]["count"] for page in page_facts),
             "pages_with_forms": sum(1 for page in page_facts if page["forms"]["count"]),
+            # Static forms AND detected embedded/popup/iframe forms — the scored fact,
+            # so sites whose forms live in popups or lazy iframes get honest credit.
+            "pages_with_form_capture": sum(
+                1 for page in page_facts if page["forms"]["form_detected"] != "none"
+            ),
             "pages_with_phone": sum(1 for page in page_facts if page["contact"]["has_phone"]),
             "pages_with_email": sum(1 for page in page_facts if page["contact"]["has_email"]),
+            "pages_with_contact_path": sum(
+                1 for page in page_facts if page["lead_capture"]["has_low_pressure_path"]
+            ),
             "pages_with_trust_signals": sum(
                 1 for page in page_facts if page["trust_signals"]["has_trust_signals"]
             ),

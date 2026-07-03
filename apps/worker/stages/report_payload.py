@@ -47,7 +47,7 @@ TECHNICAL_ISSUE_GUIDANCE: dict[str, dict[str, str]] = {
             "to a useful replacement, or remove the link if the destination",
             "should no longer be used.",
         ),
-        "location_label": "Affected URL found during crawl",
+        "location_label": "Affected URL found during the check",
     },
     "server_error_internal_urls": {
         "summary": "These URLs on the site returned a server error instead of a usable page.",
@@ -240,7 +240,7 @@ TECHNICAL_ISSUE_GUIDANCE: dict[str, dict[str, str]] = {
     },
 }
 GENERIC_TECHNICAL_ISSUE_GUIDANCE = {
-    "summary": "The technical crawl found an issue that should be reviewed.",
+    "summary": "The site health check found an issue that should be reviewed.",
     "why_it_matters": _sentence(
         "Technical issues can make pages harder for users or search engines",
         "to access, understand, or prioritize.",
@@ -279,11 +279,16 @@ SKIP_REASON_LABELS: dict[str, str] = {
         "No Google PageSpeed API key is configured, so page speed was not measured."
     ),
     "no_pages_to_analyze": "No crawled pages were available to measure.",
+    "bot_blocked": (
+        "The site's server or firewall throttled our automated link checker before it "
+        "could finish, so link checks are incomplete and were not scored. Spot-check "
+        "important pages manually."
+    ),
 }
 TECHNICAL_CRAWL_TOOL_LABELS: dict[str, str] = {
     "screaming_frog_csv": "Screaming Frog SEO Spider",
     "screaming_frog_cli": "Screaming Frog SEO Spider",
-    "site_health_sweep": "BLC site health sweep (built-in)",
+    "site_health_sweep": "BLC site health check (built-in)",
 }
 
 
@@ -343,6 +348,10 @@ class ReportFinding(BaseModel):
     location_label: str = ""
     location_urls: list[str] = Field(default_factory=list)
     evidence_refs: list[str] = Field(default_factory=list)
+    # The fix carried on the finding card ("Do this"), so problem + remedy render as one
+    # card. Defaults keep results stored before this field existed rendering unchanged.
+    action_items: list[str] = Field(default_factory=list)
+    tier: str = ""
     source: Literal["commentary", "rubric"] = "commentary"
 
 
@@ -501,6 +510,7 @@ class SearchPerformanceSection(BaseModel):
     reason_label: str | None = None
     site_url: str | None = None
     date_range: JsonDict = Field(default_factory=dict)
+    previous_date_range: JsonDict = Field(default_factory=dict)
     summary: JsonDict = Field(default_factory=dict)
     top_queries: list[JsonDict] = Field(default_factory=list)
     top_pages: list[JsonDict] = Field(default_factory=list)
@@ -737,15 +747,26 @@ def _score_cards(result: Any, score_breakdown: JsonDict) -> list[ScoreCard]:
         if calculated_lead_gen == lead_gen_score
         else f"{calculated_lead_gen}/100. The stored audit score is {lead_gen_score}/100."
     )
+    # On a combined audit the headline score is the Overall Lead-Gen Readiness, so the
+    # website composite is renamed to say exactly what it covers — two similarly-named
+    # "combined" scores with different formulas read as a contradiction.
+    is_combined = bool(_dict(score_breakdown.get("overall_readiness")))
+    lead_gen_label = "Website Lead-Gen Score" if is_combined else "Lead Generation Readiness"
+    lead_gen_intro = (
+        "This is the combined business-readiness score for the website (the social audit "
+        "and the Overall Lead-Gen Readiness are reported at the end of this report). "
+        if is_combined
+        else "This is the combined business-readiness score for the website. "
+    )
     return [
         ScoreCard(
             id="lead_gen",
-            label="Lead Generation Readiness",
+            label=lead_gen_label,
             score=lead_gen_score,
             band=_score_band(lead_gen_score),
             band_label=_score_band_label(lead_gen_score),
             description=(
-                "This is the combined business-readiness score, not a separate crawl. "
+                f"{lead_gen_intro}"
                 f"Formula: round((SEO {seo_score} * {seo_weight}) + "
                 f"(UX/UI {uxui_score} * {uxui_weight})) = "
                 f"{lead_gen_formula_result}"
@@ -824,10 +845,16 @@ def _score_calculation_sentence(
         )
     else:
         evaluated_label = _plural(len(evaluated_rules), "check", "checks")
+        # When the earned points already read as the /100 score, the normalization
+        # clause would restate the same number — drop it as redundant.
+        if possible_points == 100 and _format_points(awarded_points) == str(score):
+            normalization = ""
+        else:
+            normalization = f"; those evaluated points are normalized to {score}/100"
         calculation = (
             f"It evaluated {len(evaluated_rules)} {evaluated_label} and earned "
             f"{_format_points(awarded_points)} of {_format_points(possible_points)} "
-            f"available points; those evaluated points are normalized to {score}/100."
+            f"available points{normalization}."
         )
 
     skipped = ""
@@ -966,6 +993,8 @@ def _commentary_findings(
                     str(value) for value in _list(payload.get("location_urls")) if value
                 ],
                 evidence_refs=[str(value) for value in _list(payload.get("evidence_refs"))],
+                action_items=[str(value) for value in _list(payload.get("action_items")) if value],
+                tier=_text(payload.get("tier"), ""),
                 source="commentary",
             )
         )
@@ -1406,6 +1435,7 @@ def _search_performance_section(external_seo_facts: JsonDict) -> SearchPerforman
         reason_label=_reason_label(gsc.get("reason") or gsc.get("error")),
         site_url=str(gsc.get("site_url")) if gsc.get("site_url") else None,
         date_range=_dict(gsc.get("date_range")) if gsc_complete else {},
+        previous_date_range=_dict(gsc.get("previous_date_range")) if gsc_complete else {},
         summary=_dict(gsc.get("summary")) if gsc_complete else {},
         top_queries=top_queries,
         top_pages=top_pages,

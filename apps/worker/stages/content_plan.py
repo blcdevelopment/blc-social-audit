@@ -101,14 +101,20 @@ def _build_section(
     max_findings: int,
     max_recs: int,
 ) -> CommentarySection:
-    surfaced = _surfaced_rules(section_id, score_breakdown)
+    surfaced = _merge_overlapping_rules(_surfaced_rules(section_id, score_breakdown))
     score = _int(_dict(score_breakdown.get("scores")).get(section_id))
 
     finding_order = sorted(surfaced, key=_finding_sort_key)
-    findings = [_finding(rule, facts) for rule in finding_order[:max_findings]]
+    selected = finding_order[:max_findings]
+    findings = [_finding(rule, facts) for rule in selected]
 
-    rec_order = sorted(surfaced, key=_recommendation_sort_key)
-    recommendations = [_recommendation(rule, facts) for rule in rec_order[:max_recs]]
+    # A rendered finding without its fix reads as an unanswered problem (a tier-first
+    # sort used to push long_term fixes like PageSpeed past the cap), so recommendations
+    # are the SAME selected rules, ordered for display by tier. ``max_recs`` therefore
+    # no longer truncates below the findings cap.
+    del max_recs
+    rec_order = sorted(selected, key=_recommendation_sort_key)
+    recommendations = [_recommendation(rule, facts) for rule in rec_order]
 
     label = SECTION_TITLES.get(section_id, section_id.upper())
     return CommentarySection(
@@ -116,6 +122,51 @@ def _build_section(
         findings=findings,
         recommendations=recommendations,
     )
+
+
+# Rule pairs that ask for the same site change from two different checks. When both
+# surface, the report reads as repeating itself, so the secondary (key) is folded into
+# the primary (value) as a covered-by note. Presentation-level only — scores untouched.
+_OVERLAPPING_RULE_MERGES: dict[str, str] = {
+    "seo.aeo.heading_hierarchy": "seo.h1.present_once",
+    "seo.technical_crawl.missing_h1": "seo.h1.present_once",
+    "seo.technical_crawl.missing_image_alt": "seo.images.alt_coverage",
+}
+
+
+def _merge_overlapping_rules(surfaced: list[JsonDict]) -> list[JsonDict]:
+    """Fold secondary rules into their surfaced primary; each alone still surfaces."""
+    surfaced_ids = {str(rule.get("rule_id") or "") for rule in surfaced}
+    covered: dict[str, list[str]] = {}
+    kept: list[JsonDict] = []
+    for rule in surfaced:
+        rule_id = str(rule.get("rule_id") or "")
+        primary_id = _OVERLAPPING_RULE_MERGES.get(rule_id)
+        if primary_id and primary_id in surfaced_ids:
+            covered.setdefault(primary_id, []).append(
+                str(rule.get("finding_label") or rule.get("description") or rule_id)
+            )
+            continue
+        kept.append(rule)
+    if not covered:
+        return kept
+    merged: list[JsonDict] = []
+    for rule in kept:
+        rule_id = str(rule.get("rule_id") or "")
+        if rule_id in covered:
+            rule = dict(rule)
+            rule["covers_related"] = "; ".join(covered[rule_id])
+        merged.append(rule)
+    return merged
+
+
+def _with_covered_note(rule: JsonDict, why: str) -> str:
+    """Append the merged secondary check(s) so the single card covers both (number-free
+    so the grounding validator never strips it)."""
+    covered = rule.get("covers_related")
+    if not covered:
+        return why
+    return f"{why} Fixing this also resolves a related check: {covered}.".strip()
 
 
 def _surfaced_rules(section_id: str, score_breakdown: JsonDict) -> list[JsonDict]:
@@ -143,8 +194,16 @@ def _recommendation_sort_key(rule: JsonDict) -> tuple[int, int, float, str]:
     return (tier_rank, severity_rank, neg_weight, rule_id)
 
 
+def _rule_action(rule: JsonDict) -> str:
+    remediation = rule.get("remediation")
+    if isinstance(remediation, str) and remediation.strip():
+        return remediation.strip()
+    return _DEFAULT_ACTION
+
+
 def _finding(rule: JsonDict, facts: JsonDict) -> CommentaryFinding:
     meaning, why = _meaning_and_why(rule, facts)
+    why = _with_covered_note(rule, why)
     label, urls = _location_bullets(rule, facts)
     return CommentaryFinding(
         severity=_severity(rule.get("impact"), rule.get("result")),
@@ -155,17 +214,15 @@ def _finding(rule: JsonDict, facts: JsonDict) -> CommentaryFinding:
         location_label=label,
         location_urls=urls,
         evidence_refs=_evidence_refs(rule),
+        action_items=[_rule_action(rule)],
+        tier=_tier(rule.get("tier")),
     )
 
 
 def _recommendation(rule: JsonDict, facts: JsonDict) -> CommentaryRecommendation:
-    remediation = rule.get("remediation")
-    action = (
-        remediation.strip()
-        if isinstance(remediation, str) and remediation.strip()
-        else _DEFAULT_ACTION
-    )
+    action = _rule_action(rule)
     meaning, why = _meaning_and_why(rule, facts)
+    why = _with_covered_note(rule, why)
     label, urls = _location_bullets(rule, facts)
     rationale = " ".join(part for part in (meaning, why) if part).strip()
     return CommentaryRecommendation(
@@ -210,9 +267,13 @@ def _opportunity_lead_in(opportunity: JsonDict) -> str:
     "to" (never a hyphen) so the grounding validator does not read the upper bound as negative."""
     if not opportunity:
         return ""
+    days = _int(opportunity.get("window_days"))
+    site_clicks = _int(opportunity.get("site_monthly_clicks"))
     impressions = _int(opportunity.get("total_striking_impressions"))
-    current = _int(opportunity.get("current_clicks"))
     queries = _int(opportunity.get("striking_query_count"))
+    modeled = _int(opportunity.get("modeled_query_count"))
+    pos_min = _int(opportunity.get("striking_position_min"))
+    pos_max = _int(opportunity.get("striking_position_max"))
     clicks_low = _int(opportunity.get("opportunity_clicks_low"))
     clicks_high = _int(opportunity.get("opportunity_clicks_high"))
     leads_low = _int(opportunity.get("estimated_leads_low"))
@@ -221,15 +282,21 @@ def _opportunity_lead_in(opportunity: JsonDict) -> str:
     rate_high = _int(opportunity.get("lead_rate_high_pct"))
     if queries <= 0 or impressions <= 0:
         return ""
+    site_line = (
+        f"the site currently earns about {site_clicks} Google clicks a month, and "
+        if site_clicks > 0
+        else ""
+    )
     return (
-        f"Your site already appears in Google for an estimated {impressions} searches a month "
-        "from people looking for services like yours, but it currently captures only about "
-        f"{current} of the available clicks. Closing the gap on your {queries} near-miss pages "
-        "— pages already ranking just below the top of the first page — could bring an estimated "
-        f"{clicks_low} to {clicks_high} more visits a month, and at a typical {rate_low}% to "
-        f"{rate_high}% home-services contact rate that is roughly {leads_low} to {leads_high} more "
-        "leads. These are estimates from your real Search Console data and published click-through "
-        "rates, not a guarantee, but they show where the fastest wins are. "
+        f"Based on your last {days} days of Search Console data, {site_line}searchers see it "
+        f"about {impressions} times a month for near-miss queries — searches where it already "
+        f"ranks in positions {pos_min} to {pos_max}, just below the top results. A conservative "
+        f"scenario that lifts the top {modeled} of those {queries} near-miss queries toward the "
+        f"top of page one could add roughly {clicks_low} to {clicks_high} visits a month, which "
+        f"is about {leads_low} to {leads_high} extra inquiries at a typical {rate_low}% to "
+        f"{rate_high}% home-services contact rate. This is a projection from your own Search "
+        "Console data and published click-through benchmarks, not a promise, but it shows where "
+        "the fastest wins are. "
     )
 
 
@@ -364,7 +431,7 @@ _ACTION_TITLES: dict[str, str] = {
     "uxui.forms.present": "Add a short lead-capture form",
     "uxui.homepage_form.field_count": "Right-size the homepage lead form",
     "uxui.phone.visible": "Show a clickable phone number",
-    "uxui.email.visible": "Show a contact email on key pages",
+    "uxui.contact_path.low_pressure": "Give visitors an easy low-pressure contact path",
     "uxui.trust.present": "Add trust signals like reviews and testimonials",
     "uxui.trust.depth": "Add more types of trust evidence",
     "uxui.navigation.present": "Add clear primary navigation",
@@ -682,9 +749,9 @@ _RULE_CONTEXT: dict[str, JsonDict] = {
         "noun_plural": "early calls to action",
     },
     "uxui.forms.present": {
-        "meaning": "A lead capture form gives visitors a direct way to request contact or start a conversation.",
-        "why": "Without a form, some visitors will not take the next step even if the offer is relevant.",
-        "noun": "form",
+        "meaning": "A lead capture form - on the page or as an embedded/popup form - gives visitors a direct way to request contact or start a conversation.",
+        "why": "Without any form, some visitors will not take the next step even if the offer is relevant.",
+        "noun": "page with a lead form",
     },
     "uxui.homepage_form.field_count": {
         "meaning": "The homepage form should be short enough that a serious buyer can complete it without friction.",
@@ -697,11 +764,11 @@ _RULE_CONTEXT: dict[str, JsonDict] = {
         "noun": "page with a visible phone number",
         "noun_plural": "pages with a visible phone number",
     },
-    "uxui.email.visible": {
-        "meaning": "A visible email or clear contact link gives visitors a lower-pressure way to reach out.",
-        "why": "Some prospects are not ready to call, so hiding email contact can reduce inquiries.",
-        "noun": "page with a visible email",
-        "noun_plural": "pages with a visible email",
+    "uxui.contact_path.low_pressure": {
+        "meaning": "A low-pressure contact path is an easy first step for visitors who are not ready to call - a visible email, a contact page link, or a short lead form.",
+        "why": "Without one, phone-shy prospects have no comfortable way to start the conversation, which reduces inquiries.",
+        "noun": "page with a low-pressure contact path",
+        "noun_plural": "pages with a low-pressure contact path",
     },
     "uxui.trust.present": {
         "meaning": "Trust signals are proof points such as reviews, testimonials, certifications, awards, or credible case studies.",
@@ -868,7 +935,8 @@ def _uxui_relevant_pages(rule_id: str, facts: JsonDict) -> list[str]:
         return [
             str(page.get("url"))
             for page in pages
-            if int(_dict(page.get("forms")).get("count") or 0) == 0 and page.get("url")
+            if str(_dict(page.get("forms")).get("form_detected") or "none") == "none"
+            and page.get("url")
         ] or ([str(pages[0].get("url"))] if pages and pages[0].get("url") else [])
     if rule_id in {"uxui.phone.visible", "uxui.direct_contact.present"}:
         return [
@@ -876,11 +944,11 @@ def _uxui_relevant_pages(rule_id: str, facts: JsonDict) -> list[str]:
             for page in pages
             if not _dict(page.get("contact")).get("has_phone") and page.get("url")
         ]
-    if rule_id == "uxui.email.visible":
+    if rule_id == "uxui.contact_path.low_pressure":
         return [
             str(page.get("url"))
             for page in pages
-            if not _dict(page.get("contact")).get("has_email") and page.get("url")
+            if not _dict(page.get("lead_capture")).get("has_low_pressure_path") and page.get("url")
         ]
     if rule_id in {"uxui.trust.present", "uxui.trust.depth"}:
         return [
