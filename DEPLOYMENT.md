@@ -46,9 +46,11 @@ branded PDF (DOCX on demand) → expose it through a Next.js operator UI.
 **Auth:** Clerk gates the UI (sign-in required) and the API (every `/audits` endpoint
 verifies a Clerk session token). See [§7](#7-security).
 
-**Out of scope here:** multi-tenant auth/roles, benchmarking/analytics. Object
-storage was evaluated and **removed by decision** (reports stay on the local filesystem). See
-[§9 Roadmap](#9-roadmap).
+**Out of scope here:** multi-tenant auth/roles and full analytics integrations. The
+competitor-benchmarking **scaffold** is now present but disabled by default and has no live paid
+vendor client yet, so production deploys incur no SEMrush/Ahrefs/Similarweb cost and render no
+benchmark section unless a real provider later returns baselines. Object storage was evaluated and
+**removed by decision** (reports stay on the local filesystem). See [§9 Roadmap](#9-roadmap).
 
 > **Update (2026-06-23):** social-media auditing is **no longer out of scope** — the standalone
 > Social audit type ships and is runnable from the browser (its own report + Social Score,
@@ -537,21 +539,21 @@ add `postgresql-client` to the image.
     (item 3) handles disk pressure instead.
 
 ### Phase 2 (product)
-12. ✅ **Social-media auditing** *(done — 2026-06-23)* — the second audit type, designed
-    **standalone** (its own `audit_type`, its own report, its own Social Score — *not* folded into
-    the website composite, which is untouched and still `{seo, uxui}`). **Now fully built and
-    runnable from the browser:** the Apify-backed `social` fact extractor + collector under
-    [apps/worker/stages/social/](apps/worker/stages/social/) (two actors — Instagram Scraper +
-    Facebook Pages Scraper), `rubrics/social.yaml` (`phase2-social-v1`) scored by
-    `scoring.score_social_audit()` into a standalone 0–100 Social Score, deterministic
-    rule-derived findings (no LLM), a separate branded PDF (`templates/social_report.html` via
-    `render_social_pdf`, PDF only — no DOCX), the `audit_type` discriminator + migration
-    `20260623_0004`, a social branch in `run_collection_audit` (`_run_social_pipeline`), and a
-    Social Audit tab + submit/detail UI. Ops dependency: `APIFY_API_TOKEN`. **FB limitation:** the
-    Facebook pages actor returns page metadata, not posts, so cadence/recency/engagement rules
-    *skip* for FB (rescaled, never penalized); IG has full post data. See
+12. ✅ **Social-media auditing** *(done — 2026-06-23; reconciled 2026-07-02)* — the backend still
+    supports a standalone `social` audit type, but the operator UI now runs social from the
+    **Website Audit** page: explicit Instagram/Facebook/YouTube handles create a combined audit,
+    and discovered site-owned profile links can auto-promote a website audit only when collection
+    succeeds. The Apify/YouTube-backed `social` fact extractor + collector under
+    [apps/worker/stages/social/](apps/worker/stages/social/) uses Instagram Scraper, Facebook Pages
+    Scraper, Facebook Posts Scraper, and YouTube Data API v3; `rubrics/social.yaml`
+    (`phase2-social-v3`) scores a standalone 0–100 Social Score, and combined audits append a
+    Social Media Audit plus Overall Lead-Gen Readiness. The standalone social PDF path remains for
+    older/social-only jobs; the main combined report now supports PDF and DOCX. Ops dependencies:
+    `APIFY_API_TOKEN` for Instagram/Facebook and `YOUTUBE_API_KEY` for YouTube. See
     [docs/08_PHASE2_PLAN.md](docs/08_PHASE2_PLAN.md).
-13. **Multi-tenant / roles, benchmarking, analytics** — planning docs only (docs/08–10).
+13. **Multi-tenant / roles, live benchmarking providers, analytics** — the benchmarking
+    presentation scaffold is shipped and safely off by default; vendor selection/client
+    implementation plus analytics remain deferred to the planning docs (docs/08–10).
 
 ---
 

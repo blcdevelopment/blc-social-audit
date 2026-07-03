@@ -306,3 +306,214 @@ def test_partial_when_one_profile_fails() -> None:
     )
     assert facts["status"] == "partial"
     assert facts["summary"]["platforms_audited"] == 1
+
+
+def _fb_entry(posts: list[dict]) -> dict:
+    raw = {"pageName": "Acme Builders", "followers": 4000, "posts": posts}
+    return {"platform": "facebook", "handle": "acme", "raw": raw}
+
+
+def test_facebook_text_posts_do_not_claim_image_or_video_mix() -> None:
+    # The Posts actor's generic viewsCount is reach, not video views: a text/link post must not
+    # be classified as video (a scored fact), and its kind is unknowable, so the image/carousel
+    # shares must be None rather than claiming "Image 100%" for a page that posted no images.
+    facts = extract_social_facts(
+        [
+            _fb_entry(
+                [
+                    {
+                        "time": "2026-06-15T00:00:00Z",
+                        "likes": 10,
+                        "comments": 2,
+                        "viewsCount": 500,
+                        "text": "We build custom homes",
+                    },
+                    {
+                        "time": "2026-06-21T00:00:00Z",
+                        "likes": 8,
+                        "comments": 1,
+                        "text": "Now booking spring projects",
+                    },
+                ]
+            )
+        ],
+        now=NOW,
+    )
+    p = facts["platforms"][0]
+    assert p["video_share_pct"] == 0.0
+    assert p["image_share_pct"] is None and p["carousel_share_pct"] is None
+    assert p["avg_views_per_post"] is None  # reach on a non-video post is not video views
+    assert p["has_video"] is False
+
+
+def test_facebook_flagged_video_still_counts() -> None:
+    facts = extract_social_facts(
+        [
+            _fb_entry(
+                [
+                    {
+                        "time": "2026-06-21T00:00:00Z",
+                        "likes": 8,
+                        "comments": 1,
+                        "isVideo": True,
+                        "viewsCount": 900,
+                        "text": "Job site tour",
+                    }
+                ]
+            )
+        ],
+        now=NOW,
+    )
+    p = facts["platforms"][0]
+    assert p["video_share_pct"] == 100.0
+    assert p["avg_views_per_post"] == 900.0
+    assert p["has_video"] is True
+
+
+def test_hashtag_counting_requires_a_letter() -> None:
+    # "#1" is a ranking claim, not a hashtag — an account using no real hashtags must not earn
+    # partial credit on the hashtag rule from it.
+    facts = extract_social_facts(
+        [
+            _fb_entry(
+                [
+                    {
+                        "time": "2026-06-21T00:00:00Z",
+                        "likes": 8,
+                        "comments": 1,
+                        "text": "Voted #1 builder in town",
+                    },
+                    {
+                        "time": "2026-06-15T00:00:00Z",
+                        "likes": 6,
+                        "comments": 1,
+                        "text": "Proudly serving #Austin since 2010",
+                    },
+                ]
+            )
+        ],
+        now=NOW,
+    )
+    assert facts["platforms"][0]["avg_hashtags_per_post"] == 0.5  # only #Austin counts
+
+
+def test_missing_instagram_business_flag_is_unknown_not_personal() -> None:
+    # A payload that omits isBusinessAccount means the scraper didn't report the setting — the
+    # profile must read as unknown (None), not as a personal account that fails the scored rule.
+    raw = _load("social_instagram_strong.json")
+    raw.pop("isBusinessAccount", None)
+    facts = extract_social_facts([{"platform": "instagram", "handle": "a", "raw": raw}], now=NOW)
+    assert facts["platforms"][0]["is_business"] is None
+    assert facts["summary"]["profiles_business_account"] is None
+
+
+def test_zero_view_video_is_reported_not_hidden() -> None:
+    # A brand-new video's real 0 views is data: it counts in the average and renders as 0.
+    facts = extract_social_facts(
+        [
+            _fb_entry(
+                [
+                    {
+                        "time": "2026-06-21T00:00:00Z",
+                        "likes": 5,
+                        "comments": 0,
+                        "isVideo": True,
+                        "viewsCount": 0,
+                        "text": "Fresh upload",
+                    },
+                    {
+                        "time": "2026-06-15T00:00:00Z",
+                        "likes": 3,
+                        "comments": 0,
+                        "isVideo": True,
+                        "viewsCount": 300,
+                        "text": "Older upload",
+                    },
+                ]
+            )
+        ],
+        now=NOW,
+    )
+    p = facts["platforms"][0]
+    assert p["avg_views_per_post"] == 150.0
+    assert any(tp["views"] == 0 for tp in p["top_posts"])
+
+
+def test_future_dated_post_clamps_to_zero_days() -> None:
+    # Scheduled posts / provider clock skew can put the newest timestamp after "now"; recency and
+    # the trailing posting gap must clamp at 0, never render "-1 days".
+    facts = extract_social_facts(
+        [
+            _fb_entry(
+                [
+                    {
+                        "time": "2026-06-23T12:00:00Z",
+                        "likes": 5,
+                        "comments": 1,
+                        "text": "Scheduled",
+                    }
+                ]
+            )
+        ],
+        now=NOW,
+    )
+    p = facts["platforms"][0]
+    assert p["days_since_last_post"] == 0
+    assert p["max_posting_gap_days"] == 0
+
+
+def test_top_posts_rank_by_combined_attention() -> None:
+    # A barely-watched video must not outrank a heavily-engaged post just because it has views.
+    facts = extract_social_facts(
+        [
+            _fb_entry(
+                [
+                    {
+                        "time": "2026-06-15T00:00:00Z",
+                        "likes": 10000,
+                        "comments": 50,
+                        "text": "Finished project reveal",
+                    },
+                    {
+                        "time": "2026-06-21T00:00:00Z",
+                        "likes": 4,
+                        "comments": 2,
+                        "isVideo": True,
+                        "viewsCount": 5,
+                        "text": "Quick clip",
+                    },
+                ]
+            )
+        ],
+        now=NOW,
+    )
+    top = facts["platforms"][0]["top_posts"]
+    assert top[0]["engagement"] == 10050  # the engaged post wins the attention proxy
+
+
+def test_video_share_aggregation_excludes_youtube() -> None:
+    # YouTube uploads are definitionally 100% video; the channel must not drag the scored
+    # video-share fact up for the feed platforms (or make the rule vacuously pass).
+    facts = extract_social_facts(
+        [
+            _entry("social_instagram_weak.json", "weak"),
+            {
+                "platform": "youtube",
+                "handle": "acme",
+                "raw": _load("social_youtube_strong.json"),
+            },
+        ],
+        now=NOW,
+    )
+    ig = next(p for p in facts["platforms"] if p["platform"] == "instagram")
+    yt = next(p for p in facts["platforms"] if p["platform"] == "youtube")
+    assert yt["video_share_pct"] == 100.0
+    assert facts["summary"]["video_share_pct"] == ig["video_share_pct"]
+
+
+def test_youtube_only_video_share_is_unscored() -> None:
+    facts = extract_social_facts(
+        [{"platform": "youtube", "handle": "acme", "raw": _load("social_youtube_strong.json")}],
+        now=NOW,
+    )
+    assert facts["summary"]["video_share_pct"] is None

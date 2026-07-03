@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 JsonDict = dict[str, Any]
 SOCIAL_REPORT_VERSION = "phase2-social-report-v1"
@@ -53,6 +54,37 @@ def _metric_line(rule: JsonDict) -> str | None:
     return f"{measured} (target {' / '.join(targets)})" if targets else measured
 
 
+def _display_handle(value: Any) -> str:
+    """Human-readable handle from a stored handle-or-profile-URL.
+
+    Auto-discovered handles are full canonical profile URLs, so without this the report would
+    show '@https://www.instagram.com/acme/' instead of '@acme'."""
+    text = str(value or "").strip()
+    if "://" not in text:
+        return text.lstrip("@")
+    parsed = urlsplit(text)
+    segments = [segment for segment in parsed.path.split("/") if segment]
+    if not segments:
+        return text
+    # facebook.com/profile.php?id=<n> has no vanity segment — show the numeric id.
+    if segments[-1].lower() == "profile.php":
+        profile_id = parse_qs(parsed.query).get("id", [""])[0]
+        return f"id {profile_id}" if profile_id else segments[-1]
+    lowered = [segment.lower() for segment in segments]
+    # facebook.com/pages/<slug>/<id> — the slug names the page.
+    if "pages" in lowered and lowered.index("pages") + 1 < len(segments):
+        return segments[lowered.index("pages") + 1]
+    # youtube.com/channel/UC…, /c/<name>, /user/<name>.
+    for marker in ("channel", "c", "user"):
+        if marker in lowered and lowered.index(marker) + 1 < len(segments):
+            return segments[lowered.index(marker) + 1]
+    # youtube.com/@handle (any position), else the IG/FB vanity first segment.
+    for segment in segments:
+        if segment.startswith("@"):
+            return segment.lstrip("@")
+    return segments[0].lstrip("@")
+
+
 def _strength_label(rule: JsonDict) -> str:
     """A positive one-liner for a passing check (strip the parenthetical from the description)."""
     text = str(rule.get("description") or rule.get("finding_label") or rule.get("rule_id") or "")
@@ -79,8 +111,9 @@ def build_social_report_data(
     category = _dict(breakdown.get("category"))
     rules = category.get("rules") if isinstance(category.get("rules"), list) else []
 
+    # Shallow copies so the display-handle rewrite never mutates the stored facts.
     platforms = [
-        p
+        {**p, "handle": _display_handle(p.get("handle"))} if p.get("handle") is not None else {**p}
         for p in (facts.get("platforms") or [])
         if isinstance(p, dict) and p.get("status") == "complete"
     ]
@@ -154,7 +187,9 @@ def build_social_report_data(
         for post in profile.get("top_posts") or []:
             if isinstance(post, dict):
                 top_posts.append({**post, "platform": profile.get("platform")})
-    top_posts.sort(key=lambda p: ((p.get("views") or 0), p.get("engagement") or 0), reverse=True)
+    # Views and engagement are incommensurable across platforms, so their sum is a deterministic
+    # cross-platform attention proxy (a viral image is not outranked by a 5-view video).
+    top_posts.sort(key=lambda p: (p.get("views") or 0) + (p.get("engagement") or 0), reverse=True)
     top_posts = top_posts[:5]
 
     # Per-platform scorecard so a multi-platform audit can say "Facebook is stale, Instagram active"
@@ -183,7 +218,9 @@ def build_social_report_data(
         "version": SOCIAL_REPORT_VERSION,
         "score": social_score,
         "status": facts.get("status") or "unknown",
-        "handles": handles or {},
+        "handles": {
+            platform: _display_handle(handle) for platform, handle in _dict(handles).items()
+        },
         "generated_date": datetime.now(UTC).strftime("%B %d, %Y"),
         "platforms_audited": summary.get("platforms_audited", 0),
         "summary": summary,

@@ -39,8 +39,10 @@ production hosting work. Phase 2 extends this spine without rewriting it (see
 **Three audit types share this spine.** A job's `audit_type` (`website` | `social` |
 `combined`) selects what runs: a **website** audit is the SEO + UX/UI pipeline above; a
 **standalone social** audit runs only the social provider/score/PDF path
-(`apps/worker/stages/social/`); and a **combined** audit — the default when an operator adds
-social links to the Website Audit form — runs the **untouched** website pipeline first, then
+(`apps/worker/stages/social/`); and a **combined** audit — created when an operator adds
+social links to the Website Audit form, or by auto-promotion when the crawled site links its own
+profiles (credential-gated discovery; promoted **only when the social collection succeeds**) —
+runs the **untouched** website pipeline first, then
 appends a social section and an **Overall Lead-Gen Readiness** score to produce **one report**
 (PDF *and* DOCX). The combined flow is the headline Phase-2 feature; see §6.1. The website
 pipeline's scoring and report sections are byte-for-byte unchanged by it.
@@ -63,7 +65,7 @@ pipeline's scoring and report sections are byte-for-byte unchanged by it.
 | DB session | `apps/shared/database.py` | SQLAlchemy engine + `SessionLocal` |
 | Worker app | `apps/worker/celery_app.py` | Celery configuration (Redis broker/backend) |
 | Orchestrator | `apps/worker/tasks.py` | `run_collection_audit` (branches on `audit_type`; `_augment_with_social` for combined) + `rerun_external_enrichment` drive stages + status updates |
-| Social audit | `apps/worker/stages/social/` | Provider adapters + registry, typed schema, collector, deterministic extractor/scorer/report builder (standalone *and* combined section) |
+| Social audit | `apps/worker/stages/social/` | Provider adapters + registry, typed schema, collector, site-link auto-discovery (`discovery.py`), deterministic extractor/scorer/report builder (standalone *and* combined section) |
 | Crawler | `apps/worker/stages/crawler.py` | Playwright render, link discovery, robots, SSRF guards |
 | PageSpeed | `apps/worker/stages/psi_client.py` | PSI mobile/desktop collection, retries, cache, graceful skip |
 | Extractors | `extractor_seo.py`, `extractor_uxui.py` | Deterministic SEO / UX facts |
@@ -112,7 +114,10 @@ For a **combined** audit the website stages run identically, then a social add-o
 Overall Lead-Gen Readiness before the same RENDERING stage (98) emits one combined report. That
 step is **graceful**: any failure in the social/overall work (missing `overall.yaml`, bad
 provider data, …) is caught and the audit still completes as a **website-only** report — it never
-fails the whole combined job. Social findings in a combined report are deterministic (no LLM).
+fails the whole combined job. An auto-discovered promotion is further gated on success: a plain
+website submission is flipped to `combined` only when the collection produced usable data, so a
+failed fetch leaves the website report byte-identical (no hollow social section). Social findings
+in a combined report are deterministic (no LLM).
 
 `_mark_job` is the single writer of job state: it commits each transition, clears
 `error_message` on a success transition, and sets `started_at`/`completed_at`. On any
@@ -128,7 +133,8 @@ result fields first and restores them — keeping the job `complete` with the pr
 report — if the rerun fails. Exposed via `POST /audits/{job_id}/rerun-enrichment`.
 It is **combined-aware**: for a combined audit it re-attaches the stored social breakdown and
 recomputes `overall_readiness` from the freshly re-scored website Lead-Gen + the stored Social
-Score, so a rerun no longer drops the appended combined sections.
+Score, so a rerun no longer drops the appended combined sections (the recompute is skipped when
+the audit has no social data, so a degraded combined job stays website-only).
 
 ---
 

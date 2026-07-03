@@ -426,14 +426,9 @@ function OverallReadinessBlock({ overall }: { overall: OverallReadiness }) {
 }
 
 function SocialReportView({ report }: { report: SocialReport }) {
+  // The server nulls content_insights when every field is missing, so plain truthiness is the
+  // whole "anything to show" check.
   const ci = report.content_insights;
-  const hasInsights =
-    !!ci &&
-    (ci.content_mix.video != null ||
-      ci.total_views != null ||
-      ci.avg_engagement_rate_pct != null ||
-      ci.avg_hashtags_per_post != null ||
-      ci.max_posting_gap_days != null);
   return (
     <>
       <div className="score-grid">
@@ -506,18 +501,27 @@ function SocialReportView({ report }: { report: SocialReport }) {
         </section>
       )}
 
-      {hasInsights && ci && (
+      {ci && (
         <section className="card">
           <h3>Content insights</h3>
           <table className="audit-table">
             <tbody>
               {ci.content_mix.video != null && (
                 <tr>
-                  <td>Content mix</td>
-                  <td>
-                    Video {ci.content_mix.video}% · Image {ci.content_mix.image}%
-                    {ci.content_mix.carousel ? ` · Carousel ${ci.content_mix.carousel}%` : ""}
-                  </td>
+                  <td>Video share</td>
+                  <td>{ci.content_mix.video}%</td>
+                </tr>
+              )}
+              {ci.content_mix.image != null && (
+                <tr>
+                  <td>Image share</td>
+                  <td>{ci.content_mix.image}%</td>
+                </tr>
+              )}
+              {ci.content_mix.carousel != null && (
+                <tr>
+                  <td>Carousel share</td>
+                  <td>{ci.content_mix.carousel}%</td>
                 </tr>
               )}
               {ci.total_views != null && (
@@ -528,7 +532,7 @@ function SocialReportView({ report }: { report: SocialReport }) {
               )}
               {ci.avg_views_per_post != null && (
                 <tr>
-                  <td>Avg views / post</td>
+                  <td>Avg views / video</td>
                   <td>{ci.avg_views_per_post.toLocaleString()}</td>
                 </tr>
               )}
@@ -536,6 +540,12 @@ function SocialReportView({ report }: { report: SocialReport }) {
                 <tr>
                   <td>Avg engagement</td>
                   <td>{ci.avg_engagement_rate_pct}%</td>
+                </tr>
+              )}
+              {ci.avg_like_to_comment_ratio != null && (
+                <tr>
+                  <td>Likes / comment</td>
+                  <td>{ci.avg_like_to_comment_ratio}</td>
                 </tr>
               )}
               {ci.avg_hashtags_per_post != null && (

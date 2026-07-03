@@ -56,3 +56,13 @@ def test_social_rubric_does_not_change_website_composite() -> None:
 
     composite = load_composite_rubric(Settings().rubric_composite_path)
     assert set(composite.weights) == {"seo", "uxui"}
+
+
+def test_youtube_only_audit_skips_video_share_rule() -> None:
+    # A channel is definitionally 100% video, so a YouTube-only audit must not vacuously pass the
+    # video-share rule — the summary fact is None there and the rule skip_if_missing-rescales.
+    raw = json.loads((FIXTURES / "social_youtube_strong.json").read_text())
+    facts = extract_social_facts([{"platform": "youtube", "handle": "acme", "raw": raw}], now=NOW)
+    result = score_social_audit(facts, Settings())
+    by_id = {r["rule_id"]: r for r in result["category"]["rules"]}
+    assert by_id["social.content.video_share"]["result"] == "skipped"

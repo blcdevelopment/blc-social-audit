@@ -96,29 +96,32 @@ def test_youtube_channel_and_legacy_url_forms() -> None:
 
 
 def test_rejects_too_short_youtube_channel_id() -> None:
-    # "UCabc" is not a valid 24-char channel id — must not become a bogus profile URL.
-    assert discover_social_links([_page('<a href="https://youtube.com/channel/UCabc">x</a>')]) == {}
+    # "UCabc" is not a valid 24-char channel id — must not become a bogus profile URL. Footer-placed
+    # so the URL-form rejection is exercised, not masked by the placement floor.
+    assert discover_social_links([_footer("https://youtube.com/channel/UCabc")]) == {}
 
 
 def test_rejects_handles_with_leading_or_trailing_punctuation() -> None:
     # Instagram never allows a leading/trailing dot; Facebook slugs start/end alphanumeric.
+    # Footer-placed so the handle-shape rejection is exercised, not masked by the placement floor.
     for href in (
         "https://instagram.com/.acmebuilders",
         "https://instagram.com/acmebuilders.",
         "https://facebook.com/-acmebuilders",
         "https://facebook.com/acmebuilders-",
     ):
-        assert discover_social_links([_page(f'<a href="{href}">x</a>')]) == {}
+        assert discover_social_links([_footer(href)]) == {}
 
 
 def test_rejects_known_non_profile_first_segments() -> None:
+    # Footer-placed so the reserved-segment rejection is exercised, not masked by the floor.
     for href in (
         "https://instagram.com/business",
         "https://instagram.com/developer",
         "https://www.facebook.com/business/",
         "https://www.facebook.com/ads/",
     ):
-        assert discover_social_links([_page(f'<a href="{href}">x</a>')]) == {}
+        assert discover_social_links([_footer(href)]) == {}
 
 
 def test_facebook_pg_prefix_form() -> None:
@@ -209,6 +212,72 @@ def test_real_profile_beats_agency_credit_for_same_platform() -> None:
     }
 
 
+def test_social_proof_body_section_link_is_not_discovered() -> None:
+    # A testimonial in a "social-proof" BODY section: the generic "social" class token (+1.0) alone
+    # must not clear the floor, so a stranger's profile is never scraped or scored as the client's.
+    html = (
+        '<section class="social-proof"><blockquote>Great builder!</blockquote>'
+        '<a href="https://instagram.com/influencer_x">@influencer_x</a></section>'
+    )
+    assert discover_social_links([_page(html)], site_url="https://builderco.com/") == {}
+
+
+def test_footer_social_icons_block_still_discovered() -> None:
+    # The canonical placement — a social-icons list inside the footer — still clears the floor.
+    html = (
+        '<footer><ul class="social-icons"><li>'
+        '<a href="https://instagram.com/acmebuilders/">IG</a></li></ul></footer>'
+    )
+    assert discover_social_links([_page(html)]) == {
+        "instagram": "https://www.instagram.com/acmebuilders/"
+    }
+
+
+def test_plain_nav_social_link_is_discovered() -> None:
+    # Intended outcome: a semantic <nav> element is site chrome like header/footer, so its 2.0
+    # bonus (base 1.0 + 2.0 = 3.0) clears the 2.5 floor — unlike a mere "social"/"menu" class
+    # token on a body container, which scores only 1.0 + 1.0 = 2.0 and is rejected.
+    html = '<nav><a href="https://instagram.com/acmebuilders/">IG</a></nav>'
+    assert discover_social_links([_page(html)]) == {
+        "instagram": "https://www.instagram.com/acmebuilders/"
+    }
+
+
+def test_facebook_pages_body_mention_discovered_via_brand_match() -> None:
+    # The /pages/<Name>/<id> form carries the brand in the SLUG, not the trailing numeric id, so
+    # the brand bonus fires (base 1.0 + 2.0 = 3.0), lifting a bare body mention over the floor.
+    html = (
+        "<p>Find us on "
+        '<a href="https://www.facebook.com/pages/Acme-Builders/123456789">Facebook</a></p>'
+    )
+    assert discover_social_links([_page(html)], site_url="https://acmebuilders.com/") == {
+        "facebook": "https://www.facebook.com/pages/Acme-Builders/123456789"
+    }
+
+
+def test_financing_copy_near_footer_link_is_not_attribution() -> None:
+    # "credit approval" / "credit cards" is financing copy, not a photo/design credit line — it
+    # must not discard the site's own footer profile link.
+    html = (
+        "<footer><p>Financing available, credit approval required. We accept all major credit "
+        'cards. <a href="https://instagram.com/acmebuilders/">Follow us</a></p></footer>'
+    )
+    assert discover_social_links([_page(html)]) == {
+        "instagram": "https://www.instagram.com/acmebuilders/"
+    }
+
+
+def test_credit_attribution_lines_still_discard_link() -> None:
+    # Attribution-shaped credit lines ("Photo credit ...", "Credits: ...") still mark the link as
+    # a third party's profile.
+    for lead in ("Photo credit", "Credits:"):
+        html = (
+            f"<footer><small>{lead} "
+            '<a href="https://instagram.com/photographer_x">@photographer_x</a></small></footer>'
+        )
+        assert discover_social_links([_page(html)]) == {}
+
+
 # --------------------------------------------------------------------------- merge (resolve)
 _IG_FB_YT_FOOTER = """
 <footer>
@@ -219,9 +288,14 @@ _IG_FB_YT_FOOTER = """
 """
 
 
+_ALL_CREDS = {"apify_api_token": "tok", "youtube_api_key": "key"}
+
+
 def test_resolve_fills_all_blanks_when_no_explicit_handles() -> None:
     job = AuditJob(url="https://example.com/", audit_type="website", social_handles=None)
-    out = _resolve_social_handles(job, _crawl(_IG_FB_YT_FOOTER), Settings(_env_file=None))
+    out = _resolve_social_handles(
+        job, _crawl(_IG_FB_YT_FOOTER), Settings(_env_file=None, **_ALL_CREDS)
+    )
     assert out == {
         "instagram": "https://www.instagram.com/site_ig/",
         "facebook": "https://www.facebook.com/site_fb/",
@@ -234,10 +308,35 @@ def test_resolve_explicit_handle_wins_and_blanks_are_filled() -> None:
     job = AuditJob(
         url="https://example.com/", audit_type="combined", social_handles={"instagram": "typed_ig"}
     )
-    out = _resolve_social_handles(job, _crawl(_IG_FB_YT_FOOTER), Settings(_env_file=None))
+    out = _resolve_social_handles(
+        job, _crawl(_IG_FB_YT_FOOTER), Settings(_env_file=None, **_ALL_CREDS)
+    )
     assert out["instagram"] == "typed_ig"  # explicit wins, not overwritten by discovery
     assert out["facebook"] == "https://www.facebook.com/site_fb/"
     assert out["youtube"] == "https://www.youtube.com/@site_yt"
+
+
+def test_resolve_backfills_only_credentialed_platforms() -> None:
+    # A discovered handle whose provider has no credential would fail on every run and pin the
+    # social bundle at "partial" — discovery must not back-fill it.
+    job = AuditJob(url="https://example.com/", audit_type="website", social_handles=None)
+    out = _resolve_social_handles(
+        job, _crawl(_IG_FB_YT_FOOTER), Settings(_env_file=None, apify_api_token="tok")
+    )
+    assert set(out) == {"instagram", "facebook"}  # Apify covers IG+FB; no YouTube key => dropped
+
+
+def test_resolve_keeps_explicit_handle_without_credential() -> None:
+    # Explicit operator handles are kept even without a credential — the operator asked, and the
+    # report's collection-failure note is the honest outcome.
+    job = AuditJob(
+        url="https://example.com/", audit_type="combined", social_handles={"youtube": "typed_yt"}
+    )
+    out = _resolve_social_handles(
+        job, _crawl(_IG_FB_YT_FOOTER), Settings(_env_file=None, apify_api_token="tok")
+    )
+    assert out["youtube"] == "typed_yt"
+    assert set(out) == {"instagram", "facebook", "youtube"}
 
 
 def test_resolve_kill_switch_returns_only_explicit() -> None:

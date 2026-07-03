@@ -118,19 +118,25 @@ _PLATFORMS = ("instagram", "facebook", "youtube")
 # substrings) so "subnav"/"asocial-proof" don't masquerade as navigation.
 _NAV_TOKENS = {"nav", "navbar", "navigation", "menu", "social", "socials"}
 
-# A real social-icon link sits in a footer/header/nav block (placement bonus >= 2.0); a bare inline
-# body mention scores only the 1.0 base. Requiring this floor keeps placed icons + repeated links
-# but drops a single passing mention from promoting a website audit to combined.
-_MIN_PLACEMENT_SCORE = 2.0
+# A real social-icon link sits in site chrome — footer (+3.0), header (+2.0), or a semantic <nav>
+# element (+2.0) — or carries the brand in its handle (+2.0); each clears this floor on top of the
+# 1.0 base. A generic nav/social class token is worth only 1.0, deliberately BELOW the floor, so a
+# "social-proof"/"menu"-classed body container (testimonials, restaurant menus) can never get a
+# stranger's profile scraped and scored as the client's.
+_MIN_PLACEMENT_SCORE = 2.5
 # Extra confidence when the discovered handle resembles the audited site's brand.
 _BRAND_MATCH_BONUS = 2.0
 
 # Surrounding text marking a link as a THIRD-PARTY credit, not the site's own profile:
-# "Site by / Designed by / Powered by / Hosted by <agency>", "as seen in <press>", generic credits.
+# "Site by / Designed by / Powered by / Hosted by <agency>", "as seen in <press>", and
+# attribution-shaped credit lines ("photo credit", "credits:"). A bare "credit(s)" is deliberately
+# NOT enough — financing copy ("credit approval required", "we accept all major credit cards")
+# must not discard the site's own link.
 _ATTRIBUTION_RE = re.compile(
     r"\b(?:site|website|web\s*design|design(?:ed)?|develop(?:ed|ment)?|built|build|powered"
     r"|host(?:ed|ing)?|market(?:ing)?|brand(?:ing)?|crafted|created|managed|maintained)\s+by\b"
-    r"|\bas\s+seen\s+(?:in|on)\b|\bfeatured\s+(?:in|on)\b|\bcredits?\b",
+    r"|\bas\s+seen\s+(?:in|on)\b|\bfeatured\s+(?:in|on)\b"
+    r"|\b(?:photo|image|video|design|photography)\s+credits?\b|\bcredits?\s*:",
     re.IGNORECASE,
 )
 # A credit line is short ("Site by Acme Agency"); a whole footer's text is long. Only the anchor's
@@ -232,10 +238,11 @@ def _placement_bonus(anchor: Tag) -> float:
     """Score a link higher when it sits in a footer/header/nav/social block — where sites put
     their real social-icon links — so a footer profile link beats an inline mention in the body."""
     bonus = 0.0
+    nav_bonus = 0.0
     seen: set[str] = set()
     for parent in anchor.parents:
         if len(seen) == 3:
-            break  # footer + header + nav all credited; deeper ancestors can't raise the bonus
+            break  # footer + header + semantic nav all credited; deeper ancestors can't raise it
         if not isinstance(parent, Tag):
             continue
         name = (parent.name or "").lower()
@@ -246,10 +253,17 @@ def _placement_bonus(anchor: Tag) -> float:
         if "header" not in seen and (name == "header" or "header" in tokens):
             bonus += 2.0
             seen.add("header")
-        if "nav" not in seen and (name == "nav" or tokens & _NAV_TOKENS):
-            bonus += 1.0
-            seen.add("nav")
-    return bonus
+        # A semantic <nav> element is site chrome (2.0, like header). A mere nav/social class token
+        # is only a weak hint (1.0) that alone stays below _MIN_PLACEMENT_SCORE — a "social"-classed
+        # body container (social proof, testimonials) must not look like a placed icon. Only the
+        # strongest nav signal on the ancestor chain counts, once.
+        if "nav" not in seen:
+            if name == "nav":
+                nav_bonus = 2.0
+                seen.add("nav")
+            elif tokens & _NAV_TOKENS:
+                nav_bonus = max(nav_bonus, 1.0)
+    return bonus + nav_bonus
 
 
 def _is_attribution_context(anchor: Tag) -> bool:
@@ -286,11 +300,16 @@ def _brand_tokens(site_url: str | None) -> set[str]:
 
 
 def _profile_handle(profile_url: str) -> str:
-    """The handle/slug of a canonical profile URL (the numeric id for a profile.php link)."""
+    """The handle/slug of a canonical profile URL (the numeric id for a profile.php link).
+
+    The Facebook ``/pages/<Name>/<id>`` form carries the brand in the SLUG — its trailing segment
+    is a numeric page id that could never match a brand token — so the slug is returned there."""
     parsed = urlparse(profile_url)
     if parsed.path.endswith("profile.php"):
         return (parse_qs(parsed.query).get("id") or [""])[0]
     segments = [seg for seg in parsed.path.split("/") if seg]
+    if len(segments) >= 2 and segments[0].lower() == "pages":
+        return segments[1]
     return segments[-1].lstrip("@") if segments else ""
 
 

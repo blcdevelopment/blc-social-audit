@@ -4,7 +4,7 @@ An honest list of what Phase 1 does **not** do, plus important behavioral
 caveats. Phase 1 is a local-first website-audit MVP; several items below are
 deliberately deferred to later phases or to production hardening.
 
-_Last reconciled: 2026-06-26._
+_Last reconciled: 2026-07-02._
 
 ---
 
@@ -31,7 +31,9 @@ These were out of scope for **Phase 1** by design (see [`docs/01_REQUIREMENTS.md
   `phase2-overall-v1`) appended at the end of a single combined report. See §1.1.
 - **Multi-tenancy.** The UI/API is still an internal shared tool, not a tenant-aware
   SaaS product.
-- **Competitor benchmarking** (SEMrush/Ahrefs/Similarweb).
+- **Live competitor benchmarking providers** (SEMrush/Ahrefs/Similarweb). The
+  presentation scaffold is shipped and safely disabled by default, but the paid vendor HTTP clients
+  are not implemented and no benchmark baselines are fabricated.
 - **Full analytics integrations** (GA4, Microsoft Clarity, CRM attribution). Search
   Console enrichment exists, but only for verified properties connected through Google OAuth.
 - ~~**Public share links / white-label self-service.**~~ **SHIPPED (Phase 2):** token-gated
@@ -54,8 +56,16 @@ one report (PDF and DOCX). Known limits of that flow:
 - **The combined report needs `rubrics/overall.yaml` deployed.** Overall Lead-Gen Readiness is
   config-driven (`compose_overall_readiness_score`). If `overall.yaml` is missing/unreadable or a
   provider returns bad data, the social/overall step is caught and the audit **gracefully degrades
-  to a website-only report** — it never fails the whole combined job, but the appended sections
-  are silently absent.
+  to a website-only report** — it never fails the whole combined job. An **explicitly combined**
+  submission that degrades keeps its social section as an honest collection-failure note; an
+  **auto-discovered** website audit is promoted to combined **only when the social collection
+  actually produced data**, so a failed collection leaves the website report byte-identical
+  (no hollow sections).
+- **Auto-discovery back-fills only credentialed platforms.** A profile link discovered on the
+  page is used only when its provider credential (`APIFY_API_TOKEN` for Instagram/Facebook,
+  `YOUTUBE_API_KEY` for YouTube) is configured — a keyless platform is never persisted onto the
+  job, so it cannot pin the social section at a permanent `partial` status. Explicit operator
+  handles are kept regardless.
 - **Combined social findings are deterministic (no LLM).** The appended Social Media Audit section
   is rule-derived from `social.yaml`, like the standalone social report — there is no LLM-polish
   pass in the combined flow.
@@ -216,5 +226,5 @@ one report (PDF and DOCX). Known limits of that flow:
 2. Encrypt Google OAuth/refresh tokens at rest (or move them into a secrets manager).
 3. ~~Add data retention/cleanup for `storage/` and old audit rows.~~ **DONE** —
    `cleanup_storage` + `STORAGE_RETENTION_DAYS` (cron on the host).
-4. Continue the deferred scope (competitor benchmarking, analytics) as separate phases.
-   _(Social audits already SHIPPED in Phase 2.)_
+4. Continue the deferred scope (live benchmarking providers and analytics) as separate phases.
+   _(Social audits and the benchmarking scaffold already SHIPPED in Phase 2.)_

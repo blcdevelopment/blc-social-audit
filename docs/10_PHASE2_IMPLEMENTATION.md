@@ -112,7 +112,7 @@ Jira epics/tasks + tracking board → [`docs/09_PHASE2_JIRA_PLAN.md`](09_PHASE2_
 > - **Stage package** `apps/worker/stages/social/`: `extractor.py` (pure IG+FB → `social.*`
 >   facts), `collector.py` (orchestrate + graceful skip), `apify_provider.py` (network),
 >   `report.py` (`compose_social_report_payload`), `__init__.py`.
-> - **Scoring.** `rubrics/social.yaml` (**version `phase2-social-v1`**, `category: social`) is
+> - **Scoring.** `rubrics/social.yaml` (**version `phase2-social-v1`** — now `phase2-social-v3`, `category: social`) is
 >   scored by `scoring.score_social_audit()` (`apps/worker/stages/scoring.py:143`) → a
 >   **standalone** Social Score (0–100). `Rubric.category` Literal now includes `"social"`
 >   (`scoring.py:47`); the website `CompositeRubric.weights` stays exactly `{seo, uxui}`
@@ -524,7 +524,7 @@ social report section.
 > ## ✅ DONE (2026-06-23) — all of §6 (P2-E4) is built.
 > The plan text in §6.1–§6.7 below is retained for rationale/history; the per-subsection DONE
 > notes give the as-built code paths. Summary: provider package `apps/worker/stages/social/`
-> (Apify IG+FB), `rubrics/social.yaml` (`phase2-social-v1`) scored by `score_social_audit`,
+> (Apify IG+FB), `rubrics/social.yaml` (`phase2-social-v1`, now `phase2-social-v3`) scored by `score_social_audit`,
 > deterministic rule-derived findings (no LLM, no social commentary prompt), a separate
 > `templates/social_report.html` + `render_social_pdf`, a `_run_social_pipeline` branch in
 > `run_collection_audit`, API `audit_type`/`social_handles`/`social_report`, and a `/social` UI tab.
@@ -697,7 +697,7 @@ improves UX. Status/report/detail endpoints stay `job_id`-keyed and type-agnosti
   calibration gate is untouched because the website composite is untouched.
 
 > **DONE (2026-06-23) — as-built (standalone Social Score, website composite untouched).**
-> - `rubrics/social.yaml` authored: **`version: phase2-social-v1`**, `category: social`,
+> - `rubrics/social.yaml` authored: **`version: phase2-social-v1`** (since advanced to `phase2-social-v3`, 14 rules), `category: social`,
 >   `max_score: 100`, `normalization: rescale_to_max` — scored by the **same engine** via
 >   `scoring.score_social_audit(social_facts, settings)` (`scoring.py:143`). It loads
 >   `settings.rubric_social_path`, returns `score: None` when collection status isn't
@@ -830,10 +830,15 @@ improves UX. Status/report/detail endpoints stay `job_id`-keyed and type-agnosti
 
 ## 7. P2-E5 — Enrichment (v3)
 
-Deferred (Plan §6). Competitor benchmarking (SEMrush/Ahrefs/Similarweb) + user-authorized
-analytics (GA4, Search Console, Clarity, SEMrush). These move from anonymous public-data audits
-to user-authorized data sources — a separate phase, recurring cost, OAuth flows. Not built in
-Phase 2 core.
+Partly scaffolded. Competitor benchmarking now has a feature flag, provider registry
+(`semrush` / `ahrefs` / `similarweb`), typed normalized facts, graceful skip paths, and
+PDF/DOCX/web report-section rendering. It is presentation-only, never changes scores, stores any
+real baseline payload under `score_breakdown["benchmark"]`, and is disabled/no-op until a paid
+vendor client is selected, implemented, and funded.
+
+Still deferred to v3: live SEMrush/Ahrefs/Similarweb HTTP clients and user-authorized analytics
+(GA4, Search Console, Clarity, SEMrush). Those move beyond anonymous public-data audits into
+recurring cost and/or OAuth flows.
 
 ---
 
@@ -895,7 +900,7 @@ report**, validated on real builder social accounts **(Instagram + Facebook via 
 
 > **DONE (2026-06-23) — social acceptance met.** The standalone Social audit is **built and
 > runnable from the browser** end-to-end: deterministic standalone Social Score
-> (`scoring.score_social_audit`, `rubrics/social.yaml` `phase2-social-v1`) with its **own** PDF
+> (`scoring.score_social_audit`, `rubrics/social.yaml` `phase2-social-v1`, now `phase2-social-v3`) with its **own** PDF
 > (`render_social_pdf` + `templates/social_report.html`), Apify-backed IG + FB collection, a
 > `/social` UI tab, and deterministic rule-derived findings (no LLM). ~119 unit tests pass (incl.
 > `test_extractor_social.py` / `test_social_scoring.py` / `test_worker_social.py`), ruff clean, and

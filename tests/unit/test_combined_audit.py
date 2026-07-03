@@ -9,6 +9,7 @@ website-only audit is unchanged (no social/overall data, byte-identical report p
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import UUID
 from zipfile import ZipFile
 
@@ -260,6 +261,49 @@ def test_combined_audit_degrades_to_website_when_social_fails(tmp_path, monkeypa
         assert result.pdf_path and Path(result.pdf_path).exists()
 
 
+def test_explicit_combined_audit_merges_failed_social_collection(tmp_path, monkeypatch) -> None:
+    # The operator explicitly asked for a combined audit, so a collection that came back with no
+    # usable profile data is still merged: the failed-status social section is informative, and
+    # the overall headline degrades to the website-only rescale.
+    TestingSession = _session(tmp_path)
+    _patch_settings(monkeypatch, TestingSession, tmp_path)
+
+    def failed_collector(settings, handles):
+        # Provider fetch returned nothing (raw None) -> a failed-status bundle, no score.
+        return extract_social_facts(
+            [{"platform": "instagram", "handle": "acme", "raw": None}], now=NOW
+        )
+
+    with TestingSession() as db:
+        job = AuditJob(
+            url="https://example.com/",
+            audit_type="combined",
+            social_handles={"instagram": "acme"},
+            status="queued",
+            current_stage="Queued",
+            progress_pct=0,
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        job_id = str(job.id)
+
+    tasks.run_collection_audit(
+        job_id, crawler=_fake_crawler, psi_collector=_fake_psi, social_collector=failed_collector
+    )
+
+    with TestingSession() as db:
+        job = db.get(AuditJob, UUID(job_id))
+        assert job.status == "complete"
+        assert job.audit_type == "combined"  # explicit type is kept
+        result = job.result
+        assert result.social_score is None
+        assert result.social_facts["status"] == "failed"
+        assert result.score_breakdown["social"]["status"] == "failed"
+        assert result.score_breakdown["overall_readiness"]["status"] == "website_only"
+        assert result.score_breakdown["overall_readiness"]["score"] == result.lead_gen_score
+
+
 def test_rerun_enrichment_preserves_combined_sections(tmp_path, monkeypatch) -> None:
     # Re-running external SEO enrichment on a combined audit must keep the social breakdown and
     # recompute the Overall Lead-Gen Readiness, not silently drop them.
@@ -331,6 +375,50 @@ def test_rerun_enrichment_preserves_combined_sections(tmp_path, monkeypatch) -> 
         assert overall is not None and overall["score"] == before_overall
         # The benchmark section is re-attached, not silently dropped by the website-only rescore.
         assert result.score_breakdown.get("benchmark") == benchmark_blob
+
+
+def test_rerun_enrichment_does_not_fabricate_overall_readiness(tmp_path, monkeypatch) -> None:
+    # A combined-typed job whose social step never produced data (collector crashed, so the
+    # result carries no social score and no overall_readiness key) must stay website-only on
+    # rerun — the enrichment rerun must not invent an Overall Readiness the audit never had.
+    TestingSession = _session(tmp_path)
+    _patch_settings(monkeypatch, TestingSession, tmp_path)
+
+    def boom_collector(settings, handles):
+        raise RuntimeError("apify exploded mid-collection")
+
+    with TestingSession() as db:
+        job = AuditJob(
+            url="https://example.com/",
+            audit_type="combined",
+            social_handles={"instagram": "acme"},
+            status="queued",
+            current_stage="Queued",
+            progress_pct=0,
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        job_id = str(job.id)
+
+    tasks.run_collection_audit(
+        job_id, crawler=_fake_crawler, psi_collector=_fake_psi, social_collector=boom_collector
+    )
+
+    with TestingSession() as db:
+        result = db.get(AuditJob, UUID(job_id)).result
+        assert result.social_score is None
+        assert "overall_readiness" not in (result.score_breakdown or {})
+
+    tasks.rerun_external_enrichment_for_audit(job_id)
+
+    with TestingSession() as db:
+        job = db.get(AuditJob, UUID(job_id))
+        assert job.status == "complete"
+        result = job.result
+        assert result.social_score is None
+        assert "overall_readiness" not in (result.score_breakdown or {})
+        assert "social" not in (result.score_breakdown or {})
 
 
 def _fake_crawler_with_social_footer(
@@ -428,6 +516,57 @@ def test_website_audit_with_footer_social_is_promoted_to_combined(tmp_path, monk
         assert payload.overall_readiness is not None
 
 
+def test_website_audit_not_promoted_when_social_collection_returns_nothing(
+    tmp_path, monkeypatch
+) -> None:
+    # Auto-promotion is gated on collection SUCCESS: discovery found the footer Instagram link and
+    # a credential is configured, but the collection came back with no usable profile data (raw
+    # fetch None -> failed status, no score). The website audit must stay byte-identical: no
+    # handle write, no type flip, no social/overall breakdown keys, no appended report sections.
+    TestingSession = _session(tmp_path)
+    _patch_settings(monkeypatch, TestingSession, tmp_path)
+
+    def failed_collector(settings, handles):
+        return extract_social_facts(
+            [{"platform": "instagram", "handle": "acmebuilders", "raw": None}], now=NOW
+        )
+
+    with TestingSession() as db:
+        job = AuditJob(
+            url="https://example.com/",
+            audit_type="website",  # operator gave NO social handles
+            status="queued",
+            current_stage="Queued",
+            progress_pct=0,
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        job_id = str(job.id)
+
+    tasks.run_collection_audit(
+        job_id,
+        crawler=_fake_crawler_with_social_footer,
+        psi_collector=_fake_psi,
+        social_collector=failed_collector,
+    )
+
+    with TestingSession() as db:
+        job = db.get(AuditJob, UUID(job_id))
+        assert job.status == "complete"
+        assert job.audit_type == "website"  # NOT promoted
+        assert job.social_handles in (None, {})
+        result = job.result
+        assert result.seo_score is not None and result.lead_gen_score is not None
+        assert result.social_score is None
+        assert result.social_facts in (None, {})
+        assert "social" not in (result.score_breakdown or {})
+        assert "overall_readiness" not in (result.score_breakdown or {})
+        payload = compose_report_payload(job, result)
+        assert payload.social_audit is None
+        assert payload.overall_readiness is None
+
+
 def test_website_audit_with_no_social_links_stays_website(tmp_path, monkeypatch) -> None:
     # Auto-discovery on, but the page links to no social profiles -> no social step, stays a plain
     # website audit (byte-identical behaviour). The collector must never run.
@@ -471,7 +610,7 @@ def test_website_audit_survives_social_discovery_error(tmp_path, monkeypatch) ->
     TestingSession = _session(tmp_path)
     _patch_settings(monkeypatch, TestingSession, tmp_path)
 
-    def boom_discovery(pages):
+    def boom_discovery(pages, **kwargs):
         raise RuntimeError("discovery parser blew up")
 
     monkeypatch.setattr(tasks, "discover_social_links", boom_discovery)
@@ -582,3 +721,21 @@ def test_website_audit_is_unchanged_by_combined_feature(tmp_path, monkeypatch) -
         payload = compose_report_payload(job, result)
         assert payload.social_audit is None
         assert payload.overall_readiness is None
+
+
+# ----------------------------------------------------------------- malformed stored handles
+def test_explicit_social_handles_tolerates_malformed_stored_value() -> None:
+    # Stored JSON is untrusted: a non-dict social_handles must yield {} instead of raising.
+    job = SimpleNamespace(social_handles=["instagram", "acme"])
+    assert tasks._explicit_social_handles(job) == {}
+    assert tasks._explicit_social_handles(SimpleNamespace(social_handles="acme")) == {}
+    assert tasks._explicit_social_handles(SimpleNamespace(social_handles=None)) == {}
+
+
+def test_resolve_social_handles_safely_tolerates_malformed_stored_value() -> None:
+    # The safety wrapper's fallback path re-calls _explicit_social_handles, so a malformed stored
+    # value must resolve to {} (no raise) rather than crashing the committed website audit.
+    settings = _settings()
+    job = SimpleNamespace(social_handles=["instagram"], url="https://example.com/")
+    crawl_result = _fake_crawler("https://example.com/", settings, None)
+    assert tasks._resolve_social_handles_safely(job, crawl_result, settings) == {}

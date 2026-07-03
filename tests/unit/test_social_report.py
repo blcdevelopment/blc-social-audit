@@ -6,10 +6,12 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from apps.shared.config import Settings
 from apps.worker.stages.scoring import score_social_audit
 from apps.worker.stages.social.extractor import extract_social_facts
-from apps.worker.stages.social.report import build_social_report_data
+from apps.worker.stages.social.report import _display_handle, build_social_report_data
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 NOW = datetime(2026, 6, 23, tzinfo=UTC)
@@ -63,3 +65,83 @@ def test_metric_line_handles_percent_and_count_facts() -> None:
     # a count fact (link in bio) -> no spurious unit, still shows the target
     if "social.link_in_bio" in by_id:
         assert "target" in (by_id["social.link_in_bio"]["metric"] or "")
+
+
+def test_top_posts_ranked_by_combined_attention_proxy() -> None:
+    # Views and engagement are incommensurable across platforms; the cross-platform sort uses
+    # views + engagement so a 10k-engagement image outranks a 5-view video.
+    facts = {
+        "status": "complete",
+        "summary": {},
+        "platforms": [
+            {
+                "platform": "youtube",
+                "status": "complete",
+                "handle": "acme",
+                "top_posts": [
+                    {"type": "video", "views": 5, "likes": 1, "comments": 0, "engagement": 1}
+                ],
+            },
+            {
+                "platform": "instagram",
+                "status": "complete",
+                "handle": "acme",
+                "top_posts": [
+                    {
+                        "type": "image",
+                        "views": None,
+                        "likes": 9000,
+                        "comments": 1000,
+                        "engagement": 10000,
+                    }
+                ],
+            },
+        ],
+    }
+    report = build_social_report_data(
+        social_facts=facts, social_breakdown={}, social_score=None, handles={}
+    )
+    assert [p["type"] for p in report["top_posts"]] == ["image", "video"]
+
+
+@pytest.mark.parametrize(
+    ("stored", "expected"),
+    [
+        ("acme", "acme"),
+        ("@acme", "acme"),
+        ("https://www.instagram.com/acme/", "acme"),
+        ("https://facebook.com/acme.builders", "acme.builders"),
+        ("https://www.facebook.com/pages/Acme-Builders/123456", "Acme-Builders"),
+        ("https://www.facebook.com/profile.php?id=123456", "id 123456"),
+        ("https://www.youtube.com/channel/UCabc123", "UCabc123"),
+        ("https://www.youtube.com/c/AcmeBuilds", "AcmeBuilds"),
+        ("https://www.youtube.com/user/acmebuilds", "acmebuilds"),
+        ("https://www.youtube.com/@acme", "acme"),
+        ("", ""),
+        (None, ""),
+    ],
+)
+def test_display_handle_forms(stored: str | None, expected: str) -> None:
+    assert _display_handle(stored) == expected
+
+
+def test_handles_are_display_cleaned_without_mutating_facts() -> None:
+    stored_url = "https://www.instagram.com/acme/"
+    facts = {
+        "status": "complete",
+        "summary": {},
+        "platforms": [
+            {"platform": "instagram", "status": "complete", "handle": stored_url, "top_posts": []}
+        ],
+    }
+    report = build_social_report_data(
+        social_facts=facts,
+        social_breakdown={},
+        social_score=None,
+        handles={"instagram": stored_url},
+    )
+    assert report["handles"] == {"instagram": "acme"}
+    assert report["per_platform"][0]["handle"] == "acme"
+    assert report["platforms"][0]["handle"] == "acme"
+    # The stored facts keep the canonical URL (the payload works on copies).
+    assert facts["platforms"][0]["handle"] == stored_url

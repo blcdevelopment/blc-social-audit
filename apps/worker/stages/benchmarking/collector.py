@@ -59,8 +59,10 @@ def normalize_benchmark_facts(
     metric is dropped; if nothing usable survives the run is ``empty`` (no section, no penalty).
     """
     rows = raw.get("competitors") if isinstance(raw, dict) else None
+    # A truthy non-list value (e.g. ``competitors: 1``) must degrade like a missing list.
+    rows = rows if isinstance(rows, list) else []
     baselines: list[CompetitorBaseline] = []
-    for row in rows or []:
+    for row in rows:
         if not isinstance(row, dict):
             continue
         label = str(row.get("label") or "").strip()

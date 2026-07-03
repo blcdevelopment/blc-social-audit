@@ -200,6 +200,26 @@ def test_accessibility_advisory_section_renders_when_complete_without_changing_s
     ]
 
 
+def test_social_section_absent_when_social_facts_empty_even_with_overall() -> None:
+    # The two combined-audit extras are independent: an overall_readiness key in the breakdown
+    # must not drag in a degenerate social section built from empty facts.
+    breakdown = _score_breakdown()
+    breakdown["overall_readiness"] = {
+        "status": "website_only",
+        "score": 72,
+        "band": "fair",
+        "weights": {"website": 1.0, "social": 0.0},
+        "inputs": {"website_lead_gen": 72, "social": None},
+    }
+    result = _result(score_breakdown=breakdown, social_facts={}, social_score=None)
+
+    payload = compose_report_payload(_job(), result)
+
+    assert payload.social_audit is None
+    assert payload.overall_readiness is not None
+    assert payload.overall_readiness["score"] == 72
+
+
 def _job() -> SimpleNamespace:
     return SimpleNamespace(
         id=uuid4(),

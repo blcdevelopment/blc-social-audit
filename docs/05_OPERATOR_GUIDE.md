@@ -3,7 +3,7 @@
 For the BLC operator running website audits through the UI. No coding required —
 just the running stack.
 
-> **Last reconciled: 2026-06-26.**
+> **Last reconciled: 2026-07-02.**
 
 ---
 
@@ -58,7 +58,8 @@ On the home page (`/`):
    Adding **any** of these turns the submission into a **combined audit**: the
    website audit runs first, then the social audit, and you get **one report** with a
    Social Media Audit section and an Overall Lead-Gen Readiness score appended at the
-   end (see §3a). Leave them blank for a website-only audit.
+   end (see §3a). Platforms you leave blank may be **auto-detected** from the site's own
+   profile links (see §3a); leave them all blank for a website-first audit.
 5. **White-label branding (optional)** — override the report logo, name, and colours
    for a prospect-facing PDF (see §9).
 6. Click **Start audit**. You'll be taken to the progress page for that audit.
@@ -86,9 +87,19 @@ There is **no separate Social Audit tab** — social media is audited from the s
    Audit** section and an **Overall Lead-Gen Readiness** score (§6) **appended at the
    end**, in **both PDF and DOCX**.
 
-**Graceful degradation:** if the social/overall step can't run (e.g. missing
-provider data), the audit still completes as a normal **website-only** report — the
-social problem never fails the whole job.
+**Auto-discovery (blank fields):** platforms you leave blank are auto-filled from
+the site's **own** profile links found on the crawled pages (footer/header/nav icons;
+third-party mentions like testimonials or agency credits are ignored). Only platforms
+whose server key is configured are used, and a plain website submission is upgraded to
+a combined audit **only when the social collection actually returns data** — so a
+website run either gains a real Social Media Audit section or stays exactly a website
+report; it never gains an empty social section. Server-side kill-switch:
+`SOCIAL_AUTODISCOVERY_ENABLED=false`.
+
+**Graceful degradation:** if the social/overall step of an explicitly-combined audit
+can't run (e.g. the provider returns no data), the audit still completes as a normal
+website report with an honest collection note — the social problem never fails the
+whole job.
 
 A **social-only** audit (no website URL) is **no longer offered in the UI** — every
 audit from the form is either website-only or website+social. (The backend

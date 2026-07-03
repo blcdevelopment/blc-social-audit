@@ -227,7 +227,9 @@ Each audit produces:
 - Social Media Score
 - **Overall Lead Generation Readiness Score** (composite)
 
-Scores shall be benchmarked against industry standards or competitors (where data is available).
+Scores shall be benchmarked against industry standards or competitors where data is available.
+As built, this is a presentation-only scaffold: normalized benchmark facts can be rendered in the
+report, but benchmark data never changes SEO, UX/UI, Social, Lead-Gen, or Overall scores.
 
 ### 2.6 Recommendations & strategy
 
@@ -306,7 +308,9 @@ declined). YouTube uses its free official API. LinkedIn excluded; TikTok deferre
 
 **Problem:** No free, reliable source for benchmark data exists. Real options are paid: SEMrush, Ahrefs, Similarweb. Recurring cost.
 
-**Resolution:** Deferred to Phase 2. Validate product-market fit before committing to a recurring data subscription.
+**Resolution:** The safe scaffold has been built: feature flag, provider registry, normalized
+facts, report-section rendering, and graceful skip paths. The live SEMrush/Ahrefs/Similarweb
+clients remain deferred until product-market fit and recurring cost are approved.
 
 ### 3.7 Report delivery format
 
@@ -418,7 +422,7 @@ The Phase 1 deliverable shall be considered successful if all of the following p
 |---|---|
 | Commercial terms | To be confirmed separately from this technical scope |
 | Included | Application development, scoring rubric design, prompt engineering, PDF template, source code handover, documentation, walkthrough video, production-readiness preparation |
-| Excluded | Third-party API costs, production hosting costs, social media data providers, benchmarking providers |
+| Excluded | Third-party API costs, production hosting costs, social media data providers, live benchmarking-provider subscriptions |
 | Deployment note | Production/staging deployment is not front-loaded. It can be executed after the local application is working end-to-end. |
 
 ### 4.6 What we need from BLC to start
@@ -447,7 +451,7 @@ These are tracked here so they don't get forgotten and so the boundary is unambi
 
 - Social media audits (Instagram, Facebook, LinkedIn, YouTube)
 - OAuth-vs-scraping decision and integration
-- Competitor benchmarking via SEMrush / Ahrefs / Similarweb
+- Live competitor benchmarking provider clients via SEMrush / Ahrefs / Similarweb
 - User accounts, authentication, multi-tenancy
 - Web dashboard with interactive charts and exploration
 - Advanced audit history and re-running previous audits
@@ -539,7 +543,8 @@ How much of the original Darius scope does Phase 1 cover? This is the honest acc
 | UX/UI Score | ✅ | — | — |
 | Social Media Score | — | ✅ | — |
 | Lead Gen Readiness Score | ✅ partial (without social) | ✅ full | — |
-| Competitor benchmarking | — | ✅ | — |
+| Competitor benchmarking scaffold | — | ✅ | — |
+| Live benchmarking provider subscription/client | — | — | ✅ |
 | Quick Wins / Mid / Long-term recommendations | ✅ | — | — |
 | Executive Summary | ✅ | — | — |
 | Detailed Findings | ✅ | — | — |
