@@ -68,7 +68,11 @@ def _document_xml(payload: ReportPayload) -> str:
     parts: list[str] = []
     metadata = payload.metadata
     overall = payload.overall_readiness if isinstance(payload.overall_readiness, dict) else None
-    is_combined = bool(overall and overall.get("score") is not None)
+    # "website_only" (failed social collection) still carries a score; the title must not
+    # promise a social section the document doesn't have.
+    is_combined = bool(
+        overall and overall.get("status") == "complete" and overall.get("score") is not None
+    )
     parts.append(
         _paragraph(
             "Website & Social Media Audit Report" if is_combined else "Website Audit Report",
@@ -300,13 +304,17 @@ def _external_seo_xml(payload: ReportPayload) -> list[str]:
         prev_text = (
             f", compared with the preceding {prev.get('days')} days "
             f"({prev.get('start')} to {prev.get('end')})"
-            if prev.get("start")
+            if prev.get("start") and prev.get("days")
             else ""
         )
+        # Results stored before the window facts existed have no "days" key; render the
+        # bare range rather than "(None days)" in a client-facing document.
+        days = search.date_range.get("days")
+        days_text = f" ({days} days)" if days else ""
         parts.append(
             _paragraph(
                 f"Data window: {search.date_range.get('start')} to "
-                f"{search.date_range.get('end')} ({search.date_range.get('days')} days)"
+                f"{search.date_range.get('end')}{days_text}"
                 f"{prev_text}. Table figures are totals over this window.",
                 "Meta",
             )

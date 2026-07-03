@@ -46,8 +46,10 @@
           </div>
         {% endif %}
       </div>
+      {# status "website_only" carries a real (100%-website) score after a failed social
+         collection — the cover must not promise social content the report doesn't have. #}
       {% set cover_overall = payload.get('overall_readiness') %}
-      {% set cover_combined = cover_overall and cover_overall.get('score') is not none %}
+      {% set cover_combined = cover_overall and cover_overall.get('status') == 'complete' and cover_overall.get('score') is not none %}
       <div class="cover-main">
         <p class="cover-eyebrow">{% if cover_combined %}Comprehensive Website &amp; Social Media Audit{% else %}Comprehensive Website Audit{% endif %}</p>
         <h1>{% if cover_combined %}Website &amp; Social Media Audit Report{% else %}Website Audit Report{% endif %}</h1>
@@ -421,16 +423,18 @@
           <p class="eyebrow">The opportunity</p>
           <p class="opportunity-headline">
             {% if opp.get("site_monthly_clicks") %}The site currently earns about
-            {{ opp.site_monthly_clicks }} Google clicks a month.{% endif %}
-            Searchers see it about {{ opp.total_striking_impressions }} times a month for its
+            {{ opp.site_monthly_clicks }} Google clicks a month.
+            Searchers see it{% else %}Searchers see the site{% endif %}
+            about {{ opp.total_striking_impressions }} times a month for its
             {{ opp.striking_query_count }} near-miss queries — searches where it already ranks in
             positions {{ opp.striking_position_min }}–{{ opp.striking_position_max }}, just below
             the top results. A <strong>conservative</strong> scenario that lifts the top
             {{ opp.modeled_query_count }} of them toward the top of page one could add an estimated
             <strong>{{ opp.opportunity_clicks_low }}–{{ opp.opportunity_clicks_high }} visits per
-            month</strong> — roughly {{ opp.estimated_leads_low }}–{{ opp.estimated_leads_high }}
+            month</strong>{% if opp.get("estimated_leads_high") %} — roughly
+            {{ opp.estimated_leads_low }}–{{ opp.estimated_leads_high }}
             more inquiries at a {{ opp.lead_rate_low_pct }}–{{ opp.lead_rate_high_pct }}% contact
-            rate.
+            rate{% endif %}.
           </p>
           {% set sc = opp.get("scenarios") or {} %}
           {% if sc.get("expected") %}

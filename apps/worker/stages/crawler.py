@@ -564,13 +564,17 @@ async def _render_page(
 
             axe_results = await run_axe_on_page(page, settings)
 
+        # Capture the URL before the frame pass: its scrolling can fire scrollspy
+        # history/hash updates, and final_url must describe the same state as the
+        # HTML/text/screenshot captured above.
+        final_url = page.url
         # Popup/lazy-iframe lead forms never appear in page.content(); a bounded frame
         # pass counts them so the UX extractor can credit "form present" honestly.
         frame_form_count, frame_form_field_count = await _scan_frames_for_forms(page)
 
         return CrawledPage(
             url=url,
-            final_url=page.url,
+            final_url=final_url,
             status_code=status_code,
             title=title.strip() or None,
             html=html,

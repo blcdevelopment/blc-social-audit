@@ -70,6 +70,9 @@ rules:
     evaluator: threshold
     params:
       min: 1
+    # v2 facts stored before this key existed must rescale on re-run, not fail with a
+    # fabricated "no form found" finding; the v3 extractor always emits the key.
+    skip_if_missing: true
     impact: high
     tier: mid_term
     finding_label: No lead capture form was found
@@ -111,6 +114,8 @@ rules:
     evaluator: threshold
     params:
       min: 1
+    # Same re-run guard as uxui.forms.present: pre-v3 stored facts lack this key.
+    skip_if_missing: true
     impact: medium
     tier: quick_win
     finding_label: No low-pressure contact path is visible on the crawled pages

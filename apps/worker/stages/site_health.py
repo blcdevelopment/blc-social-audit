@@ -120,12 +120,18 @@ def _retry_after_seconds(response: httpx.Response, attempt: int) -> float:
 
 async def _browser_ua_recheck(url: str | None, settings: Settings) -> bool:
     """One best-effort GET with a regular browser profile. True = the URL answered, so
-    the earlier failures were the server filtering automated traffic, not a dead page."""
+    the earlier failures were the server filtering automated traffic, not a dead page.
+
+    ``follow_redirects`` stays False: the sample URL's host was SSRF-vetted at sweep
+    time, but a redirect target is attacker-controlled (an open redirect to a private
+    or cloud-metadata host) — and any response, 3xx included, already proves the server
+    answers a browser, which is all this diagnostic needs.
+    """
     if not url:
         return False
     try:
         async with httpx.AsyncClient(
-            follow_redirects=True,
+            follow_redirects=False,
             verify=False,
             headers={
                 "User-Agent": _BROWSER_RECHECK_UA,
@@ -136,6 +142,8 @@ async def _browser_ua_recheck(url: str | None, settings: Settings) -> bool:
         ) as client:
             response = await client.get(url)
         return response.status_code < 500
+    except SoftTimeLimitExceeded:
+        raise
     except Exception:
         return False
 

@@ -554,3 +554,100 @@ def test_secondary_rule_alone_still_surfaces() -> None:
         )
     )
     assert [f.title for f in solo.seo.findings] == ["Heading outline is broken"]
+
+
+def _alt_pair_with_crowd() -> list[dict]:
+    """A partial primary (severity low) + fail secondary (severity medium) alt pair,
+    crowded by rules that push a low-severity card past the findings cap of 5."""
+    return [
+        _rule("seo.a", "fail", weight=9, impact="high", tier="quick_win", label="High A"),
+        _rule("seo.b", "fail", weight=8, impact="high", tier="quick_win", label="High B"),
+        _rule("seo.c", "fail", weight=7, impact="high", tier="quick_win", label="High C"),
+        _rule("seo.d", "fail", weight=7, impact="medium", tier="quick_win", label="Medium D"),
+        _rule("seo.e", "fail", weight=7, impact="low", tier="quick_win", label="Low E"),
+        _rule(
+            "seo.images.alt_coverage",
+            "partial",
+            weight=6,
+            impact="medium",
+            tier="quick_win",
+            label="Image alt-text coverage is low",
+        ),
+        _rule(
+            "seo.technical_crawl.missing_image_alt",
+            "fail",
+            weight=4,
+            impact="medium",
+            tier="quick_win",
+            label="Images missing alt text",
+        ),
+    ]
+
+
+def test_merged_card_adopts_group_severity_and_survives_the_cap() -> None:
+    # The fail secondary (medium severity) folds into a partial primary (low severity).
+    # The merged card must rank and read at the group's strongest severity — otherwise
+    # it sinks below the findings cap and the issue vanishes from the report entirely.
+    plan = _plan(_breakdown(_alt_pair_with_crowd()))
+    titles = [f.title for f in plan.seo.findings]
+    assert "Image alt-text coverage is low" in titles
+    alt_card = next(f for f in plan.seo.findings if "alt-text" in f.title)
+    assert alt_card.severity == "medium"
+    assert "Images missing alt text" in alt_card.why
+    # The absorbed secondary's issue is represented; the recommendation travels with it.
+    rec_titles = [r.title for r in plan.seo.recommendations]
+    assert any("alt" in title.lower() for title in rec_titles)
+
+
+def test_top_priority_label_names_a_rendered_card() -> None:
+    # With only the alt pair surfaced, the unmerged secondary outranks its primary; the
+    # executive summary must cite the card the findings section actually shows.
+    rules = [
+        _rule(
+            "seo.images.alt_coverage",
+            "partial",
+            weight=6,
+            impact="medium",
+            tier="quick_win",
+            label="Image alt-text coverage is low",
+        ),
+        _rule(
+            "seo.technical_crawl.missing_image_alt",
+            "fail",
+            weight=4,
+            impact="medium",
+            tier="quick_win",
+            label="Images missing alt text",
+        ),
+    ]
+    plan = _plan(_breakdown(rules))
+    assert "Image alt-text coverage is low" in plan.executive_summary
+    assert "Images missing alt text" not in plan.executive_summary
+    assert [f.title for f in plan.seo.findings] == ["Image alt-text coverage is low"]
+
+
+def test_lead_in_zero_leads_and_zero_click_site_copy() -> None:
+    from apps.worker.stages.content_plan import _opportunity_lead_in
+
+    base = {
+        "window_days": 91,
+        "site_monthly_clicks": 0,
+        "total_striking_impressions": 40,
+        "striking_query_count": 3,
+        "modeled_query_count": 3,
+        "striking_position_min": 4,
+        "striking_position_max": 20,
+        "opportunity_clicks_low": 2,
+        "opportunity_clicks_high": 4,
+        "estimated_leads_low": 0,
+        "estimated_leads_high": 0,
+        "lead_rate_low_pct": 5,
+        "lead_rate_high_pct": 10,
+    }
+    text = _opportunity_lead_in(base)
+    # No dangling pronoun without the site-clicks line, and no "0 to 0 extra inquiries".
+    assert "searchers see the site" in text
+    assert "inquiries" not in text
+    assert "visits a month." in text
+    # A conservative range that rounds to zero suppresses the lead-in entirely.
+    assert _opportunity_lead_in({**base, "opportunity_clicks_high": 0}) == ""

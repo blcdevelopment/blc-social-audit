@@ -135,17 +135,21 @@ _OVERLAPPING_RULE_MERGES: dict[str, str] = {
 
 
 def _merge_overlapping_rules(surfaced: list[JsonDict]) -> list[JsonDict]:
-    """Fold secondary rules into their surfaced primary; each alone still surfaces."""
+    """Fold secondary rules into their surfaced primary; each alone still surfaces.
+
+    The merged card adopts the strongest severity and weight in its group: a ``fail``
+    secondary folded into a ``partial`` primary must not sink the combined card below
+    the findings cap (the issue would vanish from the report) or display a softer
+    severity than the check it absorbed.
+    """
     surfaced_ids = {str(rule.get("rule_id") or "") for rule in surfaced}
-    covered: dict[str, list[str]] = {}
+    covered: dict[str, list[JsonDict]] = {}
     kept: list[JsonDict] = []
     for rule in surfaced:
         rule_id = str(rule.get("rule_id") or "")
         primary_id = _OVERLAPPING_RULE_MERGES.get(rule_id)
         if primary_id and primary_id in surfaced_ids:
-            covered.setdefault(primary_id, []).append(
-                str(rule.get("finding_label") or rule.get("description") or rule_id)
-            )
+            covered.setdefault(primary_id, []).append(rule)
             continue
         kept.append(rule)
     if not covered:
@@ -153,9 +157,19 @@ def _merge_overlapping_rules(surfaced: list[JsonDict]) -> list[JsonDict]:
     merged: list[JsonDict] = []
     for rule in kept:
         rule_id = str(rule.get("rule_id") or "")
-        if rule_id in covered:
+        secondaries = covered.get(rule_id)
+        if secondaries:
             rule = dict(rule)
-            rule["covers_related"] = "; ".join(covered[rule_id])
+            rule["covers_related"] = "; ".join(
+                str(sec.get("finding_label") or sec.get("description") or sec.get("rule_id"))
+                for sec in secondaries
+            )
+            group = [rule, *secondaries]
+            rule["severity_override"] = max(
+                (_rule_severity(member) for member in group),
+                key=lambda severity: SEVERITY_RANK[severity],
+            )
+            rule["weight"] = max(_float(member.get("weight")) for member in group)
         merged.append(rule)
     return merged
 
@@ -183,8 +197,16 @@ def _surfaced_rules(section_id: str, score_breakdown: JsonDict) -> list[JsonDict
     ]
 
 
+def _rule_severity(rule: JsonDict) -> Severity:
+    """Severity for ranking/display; merged cards carry their group's strongest severity."""
+    override = rule.get("severity_override")
+    if isinstance(override, str) and override in SEVERITY_RANK:
+        return override  # type: ignore[return-value]
+    return _severity(rule.get("impact"), rule.get("result"))
+
+
 def _finding_sort_key(rule: JsonDict) -> tuple[int, float, str]:
-    severity = _severity(rule.get("impact"), rule.get("result"))
+    severity = _rule_severity(rule)
     return (-SEVERITY_RANK[severity], -_float(rule.get("weight")), str(rule.get("rule_id") or ""))
 
 
@@ -206,7 +228,7 @@ def _finding(rule: JsonDict, facts: JsonDict) -> CommentaryFinding:
     why = _with_covered_note(rule, why)
     label, urls = _location_bullets(rule, facts)
     return CommentaryFinding(
-        severity=_severity(rule.get("impact"), rule.get("result")),
+        severity=_rule_severity(rule),
         title=_finding_title(rule),
         meaning=meaning,
         why=why,
@@ -280,21 +302,30 @@ def _opportunity_lead_in(opportunity: JsonDict) -> str:
     leads_high = _int(opportunity.get("estimated_leads_high"))
     rate_low = _int(opportunity.get("lead_rate_low_pct"))
     rate_high = _int(opportunity.get("lead_rate_high_pct"))
-    if queries <= 0 or impressions <= 0:
+    if queries <= 0 or impressions <= 0 or clicks_high <= 0:
         return ""
+    # "it" needs the site_line antecedent; without one, name the subject explicitly.
     site_line = (
         f"the site currently earns about {site_clicks} Google clicks a month, and "
         if site_clicks > 0
         else ""
     )
+    subject = "it" if site_line else "the site"
+    # "0 to 0 extra inquiries" reads as a broken report — only quantify leads when the
+    # conservative click range is large enough to yield at least one.
+    leads_clause = (
+        f", which is about {leads_low} to {leads_high} extra inquiries at a typical "
+        f"{rate_low}% to {rate_high}% home-services contact rate"
+        if leads_high > 0
+        else ""
+    )
     return (
-        f"Based on your last {days} days of Search Console data, {site_line}searchers see it "
-        f"about {impressions} times a month for near-miss queries — searches where it already "
-        f"ranks in positions {pos_min} to {pos_max}, just below the top results. A conservative "
-        f"scenario that lifts the top {modeled} of those {queries} near-miss queries toward the "
-        f"top of page one could add roughly {clicks_low} to {clicks_high} visits a month, which "
-        f"is about {leads_low} to {leads_high} extra inquiries at a typical {rate_low}% to "
-        f"{rate_high}% home-services contact rate. This is a projection from your own Search "
+        f"Based on your last {days} days of Search Console data, {site_line}searchers see "
+        f"{subject} about {impressions} times a month for near-miss queries — searches where it "
+        f"already ranks in positions {pos_min} to {pos_max}, just below the top results. A "
+        f"conservative scenario that lifts the top {modeled} of those {queries} near-miss "
+        f"queries toward the top of page one could add roughly {clicks_low} to {clicks_high} "
+        f"visits a month{leads_clause}. This is a projection from your own Search "
         "Console data and published click-through benchmarks, not a promise, but it shows where "
         "the fastest wins are. "
     )
@@ -321,7 +352,11 @@ def _executive_summary(scores: JsonDict, top_label: str | None, opportunity: Jso
 
 
 def _top_priority_label(score_breakdown: JsonDict) -> str | None:
-    surfaced = _surfaced_rules("seo", score_breakdown) + _surfaced_rules("uxui", score_breakdown)
+    # Merge before picking, so the label always names a card the findings section renders
+    # (an unmerged secondary can outrank its primary yet never appear as its own card).
+    surfaced = _merge_overlapping_rules(
+        _surfaced_rules("seo", score_breakdown)
+    ) + _merge_overlapping_rules(_surfaced_rules("uxui", score_breakdown))
     if not surfaced:
         return None
     top = min(surfaced, key=_finding_sort_key)

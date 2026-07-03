@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 
 import httpx
+import pytest
 
 from apps.worker.stages import site_health
 from apps.worker.stages.external_seo import collect_external_seo_facts
@@ -55,6 +56,12 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     }
 
     def _respond(self, include_body: bool) -> None:
+        if "drop" in self.path:
+            # Not a valid HTTP response: the checker sees a protocol-level transport
+            # failure (counts toward the breaker) without the server raising.
+            self.close_connection = True
+            self.wfile.write(b"garbage\r\n\r\n")
+            return
         status, body = self.routes.get(self.path, (404, b"unknown"))
         body = body.replace(b"{host}", self.headers.get("Host", "").encode())
         self.send_response(status)
@@ -417,6 +424,91 @@ def test_breaker_trips_and_reports_bot_blocked(monkeypatch) -> None:
     assert facts["summary"]["unreachable_error_classes"].get("connection_failed", 0) >= 3
     assert any("stopped early" in note for note in facts["notes"])
     assert any("regular browser profile" in note for note in facts["notes"])
+
+
+def test_breaker_resets_on_success_between_failures(monkeypatch) -> None:
+    # "Consecutive" means consecutive: failures interleaved with working URLs must never
+    # trip the breaker (4 total failures here >= threshold 3, but the max run is 2).
+    async def _fake_recheck(url, settings):
+        return True
+
+    monkeypatch.setattr(site_health, "_browser_ua_recheck", _fake_recheck)
+    with _serve() as base:
+        # The sweep sorts its check list, so interleave by SORTED path order:
+        # a-drop, b-ok, c-drop, d-ok, e-drop, f-drop -> max failure run of 2.
+        links = [
+            {"url": f"{base}/a-drop"},
+            {"url": f"{base}/b-ok"},
+            {"url": f"{base}/c-drop"},
+            {"url": f"{base}/d-ok"},
+            {"url": f"{base}/e-drop"},
+            {"url": f"{base}/f-drop"},
+        ]
+        facts = collect_site_health_facts(
+            url=f"{base}/",
+            seo_facts={"status": "complete", "pages": []},
+            crawled_pages={"final_url": f"{base}/", "discovered_links": links},
+            rendered_pages=None,
+            settings=_settings(
+                site_health_breaker_threshold=3,
+                site_health_per_host_concurrency=1,
+                site_health_sitemap_max_urls=0,
+            ),
+        )
+
+    assert facts["status"] == "complete"
+    assert "reason" not in facts
+    assert facts["checks"]["skipped_breaker"] == 0
+    assert facts["summary"]["unreachable_internal_urls"] == 4
+
+
+def test_browser_recheck_never_follows_redirects(monkeypatch) -> None:
+    # The recheck's sample URL was SSRF-vetted at sweep time, but a redirect target is
+    # attacker-controlled (open redirect -> cloud metadata). The client must not follow
+    # redirects — a 3xx already proves the server answers a browser profile.
+    captured: dict = {}
+
+    class _FakeResponse:
+        status_code = 302
+
+    class _FakeClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def get(self, url):
+            return _FakeResponse()
+
+    monkeypatch.setattr(site_health.httpx, "AsyncClient", _FakeClient)
+    ok = asyncio.run(site_health._browser_ua_recheck("https://example.com/x", _settings()))
+    assert ok is True  # 302 counts as "answered"
+    assert captured["follow_redirects"] is False
+
+
+def test_browser_recheck_reraises_soft_time_limit(monkeypatch) -> None:
+    from celery.exceptions import SoftTimeLimitExceeded
+
+    class _FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def get(self, url):
+            raise SoftTimeLimitExceeded()
+
+    monkeypatch.setattr(site_health.httpx, "AsyncClient", _FakeClient)
+    with pytest.raises(SoftTimeLimitExceeded):
+        asyncio.run(site_health._browser_ua_recheck("https://example.com/x", _settings()))
 
 
 def test_healthy_sweep_stays_complete_and_reports_rate() -> None:

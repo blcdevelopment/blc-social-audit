@@ -108,6 +108,55 @@ def test_opportunity_estimate_caps_at_multiple_of_current_clicks() -> None:
         assert opp["scenarios"][name]["clicks_low"] <= cap
 
 
+def test_opportunity_suppressed_when_monthly_conservative_rounds_to_zero() -> None:
+    # The guard must test the number the reader sees (conservative, monthly) — the raw
+    # window-total upside is ~6x larger at 91 days / 50% capture, and a tiny query set
+    # that passes on window scale used to print "0-0 visits per month".
+    tiny = [{"query": "q", "impressions": 50, "clicks": 4, "ctr": 0.087, "position": 15}]
+    assert _opportunity_estimate(tiny, window_days=91, site_total_clicks=100) == {}
+
+
+def test_zero_click_site_is_not_capped_to_a_floor() -> None:
+    # A site with no click baseline has nothing to cap against: the old max(cap, 1)
+    # floor pinned every scenario at "1-1 visits" while the disclosure claimed
+    # "3x current clicks" (= 0). No cap applies; conservative capture + the AI-Overview
+    # discount stay the only brakes.
+    rows = [
+        {"query": f"q{i}", "impressions": 100000, "clicks": 0, "ctr": 0.0, "position": 15}
+        for i in range(10)
+    ]
+    opp = _opportunity_estimate(rows, window_days=91, site_total_clicks=0)
+    assert opp["site_monthly_clicks"] == 0
+    assert opp["cap_applied"] is False
+    assert opp["capture_capped"] is False
+    assert opp["scenarios"]["conservative"]["clicks_high"] > 1
+
+
+def test_cluster_labels_trim_stopword_edges() -> None:
+    # "near me"-suffixed query profiles used to tie-break into subject-less labels like
+    # "repair near me"; trimming stopword edges keeps the noun ("roof repair").
+    rows = [
+        {"query": "roof repair near me", "impressions": 900, "clicks": 10},
+        {"query": "emergency roof repair near me", "impressions": 400, "clicks": 5},
+    ]
+    clusters = _topic_clusters(rows, "")
+    labels = [c["cluster"] for c in clusters]
+    assert "roof repair" in labels
+    for label in labels:
+        words = label.split()
+        assert words[0] not in {"near", "me", "the", "for"}
+        assert words[-1] not in {"near", "me", "the", "for"}
+
+
+def test_cluster_labels_keep_unicode_words_whole() -> None:
+    # The old [^a-z0-9] tokenizer fragmented accented words into garbage phrase labels
+    # ("a m xico"); \W-based splitting keeps them whole.
+    rows = [{"query": "plomería méxico df", "impressions": 500, "clicks": 5}]
+    clusters = _topic_clusters(rows, "")
+    assert clusters
+    assert clusters[0]["cluster"] == "plomería méxico df"
+
+
 def test_branded_split_matches_spaced_brand_queries() -> None:
     rows = [
         {"query": "builder lead converter", "impressions": 500, "clicks": 200},

@@ -132,7 +132,22 @@ function RoadmapBlock({ roadmap }: { roadmap: RoadmapTier[] }) {
                 {tier.recommendations.map((recommendation, index) => (
                   <li key={`${recommendation.title}-${index}`}>
                     <strong>{recommendation.title}</strong>
-                    <p>{recommendation.rationale}</p>
+                    {/* New-format results explain each issue once, on its finding card;
+                        legacy stored results keep the rationale (their only context). */}
+                    {recommendation.action_items.length > 0 ? (
+                      <>
+                        <ul className="action-list">
+                          {recommendation.action_items.map((item, itemIndex) => (
+                            <li key={itemIndex}>{item}</li>
+                          ))}
+                        </ul>
+                        <p className="muted">
+                          Details: see this item&apos;s finding card in the SEO / UX-UI sections.
+                        </p>
+                      </>
+                    ) : (
+                      <p>{recommendation.rationale}</p>
+                    )}
                   </li>
                 ))}
               </ol>

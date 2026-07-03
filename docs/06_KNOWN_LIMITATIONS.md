@@ -4,7 +4,7 @@ An honest list of what Phase 1 does **not** do, plus important behavioral
 caveats. Phase 1 is a local-first website-audit MVP; several items below are
 deliberately deferred to later phases or to production hardening.
 
-_Last reconciled: 2026-07-02._
+_Last reconciled: 2026-07-03._
 
 ---
 
@@ -93,14 +93,15 @@ one report (PDF and DOCX). Known limits of that flow:
   gap**: anyone can self-register on the dev instance, so invitation-only access is a manual
   operator step today. Switching to a Clerk production instance and locking down sign-up is
   productionization work.
-- **SSRF protection is partial.** The page crawler blocks private/loopback hosts by
-  default (`CRAWLER_ALLOW_PRIVATE_HOSTS=false`), validates the start URL, and re-validates the
-  post-redirect host — but mid-crawl request-level interception (blocking sub-resources or
-  redirect hops that resolve to internal IPs while a page is rendering) is **not** fully
-  implemented for the page crawler. By contrast, the **site-health sweep re-validates every
-  redirect hop** through the same SSRF guard, so its redirect-SSRF gap is closed. Treat
-  submitted URLs as untrusted input and harden the page crawler before exposing the service
-  publicly.
+- **SSRF protection is layered and now covers mid-render requests.** The page crawler blocks
+  private/loopback hosts by default (`CRAWLER_ALLOW_PRIVATE_HOSTS=false`), validates the start
+  URL, re-validates the post-redirect host, **and** attaches a request-level route guard that
+  aborts any sub-resource/redirect request resolving to a private/metadata IP while a page
+  renders (`CRAWLER_INTERCEPT_REQUESTS`, default true; auto-disabled when private hosts are
+  allowed, e.g. the QA harness). The **site-health sweep re-validates every redirect hop**
+  through the same guard, and its bot-block browser recheck is **redirect-blind by design**
+  (2026-07-03) so an open redirect can't steer it. Residual caveat: submitted URLs are still
+  untrusted input — keep the service behind auth rather than exposing it publicly.
 - Secrets live in `.env`; there is no secrets manager integration yet.
 - **White-label `logo_url` is now SSRF-vetted.** A remote logo URL supplied via brand overrides is
   validated against the same private/loopback/metadata host rules as the crawler
@@ -122,6 +123,17 @@ one report (PDF and DOCX). Known limits of that flow:
   errors is logged and the audit continues on the rest.
 - **JavaScript-heavy or bot-protected sites** may render incompletely or be
   blocked; results then reflect what was actually rendered.
+- **Form detection errs toward credit (accepted tradeoff, 2026-07-03).** Popup/embedded
+  lead forms are detected via provider signatures matched anywhere in the page HTML and a
+  bounded runtime frame pass, so (a) a page merely *mentioning* a form provider (e.g. a blog
+  post about Typeform) or (b) any third-party iframe containing an incidental `<form>`
+  (consent manager, map/search widget) can earn `uxui.forms.present` credit. Chosen over the
+  opposite failure — penalizing real popup-form sites with "no lead capture form" — which is
+  what the 2026-07 report-quality review was fixing.
+- **Lazy-iframe forms are timing-sensitive.** The frame pass is bounded (~3 s + scroll
+  passes); an embed that loads on one run and not another can flip the form-detection facts
+  between live runs. Same class as the live-site/PSI variance in §7 — the QA harness is
+  unaffected (fixtures have no iframes).
 
 ---
 
@@ -159,6 +171,14 @@ one report (PDF and DOCX). Known limits of that flow:
 - Google OAuth/refresh tokens are stored **plaintext** in the `google_search_console_connections`
   table — a documented accepted risk for the single-tenant internal DB (see §2). Encrypting them
   at rest is open productionization work.
+- **Sweep politeness can overshoot its deadline on rate-limiting hosts (accepted, 2026-07-03).**
+  The site-health sweep honors `Retry-After` on 429s (capped at 30 s, ≤2 retries per phase), and
+  those sleeps are not re-checked against the sweep's own time budget — worst case an in-flight
+  lane runs ~2 minutes past the deadline before yielding. Bounded by the caps and by the Celery
+  soft time limit (which marks the audit failed honestly); a persistent 429 wall also never trips
+  the bot-block breaker (429 is a *response*, so it resets the consecutive-transport-failure
+  counter) — such a site ends `complete`-with-few-checks or times out, rather than
+  `partial: bot_blocked`.
 
 ---
 

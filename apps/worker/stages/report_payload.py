@@ -749,8 +749,10 @@ def _score_cards(result: Any, score_breakdown: JsonDict) -> list[ScoreCard]:
     )
     # On a combined audit the headline score is the Overall Lead-Gen Readiness, so the
     # website composite is renamed to say exactly what it covers — two similarly-named
-    # "combined" scores with different formulas read as a contradiction.
-    is_combined = bool(_dict(score_breakdown.get("overall_readiness")))
+    # "combined" scores with different formulas read as a contradiction. Requires status
+    # "complete": a website_only overall (failed social collection) has no social section,
+    # so the intro must not point the reader at one.
+    is_combined = _dict(score_breakdown.get("overall_readiness")).get("status") == "complete"
     lead_gen_label = "Website Lead-Gen Score" if is_combined else "Lead Generation Readiness"
     lead_gen_intro = (
         "This is the combined business-readiness score for the website (the social audit "

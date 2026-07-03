@@ -424,17 +424,37 @@ playwright.dev/docs/api/class-frame · web.dev/articles/iframe-lazy-loading.
 
 ## 10. Implementation status & signoff (2026-07-03)
 
-All 18 implementation tasks (RQ-1…RQ-18) are implemented on top of `main`. Gates: full unit
-suite **290 passed**, `ruff check` + `ruff format` clean, frontend `tsc --noEmit` clean,
-hermetic QA harness **11/11**, reproducibility run **byte-for-byte identical**. The live
-`builderleadconverter.com` re-run (RQ-19's last step) is an operator action — it needs the
-production GSC connection and Apify/YouTube keys; regenerate the audit from the UI and check
-each row below against the new PDF.
+All 18 implementation tasks (RQ-1…RQ-18) are implemented on top of `main` (post PR #19).
+Gates on the final state: full unit suite **344 passed**, `ruff check` + `ruff format` clean,
+flake8 + isort clean, frontend `tsc --noEmit` clean, hermetic QA harness **11/11**,
+reproducibility run **byte-for-byte identical**. The live `builderleadconverter.com` re-run
+(RQ-19's last step) is an operator action — it needs the production GSC connection and
+Apify/YouTube keys; regenerate the audit from the UI and check each row below against the
+new PDF.
 
 Decisions D1–D6 were implemented with the recommended defaults (D1 monthly-normalized
 headline figures with windowed tables; D2 contact-path weight 6; D3 Overall ring leads the
 combined cover; D4 single browser-profile recheck on bot-block; D5 15% AI-Overview discount;
 D6 per-host concurrency 2 + 750 ms spacing).
+
+**Review round (same day):** a 4-reviewer adversarial pass over the finished PR found and
+fixed four majors before merge — (1) the degenerate-estimate guard tested the window-total
+upside while the headline is monthly/conservative, letting "0–0 visits per month" ship (now
+guarded on the headline itself); (2) the browser-profile recheck followed redirects without
+per-hop SSRF vetting (now `follow_redirects=False`) and swallowed Celery soft-timeouts (now
+re-raised); (3) the two renamed uxui v3 facts false-failed rerun-enrichment on pre-v3 stored
+audits (both rules now `skip_if_missing`); (4) the overlapping-rule merge ran before the
+severity sort/cap so an absorbed `fail` could vanish from the report (merged cards now adopt
+group-max severity/weight; the exec summary's top-priority label picks from the merged list).
+Plus minors: zero-click sites get **no cap** (instead of a misleading floor of 1 — the one
+deviation from the D1/RQ-1 spec, which assumed a click baseline exists), "0 to 0 inquiries"
+clause suppressed, dangling-pronoun copy, `final_url` captured before the frame scan, DOCX
+"(None days)" on legacy facts, combined cover/title/card gates on overall
+`status == "complete"`, UI roadmap de-duplicated like the PDF, topic labels trim stopword
+edges and tokenize unicode. 13 regression tests pin these. Accepted (not fixed, by design):
+provider-signature text mentions and third-party iframes can earn form credit (errs toward
+credit), lazy-iframe variance across runs, Retry-After sleeps up to ~120 s past the sweep
+deadline — recorded in docs/06 §§3/5.
 
 | Remark(s) | Fixed by | Verify in the regenerated PDF/UI |
 |---|---|---|

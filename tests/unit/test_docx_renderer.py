@@ -116,6 +116,59 @@ def test_render_report_docx_omits_social_sections_when_absent(tmp_path) -> None:
     assert "Top performing posts" not in document
 
 
+def test_docx_renders_legacy_search_window_without_none_days(tmp_path) -> None:
+    # GSC facts stored before the window facts existed have no "days" key; the on-demand
+    # DOCX of such an audit must render the bare range, never "(None days)".
+    result = _result()
+    result.external_seo_facts = {
+        "gsc": {
+            "status": "complete",
+            "site_url": "https://example.com/",
+            "date_range": {"start": "2026-01-01", "end": "2026-03-31"},
+        }
+    }
+    payload = compose_report_payload(_job(), result)
+    output_path = tmp_path / "audit.docx"
+
+    render_report_docx(payload, output_path=output_path)
+
+    with ZipFile(output_path) as archive:
+        document = archive.read("word/document.xml").decode("utf-8")
+    assert "None days" not in document
+    assert "Data window: 2026-01-01 to 2026-03-31." in document
+
+
+def test_docx_website_only_overall_keeps_website_title(tmp_path) -> None:
+    # A combined-typed job whose social collection failed stores a website_only overall
+    # (real score, zero social data); the title must not promise a social section.
+    result = _result()
+    result.score_breakdown = {
+        **result.score_breakdown,
+        "overall_readiness": {
+            "status": "website_only",
+            "rubric_version": "phase2-overall-v1",
+            "score": 72,
+            "band": "fair",
+            "max_score": 100,
+            "weights": {"website": 1.0, "social": 0.0},
+            "inputs": {"website_lead_gen": 72, "social": None},
+        },
+    }
+    payload = compose_report_payload(_job(), result)
+    output_path = tmp_path / "audit.docx"
+
+    render_report_docx(payload, output_path=output_path)
+
+    with ZipFile(output_path) as archive:
+        document = archive.read("word/document.xml").decode("utf-8")
+    assert "Website &amp; Social Media Audit Report" not in document
+    assert "Website Audit Report" in document
+    # The score card must not point the reader at a social section that doesn't exist.
+    lead_gen_card = next(card for card in payload.scores if card.id == "lead_gen")
+    assert lead_gen_card.label == "Lead Generation Readiness"
+    assert "reported at the end of this report" not in lead_gen_card.description
+
+
 def _job() -> SimpleNamespace:
     return SimpleNamespace(
         id=uuid4(),

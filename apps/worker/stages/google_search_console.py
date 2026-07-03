@@ -611,27 +611,34 @@ def _opportunity_estimate(
     )
     upside_low = _opportunity_for_target(modeled, _OPPORTUNITY_TARGET_LOW) * _AIO_UPSIDE_FACTOR
     upside_high = _opportunity_for_target(modeled, _OPPORTUNITY_TARGET_HIGH) * _AIO_UPSIDE_FACTOR
-    # No modeled headroom (every modeled query already out-performs the target CTR) => emit
-    # nothing rather than a degenerate "0 to 0 more visits" estimate; the callout won't show.
-    if int(upside_high + 0.5) <= 0:
-        return {}
 
     site_monthly_clicks = _per_month(site_total_clicks, window_days)
-    cap = max(_OPPORTUNITY_CAP_MULTIPLE * site_monthly_clicks, 1)
+    # A zero-click site has no traffic baseline to cap against; the conservative capture
+    # + AIO discount are the only brakes there (capping to max(0, ...) would pin every
+    # scenario at a meaningless floor while the report claims "3x current clicks").
+    cap = _OPPORTUNITY_CAP_MULTIPLE * site_monthly_clicks if site_monthly_clicks > 0 else None
     capped = False
     scenarios: JsonDict = {}
     for name, capture in _SCENARIO_CAPTURE.items():
         low = _per_month(upside_low * capture, window_days)
         high = _per_month(upside_high * capture, window_days)
-        if low > cap or high > cap:
-            capped = True
+        if cap is not None:
+            if low > cap or high > cap:
+                capped = True
+            low = min(low, cap)
+            high = min(high, cap)
         scenarios[name] = {
-            "clicks_low": min(low, cap),
-            "clicks_high": min(high, cap),
+            "clicks_low": low,
+            "clicks_high": high,
             "capture_pct": int(capture * 100),
         }
 
     headline = scenarios["conservative"]
+    # The reader sees the conservative MONTHLY range; guard on that same number (the raw
+    # window-total upside is ~6x larger at the default 91-day window and 50% capture, so
+    # testing it lets a degenerate "0 to 0 visits per month" estimate through).
+    if headline["clicks_high"] <= 0:
+        return {}
     return {
         "is_estimate": True,
         "per_month": True,
@@ -655,6 +662,7 @@ def _opportunity_estimate(
         "target_position_high": _OPPORTUNITY_TARGET_HIGH,
         "aio_discount_pct": int((1 - _AIO_UPSIDE_FACTOR) * 100 + 0.5),
         "capture_capped": capped,
+        "cap_applied": cap is not None,
         "cap_multiple": _OPPORTUNITY_CAP_MULTIPLE,
         "ctr_curve_source": _CTR_CURVE_SOURCE,
         "ctr_curve_version": _CTR_CURVE_VERSION,
@@ -699,7 +707,9 @@ def _branded_split(rows: list[JsonDict], site_url: str) -> JsonDict:
 
 
 def _query_terms(query: str) -> list[str]:
-    return [term for term in re.split(r"[^a-z0-9]+", query.lower()) if term]
+    # \w is unicode-aware: "plomería" stays one term instead of fragmenting into
+    # garbage pieces that would join back into unreadable phrase labels.
+    return [term for term in re.split(r"[\W_]+", query.lower()) if term]
 
 
 def _query_ngrams(query: str, brand_token: str) -> list[str]:
@@ -712,6 +722,14 @@ def _query_ngrams(query: str, brand_token: str) -> list[str]:
         for start in range(len(words) - size + 1):
             piece = words[start : start + size]
             if brand_token and brand_token in piece:
+                continue
+            # Trim stopword edges so a label never reads "repair near me" or
+            # "roof repair near" — the rendered phrase keeps its subject noun.
+            while piece and piece[0] in _CLUSTER_STOPWORDS:
+                piece = piece[1:]
+            while piece and piece[-1] in _CLUSTER_STOPWORDS:
+                piece = piece[:-1]
+            if len(piece) < 2:
                 continue
             # A phrase must carry at least one content word to be a topic label.
             if not any(len(word) >= 4 and word not in _CLUSTER_STOPWORDS for word in piece):
@@ -726,10 +744,9 @@ def _contains_phrase(container: str, phrase: str) -> bool:
 
 
 def _query_tokens(query: str, brand_token: str) -> list[str]:
-    tokens = re.split(r"[^a-z0-9]+", query.lower())
     return [
         token
-        for token in tokens
+        for token in _query_terms(query)
         if len(token) >= 4 and token not in _CLUSTER_STOPWORDS and token != brand_token
     ]
 

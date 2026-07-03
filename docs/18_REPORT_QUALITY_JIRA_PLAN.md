@@ -1,6 +1,9 @@
 # Report Quality — Jira Epic & Tasks (copy-paste ready)
 
-> **Status: IMPLEMENTED (2026-07-03)** — all RQ-1…RQ-18 done (gates green); RQ-19's live re-run remains an operator step. Signoff table: docs/17 §10. Companion to
+> **Status: IMPLEMENTED (2026-07-03)** — all RQ-1…RQ-18 done, plus a same-day adversarial
+> review round that fixed 4 majors + minors before merge (details docs/17 §10; accepted
+> tradeoffs docs/06 §§3/5). Gates: 344 unit tests, QA 11/11, repro byte-identical. RQ-19's
+> live re-run remains an operator step. Signoff table: docs/17 §10. Companion to
 > [docs/17_REPORT_QUALITY_PLAN.md](17_REPORT_QUALITY_PLAN.md) (full analysis, root causes with
 > file:line references, research appendix, decisions D1–D6). Task IDs below are `RQ-n`
 > placeholders — Jira will assign real `SMWA-xx` keys on creation; keep the RQ id in the
