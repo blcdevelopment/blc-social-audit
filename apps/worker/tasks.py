@@ -335,8 +335,13 @@ def _run_social_pipeline(
 
 
 def _explicit_social_handles(job: AuditJob) -> dict[str, str]:
-    """The operator's typed, non-empty social handles (blanks dropped)."""
-    return {k: v for k, v in (job.social_handles or {}).items() if v}
+    """The operator's typed, non-empty social handles (blanks dropped). Stored JSON is untrusted:
+    a malformed non-dict value yields ``{}`` rather than raising, so the safety wrappers that fall
+    back to this helper can never re-raise from it."""
+    handles = job.social_handles
+    if not isinstance(handles, dict):
+        return {}
+    return {k: v for k, v in handles.items() if v}
 
 
 def _has_usable_social_credential(handles: dict[str, str], settings: Settings) -> bool:
@@ -365,8 +370,18 @@ def _resolve_social_handles(
         return explicit
     site_url = getattr(crawl_result, "final_url", None) or job.url
     discovered = discover_social_links(crawl_result.pages, site_url=site_url)
+    # Back-fill only platforms whose provider can actually fetch: a discovered handle with no
+    # credential would fail on every run (and every rerun), permanently pinning the social bundle
+    # at "partial". Explicit operator handles are kept regardless — the operator asked, and the
+    # report's collection-failure note is the honest outcome.
+    usable_discovered = {
+        platform: url
+        for platform, url in discovered.items()
+        if (provider := get_provider(platform)) is not None
+        and provider.credential_available(settings)
+    }
     # Discovery fills only the gaps; explicit entries override per platform.
-    return {**discovered, **explicit}
+    return {**usable_discovered, **explicit}
 
 
 def _resolve_social_handles_safely(
@@ -394,43 +409,66 @@ def _augment_with_social(
     settings: Settings,
     social_collector: SocialCollectorFunc,
     handles: dict[str, str],
+    *,
+    promote: bool,
 ) -> None:
-    """Combined audit: after the (untouched) website pipeline has scored + persisted, run the
-    social audit (over the resolved ``handles``) and merge it onto the SAME result, then compute the
-    Overall Lead-Gen Readiness score. The website columns and score_breakdown are left intact — we
-    only ADD social_score, social_facts, and the ``social`` / ``overall_readiness`` keys. The
-    existing RENDERING stage then produces ONE combined PDF (compose_report_payload appends the
-    social + overall sections when it sees this data). Social findings here are deterministic (no
-    LLM). Handles are passed in (not re-read off ``job``) so the data flow doesn't depend on a DB
-    refresh landing first."""
+    """After the (untouched) website pipeline has scored + persisted, run the social audit over
+    the resolved ``handles``, merge it onto the SAME result, and compute the Overall Lead-Gen
+    Readiness score. Nothing is mutated or committed before the collection outcome is known:
+
+    - ``promote=True`` (a plain website submission whose handles came from auto-discovery): the
+      job is promoted to ``combined`` — handles written back, ``audit_type`` flipped, sections
+      merged — ONLY when the collection produced usable data (status complete/partial with a
+      score). Otherwise the website audit stays byte-identical: no handle write, no type flip,
+      no breakdown keys.
+    - ``promote=False`` (the operator explicitly asked for a combined audit): whatever the
+      collection returned is merged — including a failed-status social section, which is
+      informative to the operator who asked for social.
+
+    The website columns and existing score_breakdown keys are left intact — we only ADD
+    social_score, social_facts, and the ``social`` / ``overall_readiness`` keys; the existing
+    RENDERING stage then produces ONE combined PDF (compose_report_payload appends the sections
+    when it sees this data). Social findings here are deterministic (no LLM). Handles are passed
+    in (not re-read off ``job``) so the data flow doesn't depend on a DB refresh landing first."""
     _mark_job(db, job, AuditStatus.RENDERING, "Auditing social profiles", 96)
     # Graceful degradation: the social add-on must never sink an already-scored, already-committed
-    # website audit. Do all the fallible work (network collect, rubric load, scoring) BEFORE
-    # mutating the result, so a failure here just leaves the website result intact and the report
-    # renders website-only (no social/overall sections) — mirroring the website pipeline's
-    # skip-on-failure contract. Only SoftTimeLimitExceeded propagates (the task is out of time).
+    # website audit. ALL the fallible work — network collect, rubric load, scoring, the merge
+    # commit itself — happens inside this try, so a failure anywhere just leaves the website
+    # result intact and the report renders website-only (no social/overall sections). The
+    # rollback matters: a failed commit must not leave a PendingRollback session that would sink
+    # the next _mark_job commit. Only SoftTimeLimitExceeded propagates (the task is out of time).
     try:
         social_facts = social_collector(settings, handles)
         social_result = score_social_audit(social_facts, settings)
+        usable = (
+            social_facts.get("status") in {"complete", "partial"}
+            and social_result.get("score") is not None
+        )
+        if promote and not usable:
+            return
         overall = compose_overall_readiness_score(
             website_lead_gen=result.lead_gen_score,
             social_score=social_result.get("score"),
             settings=settings,
         )
+
+        job.social_handles = dict(handles)
+        if promote:
+            job.audit_type = "combined"
+        breakdown = dict(result.score_breakdown or {})
+        breakdown["social"] = social_result
+        breakdown["overall_readiness"] = overall
+        result.social_score = social_result.get("score")
+        result.social_facts = social_facts
+        result.score_breakdown = breakdown
+        db.commit()
+        db.refresh(result)
+        db.refresh(job)
     except SoftTimeLimitExceeded:
         raise
     except Exception:
-        # Website result is untouched and already committed; render it as a website-only report.
+        db.rollback()
         return
-
-    breakdown = dict(result.score_breakdown or {})
-    breakdown["social"] = social_result
-    breakdown["overall_readiness"] = overall
-    result.social_score = social_result.get("score")
-    result.social_facts = social_facts
-    result.score_breakdown = breakdown
-    db.commit()
-    db.refresh(result)
 
 
 def _augment_with_benchmark_safely(
@@ -584,23 +622,27 @@ def run_collection_audit(
             )
 
             # Social: the operator's handles, plus (for a plain website submission) any platform
-            # auto-filled from social profile links found on the crawled site. Promote a website
-            # audit to combined and append the social + overall sections ONLY when the social step
-            # can actually produce data — i.e. a provider credential is configured for a resolved
-            # platform; an explicit combined audit always runs (and degrades gracefully if its key
-            # is absent). A website audit that links to no profiles — or links to them but has no
-            # provider credential — skips this and stays byte-identical to before.
+            # auto-filled from social profile links found on the crawled site. The social step
+            # runs only when it could produce data — i.e. a provider credential is configured for
+            # a resolved platform; an explicit combined audit always runs (and degrades
+            # gracefully if its key is absent). Promotion of a website audit to combined happens
+            # INSIDE _augment_with_social, only after the collection actually returned usable
+            # data — a website audit that links to no profiles, has no provider credential, or
+            # whose collection comes back empty stays byte-identical to before.
             effective_handles = _resolve_social_handles_safely(job, crawl_result, settings)
             already_combined = (job.audit_type or "website") == "combined"
             if effective_handles and (
                 already_combined or _has_usable_social_credential(effective_handles, settings)
             ):
-                job.social_handles = effective_handles
-                if not already_combined:
-                    job.audit_type = "combined"
-                db.commit()
-                db.refresh(job)
-                _augment_with_social(db, job, result, settings, social_collector, effective_handles)
+                _augment_with_social(
+                    db,
+                    job,
+                    result,
+                    settings,
+                    social_collector,
+                    effective_handles,
+                    promote=not already_combined,
+                )
 
             # Enrichment (deferred v3): optionally present the scores vs competitor/industry
             # baselines. No-op unless benchmark_enabled; never sinks the committed result.
@@ -741,7 +783,15 @@ def rerun_external_enrichment_for_audit(job_id: str) -> None:
             if isinstance(prev_breakdown, dict):
                 for key, value in prev_breakdown.items():
                     score_breakdown.setdefault(key, value)
-            if (job.audit_type or "website") == "combined":
+            # A combined-typed job whose social step never produced data must stay website-only
+            # on rerun: only recompute the overall headline when the audit actually has social
+            # data or the stored breakdown already carried the key.
+            had_overall = "overall_readiness" in (
+                prev_breakdown if isinstance(prev_breakdown, dict) else {}
+            )
+            if (job.audit_type or "website") == "combined" and (
+                result.social_score is not None or had_overall
+            ):
                 score_breakdown["overall_readiness"] = compose_overall_readiness_score(
                     website_lead_gen=score_breakdown["scores"]["lead_gen"],
                     social_score=result.social_score,

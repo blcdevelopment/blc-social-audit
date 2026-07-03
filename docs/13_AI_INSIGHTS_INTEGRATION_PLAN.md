@@ -1488,7 +1488,8 @@ MVP includes:
 MVP does not include:
 
 - new AI Search Readiness Score;
-- full competitor benchmarking engine;
+- full live-provider competitor benchmarking engine (the core report now has a no-cost
+  benchmarking scaffold, but paid provider fetchers remain outside this AI-insights MVP);
 - automatic prompt purchases for every audit;
 - stored chat history;
 - MCP-driven production pipeline.

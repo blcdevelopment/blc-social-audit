@@ -4,6 +4,12 @@ Local-first Phase 1 repository for the Builder Lead Converter website audit MVP.
 
 The Phase 1 build focuses on a website audit pipeline: URL submission, Playwright crawling, PageSpeed data collection, SEO and UX/UI extraction, deterministic scoring, deterministic grounded commentary, branded PDF/DOCX generation, and an internal operator UI (Clerk-gated). The Website Audit page also accepts optional social profile links: when one or more is provided the run becomes a **combined audit** that appends a Social Media Audit section and an Overall Lead-Gen Readiness score to the same report.
 
+The report pipeline also includes an optional competitor-benchmarking scaffold. It is disabled by
+default and presentation-only: when a future SEMrush/Ahrefs/Similarweb provider returns real
+competitor or industry baselines, the PDF/DOCX/web report can append a Competitor Benchmarking
+section without changing any audit scores. Until a paid provider client is selected and built, the
+collector skips gracefully and no benchmark section is rendered.
+
 The application is deployed and live at https://ai.builderleadconverter.com. See [DEPLOYMENT.md](DEPLOYMENT.md) for the authoritative production deployment reference (Linode VM, Docker Compose, Caddy TLS, and GitHub Actions CI/CD).
 
 ## Phase 1 Foundation Through Epic P1-E6
@@ -77,13 +83,20 @@ P1-E5 internal operator UI, and the Epic P1-E6 QA, packaging, and handoff work:
   branch runs after the website result is committed and **degrades gracefully**: any failure in
   the social/overall step completes the audit as a website-only report rather than failing the
   whole job. Website scoring and the existing report sections are byte-for-byte unchanged.
+- Competitor benchmarking scaffold (`apps/worker/stages/benchmarking/`): optional, disabled by
+  default, and presentation-only. It defines the provider registry, normalized benchmark fact
+  schema, graceful collector, and PDF/DOCX/web report-section builder for comparing the audited
+  SEO, UX/UI, Lead-Gen, Social, and Overall scores against competitor or industry baselines. The
+  supported vendor keys are `semrush`, `ahrefs`, and `similarweb`, but their paid HTTP clients are
+  deliberately not implemented yet; until a vendor is selected, funded, and built, benchmarking
+  skips without cost and the report is unchanged.
 - Social audit data layer (`apps/worker/stages/social/`): reads an Instagram, Facebook, or
   YouTube profile link (or `@handle`) — no login, OAuth, or account connection — via Apify
   (Instagram Scraper + Facebook Pages & Posts Scrapers, free tier) and/or the free YouTube Data
   API v3, each behind a uniform `SocialProvider` adapter + registry (`social/providers.py`) the
   collector dispatches over, normalizes the payload into a typed common fact schema
   (`social/schema.py`) of `social.*` facts, and scores it against `rubrics/social.yaml`
-  (`phase2-social-v1`) into a 0–100 Social Score via `scoring.score_social_audit()`. Findings and
+  (`phase2-social-v3`) into a 0–100 Social Score via `scoring.score_social_audit()`. Findings and
   recommendations are derived deterministically from the rubric rule metadata (in the standalone
   social path, optionally polished into client-ready prose by GPT-4o when `OPENAI_API_KEY` is set
   — grounded, with the deterministic version as the no-key fallback; the combined report's social
@@ -268,9 +281,20 @@ These settings are all optional and ship with safe defaults (most are documented
 - `YOUTUBE_API_KEY` (empty by default) / `YOUTUBE_TIMEOUT_SECONDS` (default `30`) — the free
   YouTube Data API v3 backend for the social audit (a plain API key, no OAuth). Empty key ⇒ the
   YouTube backend skips gracefully, like Apify.
+- `SOCIAL_AUTODISCOVERY_ENABLED` (default `true`) — auto-detect the site's own Instagram/
+  Facebook/YouTube profile links from the crawled pages to fill any social field the operator
+  left blank (explicit handles always win). Only platforms whose provider credential is
+  configured are back-filled, and a plain website audit is promoted to a combined one **only
+  when the social collection actually produced data** — a failed or keyless collection leaves
+  the website report byte-identical. Set `false` to stop the extra Apify/YouTube scrapes.
 - `RUBRIC_OVERALL_PATH` (default `./rubrics/overall.yaml`) — the config-driven rubric that blends
   the website Lead-Gen composite (0.70) with the Social Score (0.30) into the combined audit's
   Overall Lead-Gen Readiness score; tune the two weights (must sum to 1.0) and bump its `version`.
+- `BENCHMARK_ENABLED` (default `false`) / `BENCHMARK_PROVIDER` (`semrush`, `ahrefs`, or
+  `similarweb`) / `BENCHMARK_API_KEY` — optional competitor-benchmarking scaffold. It is
+  presentation-only and never changes scores. With the default settings, with no provider/key, or
+  before a live paid vendor client is implemented, the collector skips gracefully and renders no
+  benchmark section.
 - `ALERT_WEBHOOK_URL` (empty by default) / `ALERT_FAILED_AUDITS_THRESHOLD` (default `5`) /
   `ALERT_STUCK_AUDIT_MINUTES` (default `60`) — operational alerting for `scripts/health_alert.py`
   (cron). Empty webhook ⇒ it only logs findings; otherwise posts a Slack/Discord/generic

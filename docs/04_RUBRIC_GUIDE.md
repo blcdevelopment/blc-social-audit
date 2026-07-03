@@ -8,7 +8,7 @@ Engine: `apps/worker/stages/scoring.py`. Rubrics: `rubrics/seo.yaml`,
 (standalone Social Score) and `rubrics/overall.yaml` (combined-audit Overall Lead-Gen
 Readiness — see §5).
 
-_Last reconciled: 2026-06-26._
+_Last reconciled: 2026-07-02._
 
 ---
 
@@ -19,7 +19,7 @@ _Last reconciled: 2026-06-26._
 | `rubrics/seo.yaml` | `phase2-seo-v11` | `seo` | 48 | website + combined |
 | `rubrics/uxui.yaml` | `phase1-uxui-v2` | `uxui` | 14 | website + combined |
 | `rubrics/composite.yaml` | `phase1-composite-v1` | (weights) | — | website + combined |
-| `rubrics/social.yaml` | `phase2-social-v1` | `social` | 10 | social + combined |
+| `rubrics/social.yaml` | `phase2-social-v3` | `social` | 14 | social + combined |
 | `rubrics/overall.yaml` | `phase2-overall-v1` | (weights) | — | combined only |
 
 The first three are the **website** rubrics; their combined `rubric_version` stored on a
@@ -188,8 +188,14 @@ to the Overall Readiness score (§5b).
 ### 5a. Social Score (`rubrics/social.yaml`)
 
 The standalone **Social audit** is scored by the same rubric engine against
-`rubrics/social.yaml` (`version: phase2-social-v1`, `category: social`, 10 rules,
-`normalization: rescale_to_max`, `max_score: 100`). Facts come from
+`rubrics/social.yaml` (`version: phase2-social-v3`, `category: social`, 14 rules,
+`normalization: rescale_to_max`, `max_score: 100`). v2 added four content-depth rules
+(business/creator account, video share, posting consistency, hashtag usage); v3 is a
+fact-semantics calibration in the extractor with no rule changes — video share aggregates
+over non-YouTube profiles only (a channel is definitionally 100% video), Facebook post
+typing no longer counts a generic reach field as video, hashtag counting requires at least
+one letter ("#1" is not a hashtag), and the Instagram business-account flag is tri-state
+(missing ⇒ unknown ⇒ the rule rescales instead of failing). Facts come from
 `apps/worker/stages/social/extractor.py` and use `social.*` `fact_paths` (e.g.
 `social.status`, `social.summary.avg_posts_per_month`). It is scored by
 `scoring.score_social_audit()` into a **standalone Social Score (0–100)** and is **not** folded

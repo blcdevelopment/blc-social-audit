@@ -36,7 +36,8 @@ _CTA_RE = re.compile(
     re.IGNORECASE,
 )
 _URL_RE = re.compile(r"https?://[^\s)]+", re.IGNORECASE)
-_HASHTAG_RE = re.compile(r"#\w+")
+# Requires at least one letter so ranking claims like "#1" don't count as hashtags.
+_HASHTAG_RE = re.compile(r"#\w*[A-Za-z]\w*")
 
 
 def _clean(value: Any) -> str:
@@ -58,6 +59,12 @@ def _int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _round_half_up(value: float, digits: int = 1) -> float:
+    """Half-up rounding for non-negative values (project convention: int(x + 0.5), not round())."""
+    factor = 10**digits
+    return int(value * factor + 0.5) / factor
+
+
 def _parse_ts(value: Any) -> datetime | None:
     if not isinstance(value, str) or not value.strip():
         return None
@@ -74,7 +81,7 @@ def _posts_per_month(times: list[datetime]) -> float | None:
     span_days = (times[-1] - times[0]).total_seconds() / 86400
     if span_days < 1:
         return float(len(times))
-    return round(len(times) / span_days * 30, 1)
+    return _round_half_up(len(times) / span_days * 30)
 
 
 def _avg_engagement(posts: list[JsonDict], followers: int) -> float | None:
@@ -94,16 +101,14 @@ def _avg_engagement(posts: list[JsonDict], followers: int) -> float | None:
         rates.append((likes + comments) / followers * 100)
     if not rates:
         return None
-    return round(sum(rates) / len(rates), 2)
+    return _round_half_up(sum(rates) / len(rates), 2)
 
 
 def _has_video(raw: JsonDict, posts: list[JsonDict]) -> bool:
     if _int(raw.get("igtvVideoCount")) > 0:
         return True
-    for post in posts:
-        if str(post.get("type", "")).lower() == "video" or _int(post.get("videoViewCount")) > 0:
-            return True
-    return False
+    # Routed through _post_kind so the "is this a video?" predicate can't drift from the mix.
+    return any(_post_kind(post) == "video" for post in posts)
 
 
 def _short_date(value: Any) -> str | None:
@@ -112,24 +117,41 @@ def _short_date(value: Any) -> str | None:
 
 
 def _post_kind(post: JsonDict) -> str:
-    """image | video | carousel for a normalized post (provider 'type' + video-view fallback)."""
+    """video | carousel | image | unknown for a normalized post, from the provider ``type`` only.
+
+    View counts are deliberately not a fallback signal — a generic reach field on a non-video
+    post must not classify it as video. Untyped posts (e.g. Facebook text/link/status posts
+    mapped to type ``post``) are ``unknown``: the payload can't tell image from carousel.
+    """
     kind = str(post.get("type", "")).lower()
+    if kind == "video":
+        return "video"
     if kind in {"sidecar", "carousel", "carousel_album"}:
         return "carousel"
-    if kind == "video" or _int(post.get("videoViewCount")) > 0:
-        return "video"
-    return "image"
+    if kind in {"image", "photo"}:
+        return "image"
+    return "unknown"
 
 
 def _content_mix(posts: list[JsonDict]) -> tuple[float | None, float | None, float | None]:
-    """(video%, image%, carousel%) of the sampled posts, or (None, None, None) when no posts."""
+    """(video%, image%, carousel%) of the sampled posts, or (None, None, None) when no posts.
+
+    Video share is always video/n — text posts legitimately dilute it. When any post kind is
+    unknown, image and carousel shares are None (the payload can't tell those kinds apart, and
+    claiming "Image 100%" for a text-only page would be dishonest).
+    """
     if not posts:
         return (None, None, None)
     n = len(posts)
-    video = sum(1 for p in posts if _post_kind(p) == "video")
-    carousel = sum(1 for p in posts if _post_kind(p) == "carousel")
-    image = n - video - carousel
-    return (round(video / n * 100, 1), round(image / n * 100, 1), round(carousel / n * 100, 1))
+    kinds = [_post_kind(p) for p in posts]
+    video_pct = _round_half_up(kinds.count("video") / n * 100)
+    if "unknown" in kinds:
+        return (video_pct, None, None)
+    return (
+        video_pct,
+        _round_half_up(kinds.count("image") / n * 100),
+        _round_half_up(kinds.count("carousel") / n * 100),
+    )
 
 
 def _max_posting_gap_days(times: list[datetime], now: datetime) -> int | None:
@@ -142,8 +164,15 @@ def _max_posting_gap_days(times: list[datetime], now: datetime) -> int | None:
     if not times:
         return None
     gaps = [(times[i + 1] - times[i]).days for i in range(len(times) - 1)]
-    gaps.append((now - times[-1]).days)
+    # Clamped at 0: a future-dated post (scheduled post / clock skew) must not yield a
+    # negative trailing gap.
+    gaps.append(max(0, (now - times[-1]).days))
     return max(gaps)
+
+
+def _days_since_last_post(times: list[datetime], now: datetime) -> int | None:
+    # Clamped at 0: a future-dated post (scheduled post / clock skew) must not yield "-1 days".
+    return max(0, (now - times[-1]).days) if times else None
 
 
 def _like_to_comment_ratio(posts: list[JsonDict]) -> float | None:
@@ -151,13 +180,13 @@ def _like_to_comment_ratio(posts: list[JsonDict]) -> float | None:
     comments = sum(
         max(_int(p.get("commentsCount")), 0) for p in posts if p.get("commentsCount") is not None
     )
-    return round(likes / comments, 1) if comments > 0 else None
+    return _round_half_up(likes / comments) if comments > 0 else None
 
 
 def _avg_views_per_post(posts: list[JsonDict]) -> float | None:
+    """Average views per video post (views-tracked posts only); a real 0-view video counts."""
     views = [_int(p.get("videoViewCount")) for p in posts if p.get("videoViewCount") is not None]
-    views = [v for v in views if v > 0]
-    return round(sum(views) / len(views), 1) if views else None
+    return _round_half_up(sum(views) / len(views)) if views else None
 
 
 def _best_post_engagement(posts: list[JsonDict]) -> int | None:
@@ -179,7 +208,7 @@ def _avg_hashtags_per_post(posts: list[JsonDict]) -> float | None:
             counts.append(len([t for t in tags if t]))
         elif isinstance(post.get("caption"), str):
             counts.append(len(_HASHTAG_RE.findall(post["caption"])))
-    return round(sum(counts) / len(counts), 1) if counts else None
+    return _round_half_up(sum(counts) / len(counts)) if counts else None
 
 
 def _caption_cta_pct(posts: list[JsonDict]) -> float | None:
@@ -189,22 +218,25 @@ def _caption_cta_pct(posts: list[JsonDict]) -> float | None:
     if not captions:
         return None
     hits = sum(1 for caption in captions if _CTA_RE.search(caption))
-    return round(hits / len(captions) * 100, 1)
+    return _round_half_up(hits / len(captions) * 100)
 
 
 def _top_posts(posts: list[JsonDict], *, limit: int = 3) -> list[JsonDict]:
-    """Best sampled posts (by views, then likes+comments) — the 'top performing content' table."""
+    """Best sampled posts by combined attention (views + engagement) — the 'top performing
+    content' table. ``views`` is emitted only for posts that carried a view count, so a real
+    0-view video renders as 0 while image posts stay None."""
     enriched: list[JsonDict] = []
     for post in posts:
         likes = max(_int(post.get("likesCount")), 0)
         comments = max(_int(post.get("commentsCount")), 0)
-        views = _int(post.get("videoViewCount"))
-        if post.get("likesCount") is None and post.get("commentsCount") is None and views <= 0:
+        views_raw = post.get("videoViewCount")
+        views = _int(views_raw) if views_raw is not None else None
+        if post.get("likesCount") is None and post.get("commentsCount") is None and views is None:
             continue
         enriched.append(
             {
                 "type": _post_kind(post),
-                "views": views or None,
+                "views": views,
                 "likes": likes,
                 "comments": comments,
                 "engagement": likes + comments,
@@ -212,7 +244,8 @@ def _top_posts(posts: list[JsonDict], *, limit: int = 3) -> list[JsonDict]:
                 "title": _clean(post.get("title")) or None,
             }
         )
-    enriched.sort(key=lambda p: ((p["views"] or 0), p["engagement"]), reverse=True)
+    # A combined proxy so a barely-watched video can't outrank a heavily-liked image.
+    enriched.sort(key=lambda p: (p["views"] or 0) + p["engagement"], reverse=True)
     return enriched[:limit]
 
 
@@ -242,7 +275,10 @@ def normalize_instagram_profile(raw: JsonDict, handle: str, *, now: datetime) ->
     external = _clean(raw.get("externalUrl"))
     full_name = _clean(raw.get("fullName"))
     followers = _int(raw.get("followersCount"))
-    is_business = bool(raw.get("isBusinessAccount"))
+    business_flag = raw.get("isBusinessAccount")
+    # Missing from the payload => the scraper didn't report the setting — unknown (None), NOT a
+    # personal account; a hard False here would surface a false client-facing finding.
+    is_business = None if business_flag is None else bool(business_flag)
     follows = _int(raw.get("followsCount"))
     posts = raw.get("latestPosts")
     posts = [p for p in posts if isinstance(p, dict)] if isinstance(posts, list) else []
@@ -262,16 +298,18 @@ def normalize_instagram_profile(raw: JsonDict, handle: str, *, now: datetime) ->
             "category": _clean(raw.get("businessCategoryName")) or None,
             "bio_present": bool(bio),
             "link_in_bio": external or None,
-            "has_cta": is_business or bool(_CTA_RE.search(bio)),
+            "has_cta": bool(is_business) or bool(_CTA_RE.search(bio)),
             "profile_complete": bool(bio and external and full_name),
             "has_logo_avatar": bool(raw.get("profilePicUrl") or raw.get("profilePicUrlHD")),
             "posts_sampled": len(posts),
             "posts_per_month": _posts_per_month(times),
-            "days_since_last_post": (now - times[-1]).days if times else None,
+            "days_since_last_post": _days_since_last_post(times, now),
             "avg_engagement_rate_pct": _avg_engagement(posts, followers),
             "has_video": _has_video(raw, posts),
             "follows_count": follows,
-            "follower_following_ratio": round(followers / follows, 1) if follows > 0 else None,
+            "follower_following_ratio": (
+                _round_half_up(followers / follows) if follows > 0 else None
+            ),
             "total_views": None,
             **_post_detail_facts(posts, times, now=now),
         }
@@ -290,19 +328,25 @@ def normalize_facebook_profile(raw: JsonDict, handle: str, *, now: datetime) -> 
     email = _clean(raw.get("email"))
 
     raw_posts = [p for p in (raw.get("posts") or []) if isinstance(p, dict)]
-    posts = [
-        {
-            "likesCount": _first(p, ("likes", "likesCount", "reactionsCount", "reactions")),
-            "commentsCount": _first(p, ("comments", "commentsCount")),
-            "videoViewCount": _first(p, ("viewsCount", "videoViewCount", "videoViews")),
-            "timestamp": _first(p, ("time", "timestamp", "date", "publishedAt", "postedAt")),
-            "type": "video"
-            if (p.get("video") or p.get("videoUrl") or p.get("isVideo"))
-            else "post",
-            "caption": _first(p, ("text", "message", "caption")),
-        }
-        for p in raw_posts
-    ]
+    posts: list[JsonDict] = []
+    for p in raw_posts:
+        # viewsCount is a generic reach field on the Posts actor; mapping it into
+        # videoViewCount unconditionally would make a text post look like a video, so view
+        # counts are kept only for actual videos. Non-video posts stay type "post" (=> kind
+        # "unknown"): the payload can't distinguish an image post from a carousel.
+        is_video = bool(p.get("video") or p.get("videoUrl") or p.get("isVideo"))
+        posts.append(
+            {
+                "likesCount": _first(p, ("likes", "likesCount", "reactionsCount", "reactions")),
+                "commentsCount": _first(p, ("comments", "commentsCount")),
+                "videoViewCount": (
+                    _first(p, ("viewsCount", "videoViewCount", "videoViews")) if is_video else None
+                ),
+                "timestamp": _first(p, ("time", "timestamp", "date", "publishedAt", "postedAt")),
+                "type": "video" if is_video else "post",
+                "caption": _first(p, ("text", "message", "caption")),
+            }
+        )
     times = sorted(t for t in (_parse_ts(p.get("timestamp")) for p in posts) if t)
 
     return _profile_facts(
@@ -326,9 +370,9 @@ def normalize_facebook_profile(raw: JsonDict, handle: str, *, now: datetime) -> 
             "has_logo_avatar": bool(raw.get("profilePhoto") or raw.get("profilePictureUrl")),
             "posts_sampled": len(posts),
             "posts_per_month": _posts_per_month(times),
-            "days_since_last_post": (now - times[-1]).days if times else None,
+            "days_since_last_post": _days_since_last_post(times, now),
             "avg_engagement_rate_pct": _avg_engagement(posts, followers),
-            "has_video": any(p.get("type") == "video" for p in posts),
+            "has_video": _has_video(raw, posts),
             "follows_count": 0,
             "follower_following_ratio": None,
             "total_views": None,
@@ -402,7 +446,7 @@ def normalize_youtube_channel(raw: JsonDict, handle: str, *, now: datetime) -> J
             "has_logo_avatar": bool(snippet.get("thumbnails")),
             "posts_sampled": len(posts),
             "posts_per_month": _posts_per_month(times),
-            "days_since_last_post": (now - times[-1]).days if times else None,
+            "days_since_last_post": _days_since_last_post(times, now),
             "avg_engagement_rate_pct": _avg_engagement(posts, followers),
             "has_video": bool(videos) or video_count > 0,
             "follows_count": 0,
@@ -424,7 +468,7 @@ def _collect(profiles: list[JsonDict], key: str) -> list[Any]:
 
 
 def _mean(values: list[Any], digits: int = 1) -> float | None:
-    return round(sum(values) / len(values), digits) if values else None
+    return _round_half_up(sum(values) / len(values), digits) if values else None
 
 
 def summarize_profiles(profiles: list[JsonDict]) -> JsonDict:
@@ -440,19 +484,23 @@ def summarize_profiles(profiles: list[JsonDict]) -> JsonDict:
     # a real bool, YouTube None). None when none of them do, so the rule skip_if_missing-rescales
     # rather than penalizing e.g. a YouTube-only audit for a setting YouTube doesn't have.
     business = _collect(profiles, "is_business")
+    # YouTube uploads are definitionally 100% video, so a channel in the mix would make the
+    # scored video-share rule vacuous (and swamp the image/carousel shares). Content-mix shares
+    # aggregate over non-YouTube profiles only; None when none supplies a value (rule rescales).
+    feed_profiles = [p for p in profiles if p.get("platform") != "youtube"]
     return _summary_facts(
         {
             "platforms_audited": count,
             "total_followers": sum(_int(p.get("followers")) for p in profiles),
-            "profiles_complete_pct": round(
-                sum(1 for p in profiles if p.get("profile_complete")) / count * 100
+            "profiles_complete_pct": int(
+                sum(1 for p in profiles if p.get("profile_complete")) / count * 100 + 0.5
             ),
             # None (not 0) when no profile has post data, so the cadence/recency/engagement
             # rules skip_if_missing and rescale out instead of unfairly failing (e.g. the
             # Facebook pages actor returns no posts).
-            "avg_posts_per_month": round(sum(ppm) / len(ppm), 1) if ppm else None,
+            "avg_posts_per_month": _round_half_up(sum(ppm) / len(ppm)) if ppm else None,
             "days_since_last_post": min(dsp) if dsp else None,
-            "avg_engagement_rate_pct": round(sum(eng) / len(eng), 2) if eng else None,
+            "avg_engagement_rate_pct": _round_half_up(sum(eng) / len(eng), 2) if eng else None,
             "profiles_with_link_in_bio": sum(1 for p in profiles if p.get("link_in_bio")),
             "profiles_with_cta": sum(1 for p in profiles if p.get("has_cta")),
             "has_video_content": any(p.get("has_video") for p in profiles),
@@ -462,9 +510,9 @@ def summarize_profiles(profiles: list[JsonDict]) -> JsonDict:
             "profiles_business_account": sum(1 for v in business if v) if business else None,
             "profiles_with_category": sum(1 for p in profiles if p.get("category")),
             "avg_follower_following_ratio": _mean(_collect(profiles, "follower_following_ratio")),
-            "video_share_pct": _mean(_collect(profiles, "video_share_pct")),
-            "image_share_pct": _mean(_collect(profiles, "image_share_pct")),
-            "carousel_share_pct": _mean(_collect(profiles, "carousel_share_pct")),
+            "video_share_pct": _mean(_collect(feed_profiles, "video_share_pct")),
+            "image_share_pct": _mean(_collect(feed_profiles, "image_share_pct")),
+            "carousel_share_pct": _mean(_collect(feed_profiles, "carousel_share_pct")),
             "max_posting_gap_days": max(gaps) if gaps else None,
             "avg_views_per_post": _mean(_collect(profiles, "avg_views_per_post")),
             "total_views": sum(_int(v) for v in total_views) if total_views else None,

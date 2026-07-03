@@ -137,7 +137,7 @@ the build manual in [`docs/10_PHASE2_IMPLEMENTATION.md`](10_PHASE2_IMPLEMENTATIO
 >   `score_social_audit` → `render_social_pdf` → store), reusing the `_mark_job` spine;
 >   `social_collector` is an injectable param (default `collect_social_facts`).
 > - **Scoring** (`scoring.py`): `score_social_audit()` produces a **standalone** Social Score
->   (0–100) from `rubrics/social.yaml` (`phase2-social-v1`, `category: social`);
+>   (0–100) from `rubrics/social.yaml` (`phase2-social-v1` → now `phase2-social-v3`, `category: social`);
 >   `Rubric.category` `Literal` now includes `"social"`. The website `CompositeRubric` weights
 >   stay exactly `{seo, uxui}` — Social is **not** folded into the website composite; website
 >   scoring is unchanged.
@@ -230,7 +230,8 @@ rewriting it**.
 
 **Out of scope for Phase 2 core (Epic P2-E5 / v3):**
 
-- Competitor benchmarking (SEMrush/Ahrefs/Similarweb).
+- Live competitor-benchmarking provider clients (SEMrush/Ahrefs/Similarweb). The no-cost
+  benchmarking scaffold/rendering path has shipped, but paid vendor fetchers remain deferred.
 - Analytics integrations (GA4, Search Console, Microsoft Clarity, SEMrush keyword data).
 - LinkedIn scraping (enforcement risk).
 - TikTok collector (deferred; the same adapter supports it later).
@@ -250,7 +251,7 @@ rewriting it**.
 | P2-E2 | Productionization & Platform | A | P2-6 … P2-11 | ✅ Done (code) — metrics/alerts/backups remain VM ops |
 | P2-E3 | Deepen the Website Audit | D | P2-12 … P2-18 | ✅ Done (2026-06-25) |
 | P2-E4 | Social Media Audit | B | P2-19 … P2-25 | ✅ Done (2026-06-23) |
-| P2-E5 | Enrichment (v3) | C | P2-26 … P2-28 | ⛔ v3 |
+| P2-E5 | Enrichment (v3) | C | P2-26 … P2-28 | 🟡 scaffold shipped; live providers/analytics v3 |
 
 ### 3.2 Task-level
 
@@ -278,10 +279,10 @@ rewriting it**.
 | P2-20 | ~~Bright Data~~ **Apify** Backend for IG/FB | Task | P2-E4 | ✅ Done (2026-06-23) | Apify free-tier IG+FB backend live (folded with P2-19 in `apify_provider.py`); ~~gated on P2-3~~ — P2-3 removed, no paid gate (legal ✅ given). Live IG+FB runs verified |
 | P2-21 | ~~Instagram Business Discovery Shortcut~~ | Task | P2-E4 | ❌ Dropped | No account approvals (BLC); ~~Bright Data~~ **Apify** covers IG |
 | P2-22 | Social Fact Extractors + Common Schema + Fixtures | Task | P2-E4 | ✅ Done (2026-06-23) | `apps/worker/stages/social/extractor.py` normalizes IG+FB → `social.*` facts; `tests/unit/test_extractor_social.py` |
-| P2-23 | Social Rubric + Standalone Social Score | Task | P2-E4 | ✅ Done (2026-06-23) | `rubrics/social.yaml` (`phase2-social-v1`, `category: social`) scored by `scoring.score_social_audit()` → standalone Social Score; website composite UNCHANGED (`composite.yaml` still `seo:0.45/uxui:0.55`); `test_social_scoring.py` |
+| P2-23 | Social Rubric + Standalone Social Score | Task | P2-E4 | ✅ Done (2026-06-23) | `rubrics/social.yaml` (`phase2-social-v1` → now `phase2-social-v3`, `category: social`) scored by `scoring.score_social_audit()` → standalone Social Score; website composite UNCHANGED (`composite.yaml` still `seo:0.45/uxui:0.55`); `test_social_scoring.py` |
 | P2-24 | ~~Social Commentary Prompts~~ **Deterministic Social Findings** + Grounding-Validator Extension | Task | P2-E4 | ✅ Done (2026-06-23) | Delivered as **deterministic rule-derived findings/roadmap** (`social/report.py`, no LLM), not LLM commentary; no grounding-validator extension needed (numbers come straight from rule metadata) |
 | P2-25 | Separate Social Report (PDF) + Social Audit Tab | Task | P2-E4 | ✅ Done (2026-06-23) | Separate `templates/social_report.html` via `pdf_renderer.render_social_pdf` (PDF only); `compose_social_report_payload` shared seam; new Social Audit tab + `/social` page; **no** Lead-Gen fold-in |
-| P2-26 | Competitor Benchmarking Provider + Benchmarked Scoring | Task | P2-E5 | ⛔ v3 | |
+| P2-26 | Competitor Benchmarking Provider + Benchmarked Scoring | Task | P2-E5 | 🟡 Scaffold shipped | Provider registry, normalized facts, graceful skip, and report rendering are built; live paid clients remain v3 |
 | P2-27 | GA4 + Search Console OAuth Integrations | Task | P2-E5 | ⛔ v3 | |
 | P2-28 | Microsoft Clarity + SEMrush Integrations | Task | P2-E5 | ⛔ v3 | |
 
@@ -943,7 +944,7 @@ Apify actor runs (2026-06-23 r2; P2-3 removed)**.
 
 ### P2-23 Social Rubric + Standalone Social Score — ✅ DONE (2026-06-23)
 
-> **Update (2026-06-23) — DONE.** `rubrics/social.yaml` (`version: "phase2-social-v1"`,
+> **Update (2026-06-23) — DONE.** `rubrics/social.yaml` (`version: "phase2-social-v1"`, since advanced to `"phase2-social-v3"`,
 > `category: social`) is scored by `scoring.score_social_audit()` into a **standalone Social
 > Score (0–100)** via the reused rubric engine, with the same `skip_if_missing` graceful
 > rescaling as the website rubrics. `scoring.Rubric.category` `Literal` now includes
@@ -1073,15 +1074,22 @@ forward (Plan §3.3).
 **Labels:** `phase-2`, `enrichment`, `v3-enrichment`
 **Description:** Benchmark SEO/UX/Social scores against competitors or industry norms via
 SEMrush / Ahrefs / Similarweb APIs (higher tiers; recurring cost — no free reliable source).
+**Status update (2026-07-02):** scaffold shipped. The app now has `benchmark_enabled`,
+`benchmark_provider`, and `benchmark_api_key`; a provider registry for `semrush`, `ahrefs`, and
+`similarweb`; typed normalized benchmark facts; a graceful collector that skips in every not-ready
+state; and PDF/DOCX/web report rendering. Live paid vendor HTTP clients are still no-op stubs until
+cost and provider choice are approved.
 **Acceptance criteria:**
 
-- A benchmarking provider is integrated and scores can be presented relative to competitor/industry baselines.
+- Scaffold is integrated and scores can be presented relative to competitor/industry baselines when
+  a provider returns data.
+- A live benchmarking provider fetcher is implemented before enabling real baselines.
 - Recurring cost is approved before enabling.
 
 **Subtasks:**
 
-- Select + integrate a benchmarking provider.
-- Add benchmarked presentation to the report/dashboard.
+- Select + integrate a live benchmarking provider.
+- Add benchmarked presentation to the report/dashboard. **Done for the scaffold.**
 - Document recurring cost + enablement gate.
 
 ### P2-27 GA4 + Search Console OAuth Integrations

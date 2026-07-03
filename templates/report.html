@@ -1182,12 +1182,22 @@
         {% if sci %}
         <h3 style="margin-top:10px;">Content insights</h3>
         <p style="font-size:11px; margin:4px 0;">
+          {# Every field the builder's all-None collapse counts is rendered here (guarded
+             individually), so a populated insights dict can never produce an empty body. #}
           {% set cm = sci.content_mix %}
-          {% if cm.video is not none %}Video {{ cm.video }}% &middot; Image {{ cm.image }}%{% if cm.carousel %} &middot; Carousel {{ cm.carousel }}%{% endif %}.{% endif %}
-          {% if sci.total_views is not none %} {{ sci.total_views }} total views{% if sci.avg_views_per_post is not none %} ({{ sci.avg_views_per_post }} avg/post){% endif %}.{% endif %}
+          {% set mix_parts = [] %}
+          {% if cm.video is not none %}{% set _ = mix_parts.append("Video " ~ cm.video ~ "%") %}{% endif %}
+          {% if cm.image is not none %}{% set _ = mix_parts.append("Image " ~ cm.image ~ "%") %}{% endif %}
+          {% if cm.carousel is not none %}{% set _ = mix_parts.append("Carousel " ~ cm.carousel ~ "%") %}{% endif %}
+          {% if mix_parts %}{{ mix_parts | join(" · ") }}.{% endif %}
+          {% if sci.total_views is not none %} {{ sci.total_views }} total views.{% endif %}
+          {% if sci.avg_views_per_post is not none %} {{ sci.avg_views_per_post }} avg views per video.{% endif %}
+          {% if sci.avg_engagement_rate_pct is not none %} Average engagement rate {{ sci.avg_engagement_rate_pct }}%.{% endif %}
+          {% if sci.avg_like_to_comment_ratio is not none %} ~{{ sci.avg_like_to_comment_ratio }} likes per comment.{% endif %}
           {% if sci.avg_hashtags_per_post is not none %} ~{{ sci.avg_hashtags_per_post }} hashtags/post.{% endif %}
           {% if sci.posts_with_cta_caption_pct is not none %} {{ sci.posts_with_cta_caption_pct }}% of captions include a CTA.{% endif %}
           {% if sci.max_posting_gap_days is not none %} Longest posting gap {{ sci.max_posting_gap_days }} days.{% endif %}
+          {% if sci.avg_follower_following_ratio is not none %} Follower/following ratio {{ sci.avg_follower_following_ratio }}&times;.{% endif %}
         </p>
         {% endif %}
 
@@ -1202,6 +1212,7 @@
               <th style="padding:5px 8px; text-align:right;">Views</th>
               <th style="padding:5px 8px; text-align:right;">Likes</th>
               <th style="padding:5px 8px; text-align:right;">Comments</th>
+              <th style="padding:5px 8px;">Posted</th>
             </tr>
           </thead>
           <tbody>
@@ -1213,6 +1224,7 @@
               <td style="padding:5px 8px; text-align:right;">{{ tp.get("views") if tp.get("views") is not none else "—" }}</td>
               <td style="padding:5px 8px; text-align:right;">{{ tp.get("likes", 0) }}</td>
               <td style="padding:5px 8px; text-align:right;">{{ tp.get("comments", 0) }}</td>
+              <td style="padding:5px 8px;">{{ tp.get("posted") or "—" }}</td>
             </tr>
             {% endfor %}
           </tbody>

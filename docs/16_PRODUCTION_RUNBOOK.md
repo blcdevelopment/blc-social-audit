@@ -1,6 +1,6 @@
 # 16 — Production Operations Runbook
 
-**Live:** https://ai.builderleadconverter.com · **Last updated: 2026-06-26**
+**Live:** https://ai.builderleadconverter.com · **Last updated: 2026-07-02**
 
 This is the **practical operations runbook** for the deployed app: how it runs in production, how
 CI/CD deploys it, **how to access the server, and how to add/tweak environment variables (API
@@ -150,6 +150,7 @@ values are injected by compose. Use [`.env.template`](../.env.template) as the f
 | **`APIFY_API_TOKEN`** | Instagram + Facebook social scraping (Apify) | **Yes — for the social section of a combined/social audit** |
 | **`YOUTUBE_API_KEY`** | YouTube channel stats (YouTube Data API v3, free, no OAuth) | Yes, for the YouTube backend |
 | `GOOGLE_PSI_API_KEY` | real PageSpeed/Core Web Vitals data (else PSI gracefully skips) | No (website perf) |
+| `SOCIAL_AUTODISCOVERY_ENABLED` | auto-fill blank social fields from the crawled site's own profile links (credentialed platforms only; promotes website→combined **only when collection succeeds**). Default `true`; set `false` to stop the extra Apify/YouTube spend | No (default on) |
 | `OPENAI_API_KEY` | **only** the optional social‑commentary LLM polish (GPT‑4o). Website + combined social findings are deterministic without it | No |
 | `CLERK_AUTHORIZED_PARTIES` | restrict accepted `azp` origins | No |
 | **`CLERK_ALLOWED_SUBJECTS`** | **NEW** — allowlist of Clerk user ids permitted to use the API (defense‑in‑depth; empty = any valid token). Comma‑separated `user_…` ids | No, but recommended |

@@ -375,7 +375,8 @@ def _append_search_rows(parts: list[str], title: str, rows: list[JsonDict], labe
 def _combined_xml(payload: ReportPayload) -> list[str]:
     """Combined-audit social + overall + benchmark sections, appended at the end of the website
     DOCX. Returns [] for a website-only audit (social_audit/overall_readiness/benchmark are None),
-    leaving the DOCX unchanged. Mirrors the PDF's appended sections."""
+    leaving the DOCX unchanged. Carries the same social depth as the PDF — quantified findings,
+    strengths, content insights, and top posts — as headings + bullets (no table machinery)."""
     parts: list[str] = []
     social = payload.social_audit
     overall = payload.overall_readiness
@@ -408,28 +409,16 @@ def _combined_xml(payload: ReportPayload) -> list[str]:
             if platforms:
                 parts.append(_heading("Profiles audited", 2))
                 for p in platforms:
-                    followers = p.get("followers")
-                    ppm = p.get("posts_per_month")
-                    eng = p.get("avg_engagement_rate_pct")
-                    last = p.get("days_since_last_post")
-                    parts.append(
-                        _bullet(
-                            f"{p.get('platform', '-')} (@{p.get('handle', '-')}): "
-                            f"followers={followers if followers is not None else '-'}, "
-                            f"posts/mo={ppm if ppm is not None else '-'}, "
-                            f"engagement={f'{eng}%' if eng is not None else '-'}, "
-                            f"last post={f'{last}d ago' if last is not None else '-'}"
-                        )
-                    )
+                    parts.append(_bullet(_social_platform_line(p)))
             findings = [f for f in (social.get("findings") or []) if isinstance(f, dict)]
             if findings:
                 parts.append(_heading("What to improve", 2))
                 for f in findings:
+                    label = f.get("label", "")
+                    if f.get("metric"):
+                        label = f"{label} ({f.get('metric')})"
                     parts.append(
-                        _paragraph(
-                            f"{str(f.get('impact', 'medium')).upper()}: {f.get('label', '')}",
-                            "Strong",
-                        )
+                        _paragraph(f"{str(f.get('impact', 'medium')).upper()}: {label}", "Strong")
                     )
                     if f.get("remediation"):
                         parts.append(_paragraph(f.get("remediation")))
@@ -440,6 +429,29 @@ def _combined_xml(payload: ReportPayload) -> list[str]:
                         "rubric's checks."
                     )
                 )
+            strengths = [s for s in (social.get("strengths") or []) if isinstance(s, dict)]
+            if strengths:
+                parts.append(_heading("What's working", 2))
+                for s in strengths:
+                    parts.append(_bullet(s.get("label", "")))
+            insight_lines = _social_insight_lines(social.get("content_insights"))
+            if insight_lines:
+                parts.append(_heading("Content insights", 2))
+                for line in insight_lines:
+                    parts.append(_bullet(line))
+            top_posts = [tp for tp in (social.get("top_posts") or []) if isinstance(tp, dict)]
+            if top_posts:
+                parts.append(_heading("Top performing posts", 2))
+                for tp in top_posts:
+                    views = tp.get("views")
+                    parts.append(
+                        _bullet(
+                            f"{tp.get('platform', '-')}: "
+                            f"{tp.get('title') or tp.get('posted') or '-'} - "
+                            f"views={views if views is not None else '-'}, "
+                            f"engagement={tp.get('engagement', 0)}"
+                        )
+                    )
 
     if overall and overall.get("score") is not None:
         weights = overall.get("weights") or {}
@@ -509,6 +521,59 @@ def _combined_xml(payload: ReportPayload) -> list[str]:
             parts.append(_paragraph(f"Benchmark source: {provider}.", "Meta"))
 
     return parts
+
+
+def _social_platform_line(p: JsonDict) -> str:
+    """One per-platform scorecard bullet, extended with the video-share/business columns the
+    PDF's scorecard table shows (only when present)."""
+    followers = p.get("followers")
+    ppm = p.get("posts_per_month")
+    eng = p.get("avg_engagement_rate_pct")
+    last = p.get("days_since_last_post")
+    line = (
+        f"{p.get('platform', '-')} (@{p.get('handle', '-')}): "
+        f"followers={followers if followers is not None else '-'}, "
+        f"posts/mo={ppm if ppm is not None else '-'}, "
+        f"engagement={f'{eng}%' if eng is not None else '-'}, "
+        f"last post={f'{last}d ago' if last is not None else '-'}"
+    )
+    if p.get("video_share_pct") is not None:
+        line += f", video share={p.get('video_share_pct')}%"
+    if p.get("is_business") is not None:
+        line += f", business={'yes' if p.get('is_business') else 'no'}"
+    return line
+
+
+def _social_insight_lines(insights: Any) -> list[str]:
+    """Bullet-ready content-insight lines covering the same non-None field set the PDF renders."""
+    ci = insights if isinstance(insights, dict) else {}
+    lines: list[str] = []
+    mix = ci.get("content_mix") if isinstance(ci.get("content_mix"), dict) else {}
+    mix_parts = [
+        f"{label} {value}%"
+        for label, value in (
+            ("video", mix.get("video")),
+            ("image", mix.get("image")),
+            ("carousel", mix.get("carousel")),
+        )
+        if value is not None
+    ]
+    if mix_parts:
+        lines.append("Content mix: " + ", ".join(mix_parts))
+    for label, key, suffix in (
+        ("Total views", "total_views", ""),
+        ("Avg views per video", "avg_views_per_post", ""),
+        ("Avg engagement rate", "avg_engagement_rate_pct", "%"),
+        ("Likes per comment", "avg_like_to_comment_ratio", ""),
+        ("Hashtags per post", "avg_hashtags_per_post", ""),
+        ("Captions with a CTA", "posts_with_cta_caption_pct", "%"),
+        ("Longest posting gap", "max_posting_gap_days", " days"),
+        ("Follower/following ratio", "avg_follower_following_ratio", "x"),
+    ):
+        value = ci.get(key)
+        if value is not None:
+            lines.append(f"{label}: {value}{suffix}")
+    return lines
 
 
 def _paragraph(text: Any, style: str | None = None) -> str:

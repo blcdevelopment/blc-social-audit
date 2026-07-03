@@ -222,3 +222,12 @@ def test_report_builder_none_when_no_metric_overlaps() -> None:
         "competitors": [{"label": "rival.com", "social": 40}],
     }
     assert build_benchmark_report_data(scores=scores, benchmark_facts=facts) is None
+
+
+def test_normalize_non_list_competitors_is_empty_not_raise() -> None:
+    # A truthy non-list competitors value must degrade like a missing list — the docstring
+    # promises direct callers are protected without an outer wrapper.
+    for raw in ({"competitors": 1}, {"competitors": True}, {"competitors": "rival.com"}):
+        facts = normalize_benchmark_facts(raw, provider="semrush", target_url="u", niche=None)
+        assert facts["status"] == "empty"
+        assert facts["competitors"] == []

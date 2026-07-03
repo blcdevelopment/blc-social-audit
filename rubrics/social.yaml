@@ -10,7 +10,13 @@
 # consistency, hashtag usage) scoring facts the extractor already derives from the sampled
 # posts. Several more detail facts (content mix, views, follower ratio, like:comment, caption
 # CTA) are surfaced in the report's content-insights section without being scored here.
-version: "phase2-social-v2"
+#
+# v3 (2026): fact-semantics calibration in the extractor, no rule changes — video share is
+# aggregated over non-YouTube profiles only (a channel is definitionally 100% video, which
+# made the video-share rule vacuous); Facebook post typing no longer counts a generic reach
+# field as video; hashtag counting requires at least one letter (so "#1" doesn't count); the
+# Instagram business-account flag is tri-state (missing => unknown => the rule rescales).
+version: "phase2-social-v3"
 category: social
 max_score: 100
 normalization: rescale_to_max

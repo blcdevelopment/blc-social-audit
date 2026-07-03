@@ -35,7 +35,7 @@ commentary**, IG Business Discovery dropped in both.
   `CompositeRubric.weights` is a typed `dict[Literal["seo","uxui"], float]` whose validator
   **hard-requires exactly `{seo,uxui}` summing to 1.0** ([scoring.py](../apps/worker/stages/scoring.py)).
 - **Social score:** standalone `score_social_audit()` against
-  [rubrics/social.yaml](../rubrics/social.yaml) (`phase2-social-v1`, 10 rules, `rescale_to_max`)
+  [rubrics/social.yaml](../rubrics/social.yaml) (`phase2-social-v3`, 14 rules, `rescale_to_max`)
   → `social_score`; own report (`compose_social_report_payload`) + own PDF (`render_social_pdf`).
 - **Social data layer (reusable):** `collect_social_facts` (graceful-skip, injectable as
   `social_collector=`) → `apify_provider` (IG + FB pages + FB posts) + `youtube_provider`

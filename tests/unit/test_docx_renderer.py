@@ -67,6 +67,55 @@ def test_render_report_docx_omits_benchmark_when_absent(tmp_path) -> None:
     assert "Competitor Benchmarking" not in document
 
 
+def test_render_report_docx_appends_social_depth_sections(tmp_path) -> None:
+    # A combined audit's DOCX must carry the same social depth as the PDF: quantified findings,
+    # strengths, content insights, and top posts.
+    payload = compose_report_payload(_job(), _combined_result())
+    output_path = tmp_path / "audit.docx"
+
+    render_report_docx(payload, output_path=output_path)
+
+    with ZipFile(output_path) as archive:
+        document = archive.read("word/document.xml").decode("utf-8")
+
+    assert "Social Media Audit" in document
+    # Quantified finding: label plus the measured-vs-target metric line.
+    assert "Infrequent posting (1.3 (target ≥ 8))" in document
+    assert "Post at least twice a week." in document
+    # Strengths.
+    assert "What's working" in document
+    assert "Profiles are complete" in document
+    # Content insights (same non-None field set the PDF renders).
+    assert "Content insights" in document
+    assert "Content mix: video 20.0%, image 60.0%, carousel 20.0%" in document
+    assert "Avg views per video: 850.0" in document
+    assert "Likes per comment: 12.0" in document
+    assert "Follower/following ratio: 3.2x" in document
+    # Top posts.
+    assert "Top performing posts" in document
+    assert "Deck build timelapse" in document
+    assert "views=900" in document
+    assert "engagement=45" in document
+    # Per-platform row extended with video-share/business columns.
+    assert "video share=20.0%" in document
+    assert "business=yes" in document
+
+
+def test_render_report_docx_omits_social_sections_when_absent(tmp_path) -> None:
+    # Website-only audit => none of the social depth sections appear.
+    payload = compose_report_payload(_job(), _result())
+    output_path = tmp_path / "audit.docx"
+
+    render_report_docx(payload, output_path=output_path)
+
+    with ZipFile(output_path) as archive:
+        document = archive.read("word/document.xml").decode("utf-8")
+    assert "Social Media Audit" not in document
+    assert "What's working" not in document
+    assert "Content insights" not in document
+    assert "Top performing posts" not in document
+
+
 def _job() -> SimpleNamespace:
     return SimpleNamespace(
         id=uuid4(),
@@ -98,3 +147,85 @@ def _result() -> SimpleNamespace:
         rubric_version="phase1-test",
         llm_model="deterministic",
     )
+
+
+def _combined_result() -> SimpleNamespace:
+    result = _result()
+    result.social_score = 55
+    result.social_facts = {
+        "status": "complete",
+        "summary": {
+            "platforms_audited": 1,
+            "total_followers": 1200,
+            "video_share_pct": 20.0,
+            "image_share_pct": 60.0,
+            "carousel_share_pct": 20.0,
+            "total_views": 3400,
+            "avg_views_per_post": 850.0,
+            "avg_engagement_rate_pct": 0.8,
+            "avg_like_to_comment_ratio": 12.0,
+            "max_posting_gap_days": 40,
+            "avg_hashtags_per_post": 2.0,
+            "posts_with_cta_caption_pct": 25.0,
+            "avg_follower_following_ratio": 3.2,
+        },
+        "platforms": [
+            {
+                "platform": "instagram",
+                "handle": "acme",
+                "status": "complete",
+                "followers": 1200,
+                "posts_per_month": 1.3,
+                "days_since_last_post": 40,
+                "avg_engagement_rate_pct": 0.8,
+                "video_share_pct": 20.0,
+                "is_business": True,
+                "top_posts": [
+                    {
+                        "type": "video",
+                        "views": 900,
+                        "likes": 40,
+                        "comments": 5,
+                        "engagement": 45,
+                        "posted": "2026-06-01",
+                        "title": "Deck build timelapse",
+                    }
+                ],
+            }
+        ],
+    }
+    result.score_breakdown = {
+        **result.score_breakdown,
+        "social": {
+            "score": 55,
+            "category": {
+                "rules": [
+                    {
+                        "rule_id": "social.cadence",
+                        "result": "fail",
+                        "finding_label": "Infrequent posting",
+                        "remediation": "Post at least twice a week.",
+                        "impact": "high",
+                        "tier": "quick_win",
+                        "fact_path": "social.summary.avg_posts_per_month",
+                        "evidence": {"value": 1.3, "params": {"min": 8}},
+                    },
+                    {
+                        "rule_id": "social.profile.complete",
+                        "result": "pass",
+                        "description": "Profiles are complete (bio, link, contact)",
+                    },
+                ]
+            },
+        },
+        "overall_readiness": {
+            "status": "complete",
+            "rubric_version": "phase2-overall-v1",
+            "score": 66,
+            "band": "fair",
+            "max_score": 100,
+            "weights": {"website": 0.7, "social": 0.3},
+            "inputs": {"website_lead_gen": 72, "social": 55},
+        },
+    }
+    return result

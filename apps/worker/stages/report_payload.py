@@ -630,14 +630,16 @@ def compose_report_payload(job: Any, result: Any) -> ReportPayload:
         _compose_section("lead_generation", result.lead_gen_score, commentary, score_breakdown),
     ]
 
-    # Combined-audit extras (appended at the END of the report). Populated only when social data
-    # is present on the result; for a website-only audit these stay None and the report is
+    # Combined-audit extras (appended at the END of the report), each keyed off its own data so
+    # neither drags in a degenerate version of the other: the social section renders only when
+    # collected social facts exist on the result, and the overall score renders only when the
+    # breakdown carries it. For a website-only audit both stay None and the report is
     # byte-identical to before.
     social_facts = _dict(getattr(result, "social_facts", None))
     overall_readiness = score_breakdown.get("overall_readiness")
     overall_readiness = overall_readiness if isinstance(overall_readiness, dict) else None
     social_audit = None
-    if social_facts or overall_readiness:
+    if social_facts:
         social_audit = build_social_report_data(
             social_facts=social_facts,
             social_breakdown=score_breakdown.get("social"),

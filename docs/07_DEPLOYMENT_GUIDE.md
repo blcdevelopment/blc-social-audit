@@ -377,7 +377,9 @@ Recommended order: P1-27 → P1-28 → P1-29 → P1-30 → P1-31 → P1-32.
 
 - [x] List production-hardening needs: authentication, complete SSRF interception, TLS, object storage, monitoring/backups, data retention.
 - [x] Evaluate hosting target (managed/AWS) and rough cost.
-- [x] Capture deferred product scope (social audits, competitor benchmarking, analytics integrations).
+- [x] Capture deferred product scope (social audits, live competitor-benchmarking providers,
+  analytics integrations). The benchmarking presentation scaffold later shipped, while the paid
+  provider clients remain deferred.
 - [ ] Prioritize Phase 2 candidates against test feedback. *(needs P1-30 results)*
 - [x] Draft a Phase 2 epic outline for review (§8).
 

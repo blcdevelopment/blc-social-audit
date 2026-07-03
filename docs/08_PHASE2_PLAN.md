@@ -1,5 +1,14 @@
 # Phase 2 Plan — Social Audit, Productionization & Enrichment
 
+> **CURRENT AS-BUILT SNAPSHOT (2026-07-02).** This plan keeps historical decision notes for
+> traceability, but the shipped product is: Website Audit page + optional/auto-discovered
+> Instagram, Facebook, and YouTube profiles; combined audits append a Social Media Audit and an
+> Overall Lead-Gen Readiness score; standalone social is still supported by the backend/report path
+> for old or direct API jobs but no longer has a separate UI tab; `rubrics/social.yaml` is
+> `phase2-social-v3`; Facebook uses both Pages and Posts scrapers; YouTube is supported via the
+> free Data API; and the competitor-benchmarking scaffold is shipped while live paid vendor clients
+> remain v3.
+
 > **UPDATE 2026-06-24 — YouTube RE-ADDED.** The "YouTube is dropped / out of scope" notes
 > throughout this doc are **superseded**. A YouTube Data API v3 backend now ships
 > (`apps/worker/stages/social/youtube_provider.py` + `normalize_youtube_channel`), so the social
@@ -55,7 +64,7 @@
 >   `apify_provider.py` (network), `report.py` (`compose_social_report_payload`).
 > - **Scoring is standalone:** `scoring.score_social_audit()`
 >   ([`apps/worker/stages/scoring.py`](../apps/worker/stages/scoring.py):143) runs
->   **`rubrics/social.yaml`** (`version: phase2-social-v1`, `category: social`) for a 0–100 Social
+>   **`rubrics/social.yaml`** (`version: phase2-social-v1` — now `phase2-social-v3`, `category: social`) for a 0–100 Social
 >   Score. `Rubric.category` `Literal` now includes `"social"` (line 47), but the website
 >   `CompositeRubric.weights` stays exactly `{seo, uxui}` (line 66) — social is **not** folded into
 >   the website composite; website scoring is unchanged.
@@ -175,8 +184,8 @@ priority order:
    defensible findings (structured data, AI/answer-engine readiness, accessibility,
    local SEO, link health) — *Workstream D*. This is the cheapest, lowest-risk way
    to make the existing product visibly "better," because it reuses the rubric engine.
-4. **Add enrichment** (competitor benchmarking + the analytics integrations) once the
-   core is validated — *Workstream C / v3*.
+4. **Add enrichment** (live competitor-benchmarking providers + the analytics integrations)
+   once the core is validated — *Workstream C / v3*.
 
 > **Why this order.** Workstreams A and D are low-risk and reuse what already works,
 > so they ship fast and immediately improve the daily-use tool. Workstream B is the
@@ -198,7 +207,7 @@ Expansion." Phase 1 implemented the first two audits. Phase 2 maps to the remain
 | Website SEO audit | ✅ Done (core) | Deepen: schema, AEO, CrUX, local SEO → **Workstream D** |
 | Website UX/UI audit | ✅ Done (core) | Deepen: accessibility, trust/conversion signals → **Workstream D** |
 | **Social media audit** | ❌ Deferred | **Workstream B** |
-| Scoring & **benchmarking against competitors/industry** | Scores ✅ / benchmarking ❌ | Benchmarking → **Workstream C** |
+| Scoring & **benchmarking against competitors/industry** | Scores ✅ / benchmarking scaffold ✅ | Live provider clients → **Workstream C** |
 | Final deliverable (report) | ✅ PDF | Dashboard + history + share → **Workstream A** |
 | Future Data Collection Expansion (GA, GSC, Clarity, SEMrush) | ❌ | **Workstream C** |
 | Accounts / multi-user / hosting | ❌ (internal, no auth) | Team auth + hosting → **Workstream A** |
@@ -390,9 +399,10 @@ and keeps cost and legal risk low.
 > composite and there is **no combined website+social number**. The website audit's scoring is
 > **unchanged**. See the top-of-doc banner for the recommended `audit_type` shape.
 
-- **Competitor benchmarking** (scope §4): required in Phase 2 or deferred to v3? If
-  required, budget SEMrush/Ahrefs/Similarweb (no free reliable source — Technical
-  Assessment §2.6).
+- **Competitor benchmarking** (scope §4): the safe presentation scaffold was pulled forward
+  (feature flag, provider registry, normalized facts, report rendering, graceful no-op). Live
+  SEMrush/Ahrefs/Similarweb clients remain v3 because there is no free reliable source and a
+  recurring subscription must be approved first.
 - **Report format** beyond PDF: dashboard, shareable link, white-label (§2.7).
 - **Expected volume** (audits/month): sizes DB, workers, caching (§2.3).
 - **LLM provider for social commentary:** reuse the existing pipeline (Phase 1 uses
@@ -539,13 +549,26 @@ website audit.
 > **✅ All P2-E4 tickets below are DONE (2026-06-23)** — the social audit is built, tested, and
 > runnable from the browser. Per-ticket as-built notes are inline.
 
-- P2-19 Social data provider adapter (interface + **Apify backend (IG/FB)**) *(Updated 2026-06-23 round 2; was: "interface + YouTube backend first.")* — **✅ DONE:** `apps/worker/stages/social/apify_provider.py` (two actors: `apify~instagram-scraper`, `apify~facebook-pages-scraper`).
+- P2-19 Social data provider adapter (interface + **Apify IG/FB + YouTube** backends) *(updated
+  through 2026-07-02)* — **✅ DONE:** `apps/worker/stages/social/providers.py` registry dispatches
+  to Apify Instagram, Facebook Pages, Facebook Posts, and YouTube Data API providers.
 - P2-20 **Apify backend** for IG/FB (free tier) — any public account, post-level depth (§3.2.5). *(Updated 2026-06-23 round 2; was: "Bright Data backend for IG/FB." May fold into P2-19.)* **No P2-3 gate** — Apify is self-serve on the free tier (the paid smoke-test gate is removed). — **✅ DONE** (folded into P2-19's provider; live IG+FB runs verified).
 - ~~P2-21 Instagram Business Discovery shortcut~~ — **DROPPED** (BLC: no account approvals; Bright Data covers IG). LinkedIn excluded, TikTok deferred.
-- P2-22 Social fact extractors + common schema + fixtures — **✅ DONE:** `apps/worker/stages/social/extractor.py` (pure IG+FB → `social.*` facts) + `tests/unit/test_extractor_social.py`.
-- P2-23 `rubrics/social.yaml` → **standalone Social Score** via the shared scoring engine. **NO website-composite change** — do not touch `scoring.py`'s composite `Literal`/weights or `composite.yaml`. *(Updated 2026-06-23; was: "extend `scoring.py` (composite Literal/weights) + Lead-Gen update.")* — **✅ DONE:** `rubrics/social.yaml` (`phase2-social-v1`, `category: social`) scored by `scoring.score_social_audit()`; website `CompositeRubric.weights` stays `{seo, uxui}` (untouched).
+- P2-22 Social fact extractors + common schema + fixtures — **✅ DONE:**
+  `apps/worker/stages/social/extractor.py` normalizes Instagram/Facebook/YouTube into
+  `social.*` facts + `tests/unit/test_extractor_social.py`.
+- P2-23 `rubrics/social.yaml` → **standalone Social Score** via the shared scoring engine. **NO
+  website-composite change** — do not touch `scoring.py`'s composite `Literal`/weights or
+  `composite.yaml`. *(Updated 2026-06-23; was: "extend `scoring.py` (composite Literal/weights) +
+  Lead-Gen update.")* — **✅ DONE:** `rubrics/social.yaml` (`phase2-social-v3`, `category:
+  social`) scored by `scoring.score_social_audit()`; website `CompositeRubric.weights` stays
+  `{seo, uxui}` (untouched).
 - P2-24 Social commentary prompts + grounding-validator extension — **✅ DONE.** Findings/recommendations are deterministic from the rubric rule metadata (`finding_label`/`remediation`/`impact`/`tier`) by default. **Update 2026-06-24:** an optional LLM polish layer was added — `commentary.generate_social_commentary` (prompts in `prompts/commentary_social_*.md`) rephrases the rule-derived findings via GPT-4o when `OPENAI_API_KEY` is set, with a grounding backstop and the deterministic baseline as the no-key fallback. Polish only — scores/findings are unchanged.
-- P2-25 **Separate Social report** (own PDF/template + dashboard view) showing the standalone Social Score — **not** a section in the website report, **no** Lead-Gen update. *(Updated 2026-06-23; was: "Report/PDF/dashboard social section + updated Lead-Gen score.")* — **✅ DONE:** `templates/social_report.html` rendered by `pdf_renderer.render_social_pdf` (PDF only; no DOCX); `compose_social_report_payload` shared by the API detail view + the renderer; UI social detail view with Download PDF + Share.
+- P2-25 Social report surfaces — **✅ DONE:** the standalone `templates/social_report.html` /
+  `render_social_pdf` path remains for social-only jobs; combined website+social reports now
+  append the Social Media Audit and Overall Lead-Gen Readiness sections to the main PDF/DOCX/web
+  report. The separate Social Audit UI tab was removed; operators enter social handles on the
+  Website Audit page.
 
 ---
 
@@ -559,6 +582,12 @@ phase, not bundled (Technical Assessment "Future phase").
 Benchmark SEO/UX/Social scores against competitors or industry norms via SEMrush,
 Ahrefs, or Similarweb APIs (higher tiers; recurring cost — no free reliable source).
 
+> **Update (2026-07-02):** the benchmarking scaffold is now built: `benchmark_enabled`,
+> `benchmark_provider`, and `benchmark_api_key` gate a provider registry; normalized facts are
+> stored in `score_breakdown["benchmark"]`; and the PDF/DOCX/web report can render a Competitor
+> Benchmarking section. All paid vendor clients are still no-op stubs, so production incurs no
+> benchmarking cost and reports stay unchanged until a real provider returns baselines.
+
 ### 6.2 Analytics integrations — "Future Data Collection Expansion" (scope)
 User-authorized data sources for deeper UX/SEO insight:
 - **Google Analytics (GA4)** — user behavior flow, bounce/exit, conversion rates, funnel drop-offs.
@@ -567,7 +596,7 @@ User-authorized data sources for deeper UX/SEO insight:
 - **SEMrush** — keyword/traffic data.
 
 ### 6.3 Tickets (Epic P2-E5, v3)
-- P2-26 Competitor benchmarking provider + benchmarked scoring
+- P2-26 Competitor benchmarking scaffold + live provider client
 - P2-27 GA4 + Search Console OAuth integrations & insight extraction
 - P2-28 Microsoft Clarity + SEMrush integrations
 
@@ -696,7 +725,7 @@ sources.
 | Accessibility | **axe-core** via existing Playwright | Workstream D; reuses the crawler's browser |
 | Field CWV | **CrUX API** (LCP/INP/CLS) | Workstream D; free, real-world ranking signal |
 | Error tracking | Sentry | App now has meaningful flows |
-| Benchmarking (v3) | SEMrush / Ahrefs / Similarweb API | Recurring cost |
+| Live benchmarking providers (v3) | SEMrush / Ahrefs / Similarweb API | Recurring cost |
 | Analytics (v3) | GA4 Data API, Search Console API, Clarity, SEMrush | User OAuth |
 | LLM commentary | Existing OpenAI pipeline (or Claude Sonnet 4.6 + Haiku 4.5 per Technical Assessment) | Provider-agnostic contract |
 
@@ -713,8 +742,8 @@ B and D can overlap once the social-data path (§3.2) is confirmed.
 | **Phase 2.0** | Discovery & scope lock — social path locked (**Apify free tier** for IG/FB *(was Bright Data; round 2)*; legal ✅ given), create a **free Apify account + API token**, draft `social.yaml`, confirm volume. **No paid smoke test (P2-3 removed).** | **2–3 days** |
 | **Track A** | Productionization & platform — *internal scope* (team auth, hosting, ~~S3~~ **local storage + retention (S3 removed; SSRF ✅ done)**, monitoring, dashboard/history) | **2–3 weeks** (no multi-tenancy) |
 | **Track D** | Deepen website audit (schema, AEO, CrUX, a11y, local SEO, link health) — runs in parallel with A | **1–2 weeks** |
-| **Track B** | Social media audit — **standalone** (collectors, extractors, `social.yaml`, commentary, validation, **separate Social report**; no website-composite change — *updated 2026-06-23*) | **3–4 weeks** (swings on §3.2) |
-| **Track C** | Enrichment — benchmarking + analytics integrations | **4–5 weeks** (v3) |
+| **Track B** | Social media audit — backend standalone score/report plus current combined website+social flow from the Website Audit page (`social.yaml` v3, IG/FB/YouTube, auto-discovery) | **3–4 weeks** (swings on §3.2) |
+| **Track C** | Enrichment — live benchmarking providers + analytics integrations | **4–5 weeks** (v3) |
 
 ### 9.1 Week-by-week (core: A + D + B)
 
@@ -756,12 +785,13 @@ volume.
 | Hosting (Vercel + Railway/Render) | **~$0–40/mo** | Hobby/free tiers may suffice internally |
 | Auth (Clerk/Supabase) | **Free** | Internal team is well under free limits |
 | Error tracking (Sentry) | **Free → ~$26/mo** | Free tier likely fine |
-| Benchmarking API (v3 only) | **$$$** SEMrush/Ahrefs | Defer to Track C |
+| Live benchmarking API (v3 only) | **$$$** SEMrush/Ahrefs | Defer to Track C |
 
 > **Takeaway:** the recurring cost of the *core* Phase 2 (A + B + D) for internal use
 > is roughly **$0–100/month** — dominated by hosting tiers, not data. The scraper,
 > the thing the original assessment worried about, is now **$0** on **Apify's free tier** at this
-> volume *(round 2)*. Benchmarking (Track C) is the only expensive integration; that's why it's v3.
+> volume *(round 2)*. Live benchmarking providers (Track C) are the expensive integration; that's
+> why they stay v3 even though the no-cost scaffold has shipped.
 
 ---
 
@@ -805,7 +835,9 @@ Phase 2 core (A + D + B) is successful when:
 
 ## 13. Out Of Scope For Phase 2 Core (v3+)
 
-- Competitor benchmarking and analytics integrations (Workstream C) unless explicitly pulled forward in §3.3.
+- Live competitor-benchmarking provider clients and analytics integrations (Workstream C) unless
+  explicitly pulled forward in §3.3. The no-cost benchmarking scaffold has already been pulled
+  forward and shipped.
 - Anything not in the original scope document (e.g. paid ads audits, CRM integrations).
 
 ---
@@ -885,9 +917,10 @@ Social data access, costs, and legal posture in this plan were checked against c
 > **Update (2026-06-23) — Workstream B is now ✅ BUILT.** The standalone social audit shipped
 > end-to-end (Apify IG+FB, `rubrics/social.yaml` standalone Social Score, deterministic rule-derived
 > findings, separate `social_report.html` PDF, `audit_type` discriminator on `audit_jobs`, Alembic
-> migration `20260623_0004` (current head `20260625_0005`), a Social Audit UI tab/`/social` page)
-> and is tested (119 unit tests; live
-> IG+FB runs). The website audit is untouched (its composite stays `{seo, uxui}`; QA 11/11). See the
+> migration `20260623_0004` (current head `20260625_0005`), and the current Website Audit
+> combined-flow UI)
+> and is tested (unit suite + live IG/FB runs; YouTube backend covered by fixtures). The website
+> audit composite stays `{seo, uxui}`; combined reports add Overall Lead-Gen Readiness separately. See the
 > top-of-doc **SHIPPED (2026-06-23)** banner and §5/§5.4 for as-built detail. **Remaining unbuilt:**
 > **Workstream D** (deepen the website audit, P2-E3) and **Workstream C** (enrichment, v3). AI
 > Insights stays parked; P2-7 (S3) stays removed.
