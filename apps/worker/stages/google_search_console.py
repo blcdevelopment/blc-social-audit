@@ -761,79 +761,96 @@ def _query_tokens(query: str, brand_token: str) -> list[str]:
     ]
 
 
+def _content_chars(phrase: str) -> int:
+    """Total length of a phrase's content words (>=4 letters, not a stopword) — a proxy for
+    how much real meaning it carries, used to prefer "plomería méxico" over "méxico df"."""
+    return sum(
+        len(word) for word in phrase.split() if len(word) >= 4 and word not in _CLUSTER_STOPWORDS
+    )
+
+
 def _topic_clusters(
     rows: list[JsonDict], brand_token: str, *, max_clusters: int = 6
 ) -> list[JsonDict]:
-    """P4: deterministic topic-cluster visibility. Seeds are the highest-impression content tokens
-    across the query set; each query joins the first seed it contains. No LLM, no external
-    taxonomy."""
-    weights: dict[str, float] = {}
+    """P4: deterministic topic-cluster visibility. Groups queries by the heaviest CONTENT TOKEN
+    they share (broad coverage — the way a marketer thinks in themes), but LABELS each group
+    with its cleanest phrase so the report reads "square foot", not the bare token "square"
+    (nor the two fragments "square" + "foot" the live run once showed). Co-occurring fragments
+    are folded into one cluster. No LLM, no external taxonomy.
+
+    Seeding on phrases directly (an earlier attempt) read well but under-counted: a broad query
+    like "square footage estimate" contains no exact phrase seed and vanished, deflating every
+    theme. Token grouping restores coverage; the phrase is used only for display.
+    """
+    token_weights: dict[str, float] = {}
+    phrase_weights: dict[str, float] = {}
     for row in rows:
         impressions = float(row.get("impressions") or 0)
-        for gram in set(_query_ngrams(str(row.get("query") or ""), brand_token)):
-            weights[gram] = weights.get(gram, 0.0) + impressions
-    if not weights:
+        query = str(row.get("query") or "")
+        for token in set(_query_tokens(query, brand_token)):
+            token_weights[token] = token_weights.get(token, 0.0) + impressions
+        for gram in set(_query_ngrams(query, brand_token)):
+            if len(gram.split()) >= 2:
+                phrase_weights[gram] = phrase_weights.get(gram, 0.0) + impressions
+    if not token_weights:
         return []
-    # A single token collects at least the impressions of every phrase containing it, so
-    # sorting phrases and tokens together lets the heaviest unigrams win every seed and
-    # then subsume their own phrases (the live run rendered "square", "foot" instead of
-    # "square foot"). Seed readable multi-word phrases FIRST — de-duplicated by shared
-    # content words so near-identical variants don't take two slots — then fill any
-    # remaining slots with tokens no phrase already covers.
-    candidates = sorted(weights.items(), key=lambda kv: (-kv[1], -len(kv[0].split()), kv[0]))
-    seeds: list[str] = []
-    seed_content: set[str] = set()
 
-    def _content_words(gram: str) -> set[str]:
-        return {word for word in gram.split() if len(word) >= 4 and word not in _CLUSTER_STOPWORDS}
+    def _label_for(token: str) -> str:
+        # Cleanest phrase that includes this token as a word: prefer heavier, then SHORTER
+        # (so "square foot" wins over "foot to build"), then more real content, then alpha.
+        # Falls back to the bare token when no multi-word query contains it.
+        best_key: tuple[float, int, int, str] | None = None
+        chosen = token
+        for phrase, weight in phrase_weights.items():
+            if token not in phrase.split():
+                continue
+            key = (-weight, len(phrase.split()), -_content_chars(phrase), phrase)
+            if best_key is None or key < best_key:
+                best_key = key
+                chosen = phrase
+        return chosen
 
-    for gram, _weight in candidates:
+    seeds: list[tuple[str, str]] = []  # (grouping token, display label)
+    claimed: set[str] = set()
+    for token, _weight in sorted(token_weights.items(), key=lambda kv: (-kv[1], kv[0])):
         if len(seeds) >= max_clusters:
             break
-        if len(gram.split()) < 2:
+        if token in claimed:
             continue
-        if any(_contains_phrase(seed, gram) or _contains_phrase(gram, seed) for seed in seeds):
-            continue
-        gram_content = _content_words(gram)
-        if gram_content & seed_content:
-            continue
-        seeds.append(gram)
-        seed_content |= gram_content
-    for gram, _weight in candidates:
-        if len(seeds) >= max_clusters:
-            break
-        if len(gram.split()) != 1 or gram in seed_content:
-            continue
-        if any(_contains_phrase(seed, gram) for seed in seeds):
-            continue
-        seeds.append(gram)
-        seed_content.add(gram)
+        label = _label_for(token)
+        seeds.append((token, label))
+        # Fold every content word in the chosen label into "claimed" so a co-occurring
+        # fragment (the "foot" of "square foot") cannot open a second, duplicate cluster.
+        claimed.add(token)
+        claimed |= {
+            word for word in label.split() if len(word) >= 4 and word not in _CLUSTER_STOPWORDS
+        }
+
     buckets: dict[str, dict[str, float]] = {
-        seed: {"impressions": 0.0, "position_weight": 0.0, "count": 0.0} for seed in seeds
+        token: {"impressions": 0.0, "position_weight": 0.0, "count": 0.0} for token, _ in seeds
     }
     for row in rows:
         impressions = float(row.get("impressions") or 0)
         position = float(row.get("position") or 0)
-        normalized = " ".join(_query_terms(str(row.get("query") or "")))
-        seed = next(
-            (candidate for candidate in seeds if _contains_phrase(normalized, candidate)), None
-        )
-        if seed is None:
+        terms = set(_query_terms(str(row.get("query") or "")))
+        token = next((seed_token for seed_token, _label in seeds if seed_token in terms), None)
+        if token is None:
             continue
-        bucket = buckets[seed]
+        bucket = buckets[token]
         bucket["impressions"] += impressions
         bucket["position_weight"] += position * impressions
         bucket["count"] += 1
+    labels = dict(seeds)
     clusters = [
         {
-            "cluster": seed,
+            "cluster": labels[token],
             "query_count": int(bucket["count"]),
             "impressions": int(bucket["impressions"] + 0.5),
             "avg_position": round(bucket["position_weight"] / bucket["impressions"], 1)
             if bucket["impressions"] > 0
             else 0.0,
         }
-        for seed, bucket in buckets.items()
+        for token, bucket in buckets.items()
         if bucket["count"] > 0 and bucket["impressions"] > 0
     ]
     clusters.sort(key=lambda item: (-item["impressions"], item["cluster"]))

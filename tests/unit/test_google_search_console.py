@@ -150,11 +150,15 @@ def test_cluster_labels_trim_stopword_edges() -> None:
 
 def test_cluster_labels_keep_unicode_words_whole() -> None:
     # The old [^a-z0-9] tokenizer fragmented accented words into garbage phrase labels
-    # ("a m xico"); \W-based splitting keeps them whole.
+    # ("a m xico"); \W-based splitting keeps them whole. The label is the cleanest phrase
+    # ("plomería méxico"), so both accented words survive intact — that's the point here.
     rows = [{"query": "plomería méxico df", "impressions": 500, "clicks": 5}]
     clusters = _topic_clusters(rows, "")
     assert clusters
-    assert clusters[0]["cluster"] == "plomería méxico df"
+    label = clusters[0]["cluster"]
+    assert "plomería" in label.split()
+    assert "méxico" in label.split()
+    assert "m" not in label.split() and "xico" not in label.split()  # no fragmentation
 
 
 def test_branded_split_matches_spaced_brand_queries() -> None:
@@ -246,3 +250,35 @@ def test_topic_clusters_phrase_wins_when_token_out_weighs_it() -> None:
         words = label.split()
         assert words[0] not in {"per", "to", "a", "of"}
         assert words[-1] not in {"per", "to", "a", "of"}
+
+
+def test_topic_clusters_do_not_drop_token_sharing_queries() -> None:
+    # Phrase-first seeding (an earlier attempt) read well but silently dropped broad queries
+    # that shared a topic token yet contained no exact seed phrase, deflating every theme.
+    # Token grouping must keep them: "square footage estimate" and "construction loan
+    # calculator" share a token with a themed query and must land in a cluster, not vanish.
+    rows = [
+        {"query": "cost per square foot to build a house", "impressions": 2000, "position": 6},
+        {"query": "square footage estimate", "impressions": 900, "position": 9},  # 'footage'
+        {"query": "square footage calculator", "impressions": 700, "position": 8},
+        {"query": "construction cost per square foot", "impressions": 1700, "position": 5},
+        {"query": "construction loan calculator", "impressions": 1500, "position": 12},  # broad
+    ]
+    clusters = _topic_clusters(rows, "")
+    covered = sum(c["impressions"] for c in clusters)
+    total = sum(r["impressions"] for r in rows)
+    # Every impression is represented — no theme is deflated by dropped queries.
+    assert covered == total
+    labels = [c["cluster"] for c in clusters]
+    assert all(" " in label for label in labels)  # still readable phrases, not tokens
+    assert clusters == _topic_clusters(rows, "")  # deterministic
+
+
+def test_topic_clusters_avoid_awkward_mid_filler_labels() -> None:
+    # A "square foot to build shed" query used to be able to seed the awkward label
+    # "foot to build"; preferring shorter, heavier phrases keeps labels clean.
+    rows = [{"query": "square foot to build shed", "impressions": 100, "position": 6}]
+    labels = [c["cluster"] for c in _topic_clusters(rows, "")]
+    assert "foot to build" not in labels
+    for label in labels:
+        assert " to " not in f" {label} "

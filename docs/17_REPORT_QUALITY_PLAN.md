@@ -462,9 +462,14 @@ fixtures had hidden; all three fixed with regression tests keyed to the live dat
 (a) **#18 topic labels still rendered single tokens** ("square", "foot", "builder") because a
 unigram collects at least the impressions of every phrase containing it, so on real
 (never-tied) data the heaviest token won every seed and subsumed its own phrases —
-`_topic_clusters` now seeds readable multi-word phrases FIRST (de-duped by shared content
-words), fills remaining slots with tokens no phrase covers, and trims edge function words
-(`_CLUSTER_EDGE_FILLERS`) while keeping meaningful short tokens like "df"; (b) **#8/#13 "0
+`_topic_clusters` now **groups queries by their heaviest shared content TOKEN** (broad
+coverage) but **labels each group with its cleanest phrase** (`_label_for`: heaviest, then
+shortest, then most-content-chars, so "square foot" not "foot to build"), folding co-occurring
+fragments into one cluster and trimming edge function words (`_CLUSTER_EDGE_FILLERS`) while
+keeping meaningful short tokens like "df". (An interim phrase-FIRST seeding read well but an
+adversarial review caught that it silently dropped broad token-sharing queries — "square
+footage estimate" matched no exact phrase and vanished, deflating every theme; token grouping
+restores 100% coverage while keeping phrase labels.) (b) **#8/#13 "0
 homepage form fields" still printed** — the homepage wraps its lazy LeadConnector embed in an
 empty `<form>` shell, so the static parse returned a real form with 0 inputs; the extractor
 now treats a zero-input static form beside a frame/embed signal as uncountable (`None` ⇒ the
@@ -472,7 +477,10 @@ field-count rule skips) or adopts the measured frame count; (c) **#15/#17 Site H
 empty** — prod runs Screaming Frog enabled but the binary isn't installed, so it failed and the
 selector discarded the sweep's real `partial: bot_blocked` data; `_collect_technical_crawl` now
 prefers a `partial` sweep over a failed Screaming Frog attempt, so the checked links and the
-honest WAF/bot-block note (Shayan's #17 question) reach the report. 6 more regression tests.
+honest WAF/bot-block note (Shayan's #17 question) reach the report. These three were then run
+through a 3-reviewer adversarial workflow: it verdicted the form and sweep fixes correct and
+flagged the topic-clusterer coverage regression above (which drove the token-grouping rewrite)
+plus a mid-filler-label leak — both since fixed. ~10 regression tests across the follow-up.
 **Ops note:** set `SCREAMING_FROG_ENABLED=false` on the prod worker until the licensed binary
 is actually installed, so the sweep is the primary source rather than a fallback after a
 guaranteed SF failure.
