@@ -389,6 +389,74 @@ def test_popup_embed_form_gets_credit_without_static_form() -> None:
     assert facts["summary"]["pages_with_form_capture"] == 1
 
 
+def test_zero_field_form_shell_around_embed_is_uncountable() -> None:
+    # The live BLC homepage has an empty <form> shell wrapping a lazy LeadConnector embed,
+    # so the static parse found a form with 0 inputs and printed "0 homepage form fields".
+    # A zero-input static form beside a provider embed means the real fields live in the
+    # embed and can't be counted here -> None (rule skips), not a false 0.
+    from types import SimpleNamespace
+
+    from apps.worker.stages.extractor_uxui import extract_uxui_facts
+
+    html = (
+        "<html><body>"
+        '<form id="lead-form"></form>'
+        '<script src="https://link.msgsndr.com/js/form_embed.js"></script>'
+        '<iframe src="https://api.leadconnectorhq.com/widget/form/ABC123" loading="lazy">'
+        "</iframe>"
+        "</body></html>"
+    )
+    facts = extract_uxui_facts(
+        [SimpleNamespace(url="https://x.test/", final_url="https://x.test/", html=html)]
+    )
+    page = facts["pages"][0]
+    assert page["forms"]["form_detected"] == "static_form"
+    assert page["forms"]["total_field_count"] is None
+    assert page["lead_capture"]["has_form"] is True
+    assert facts["summary"]["pages_with_form_capture"] == 1
+
+
+def test_zero_field_form_shell_around_measured_iframe_uses_frame_count() -> None:
+    # Same empty <form> shell, but this time the crawler's frame pass DID measure the
+    # embedded form's fields -> use that honest count, not the shell's 0.
+    from types import SimpleNamespace
+
+    from apps.worker.stages.extractor_uxui import extract_uxui_facts
+
+    page_obj = SimpleNamespace(
+        url="https://x.test/",
+        final_url="https://x.test/",
+        html='<html><body><form id="lead-form"></form></body></html>',
+        frame_form_count=1,
+        frame_form_field_count=3,
+    )
+    facts = extract_uxui_facts([page_obj])
+    page = facts["pages"][0]
+    assert page["forms"]["form_detected"] == "static_form"
+    assert page["forms"]["total_field_count"] == 3
+
+
+def test_static_form_with_real_fields_keeps_its_count() -> None:
+    # Regression guard: a genuine static form with inputs must NOT be treated as
+    # uncountable just because an unrelated embed also appears on the page.
+    from types import SimpleNamespace
+
+    from apps.worker.stages.extractor_uxui import extract_uxui_facts
+
+    html = (
+        "<html><body>"
+        '<form><input name="name"><input name="email"><input name="phone"></form>'
+        '<script src="https://link.msgsndr.com/js/form_embed.js"></script>'
+        "</body></html>"
+    )
+    facts = extract_uxui_facts(
+        [SimpleNamespace(url="https://x.test/", final_url="https://x.test/", html=html)]
+    )
+    page = facts["pages"][0]
+    assert page["forms"]["form_detected"] == "static_form"
+    assert page["forms"]["total_field_count"] == 3
+
+
 def test_runtime_iframe_form_counts_from_frame_pass() -> None:
     from types import SimpleNamespace
 

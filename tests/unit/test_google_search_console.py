@@ -222,3 +222,27 @@ def test_topic_clusters_prefer_readable_phrases() -> None:
     assert "foot" not in labels
     # Deterministic across runs.
     assert labels == [cluster["cluster"] for cluster in _topic_clusters(rows, "")]
+
+
+def test_topic_clusters_phrase_wins_when_token_out_weighs_it() -> None:
+    # The live report still showed single tokens ("square", "foot", "builder") because a
+    # unigram collects at least the impressions of every phrase containing it, so in real
+    # data (never a tie) the heaviest token won every seed and subsumed its own phrases.
+    # Phrase-first seeding must beat a strictly-heavier token. "square" here totals more
+    # impressions than "square foot", yet the label must still read as a phrase.
+    rows = [
+        {"query": "square foot cost", "impressions": 5000, "position": 6},
+        {"query": "square footage estimate", "impressions": 4000, "position": 7},
+        {"query": "square foot to build", "impressions": 3000, "position": 8},
+        {"query": "cost per square foot to build a house", "impressions": 2000, "position": 6},
+    ]
+    labels = [c["cluster"] for c in _topic_clusters(rows, "")]
+    assert labels, "expected at least one cluster"
+    assert "square" not in labels and "foot" not in labels and "footage" not in labels
+    # Every label is a readable multi-word phrase, none a bare single token.
+    assert all(" " in label for label in labels)
+    # No filler-only edges leak in ("... to", "per ...").
+    for label in labels:
+        words = label.split()
+        assert words[0] not in {"per", "to", "a", "of"}
+        assert words[-1] not in {"per", "to", "a", "of"}

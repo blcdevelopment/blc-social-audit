@@ -299,6 +299,15 @@ def extract_uxui_facts_for_page(page: object) -> JsonDict:
         form_detected = "none"
     if forms:
         total_field_count: int | None = sum(form["field_count"] for form in forms)
+        if total_field_count == 0 and frame_form_field_count:
+            # A zero-input <form> shell wrapping an iframe whose fields WERE measured:
+            # the iframe holds the real form, so its count is the honest one.
+            total_field_count = frame_form_field_count
+        elif total_field_count == 0 and (frame_form_count or embedded_providers):
+            # A zero-input <form> shell around a popup/lazy embed (LeadConnector-style):
+            # the real fields live in the embed and can't be counted from here —
+            # None (not 0) so the field-count rule skips instead of failing "0 fields".
+            total_field_count = None
     elif frame_form_count and frame_form_field_count:
         total_field_count = frame_form_field_count
     elif form_detected != "none":

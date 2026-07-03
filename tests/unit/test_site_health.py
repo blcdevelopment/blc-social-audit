@@ -394,6 +394,71 @@ def test_external_seo_uses_site_health_when_screaming_frog_disabled() -> None:
     assert facts["gsc"]["status"] == "skipped"
 
 
+def test_partial_sweep_preferred_over_failed_screaming_frog(monkeypatch) -> None:
+    # Prod runs with Screaming Frog ENABLED but the binary is not installed, so SF
+    # fails; the sweep then returns partial:bot_blocked (a WAF throttled it). The
+    # partial sweep still carries the links it DID check plus the honest bot-block
+    # note, so it must win over the SF failure (which used to blank the whole section).
+    from apps.worker.stages import external_seo
+
+    def _failed_sf(url, audit_id, settings, deadline=None):
+        return {"status": "failed", "error": "screaming frog binary not found", "summary": {}}
+
+    def _partial_sweep(**kwargs):
+        return {
+            "status": "partial",
+            "reason": "bot_blocked",
+            "summary": {"duplicate_titles": 1},
+            "issues": [],
+            "notes": ["Link checks stopped early after repeated blocks."],
+        }
+
+    monkeypatch.setattr(external_seo, "collect_screaming_frog_facts", _failed_sf)
+    monkeypatch.setattr(external_seo, "collect_site_health_facts", _partial_sweep)
+
+    facts = external_seo._collect_technical_crawl(
+        url="https://example.com/",
+        audit_id="audit-1",
+        settings=_settings(screaming_frog_enabled=True),
+        seo_facts={"status": "complete", "pages": []},
+        crawled_pages={"final_url": "https://example.com/"},
+        rendered_pages=None,
+    )
+
+    assert facts["status"] == "partial"
+    assert facts["reason"] == "bot_blocked"
+    # The SF attempt is recorded as context, not shown as the section's whole content.
+    assert facts["screaming_frog_attempt"]["status"] == "failed"
+    assert any("stopped early" in note for note in facts["notes"])
+
+
+def test_failed_screaming_frog_still_shown_when_sweep_also_fails(monkeypatch) -> None:
+    # When BOTH tools produce nothing usable, the operator-enabled SF failure is what
+    # the section reports (unchanged behavior — the fix only rescues a partial sweep).
+    from apps.worker.stages import external_seo
+
+    def _failed_sf(url, audit_id, settings, deadline=None):
+        return {"status": "failed", "error": "screaming frog binary not found", "summary": {}}
+
+    def _failed_sweep(**kwargs):
+        return {"status": "failed", "reason": "unknown_error", "summary": {}, "issues": []}
+
+    monkeypatch.setattr(external_seo, "collect_screaming_frog_facts", _failed_sf)
+    monkeypatch.setattr(external_seo, "collect_site_health_facts", _failed_sweep)
+
+    facts = external_seo._collect_technical_crawl(
+        url="https://example.com/",
+        audit_id="audit-1",
+        settings=_settings(screaming_frog_enabled=True),
+        seo_facts={"status": "complete", "pages": []},
+        crawled_pages={"final_url": "https://example.com/"},
+        rendered_pages=None,
+    )
+
+    assert facts["status"] == "failed"
+    assert facts["error"] == "screaming frog binary not found"
+
+
 def test_breaker_trips_and_reports_bot_blocked(monkeypatch) -> None:
     # Consecutive connection failures (a WAF dropping the checker, or a dead host) must
     # stop the sweep and mark the source partial:bot_blocked instead of emitting mass

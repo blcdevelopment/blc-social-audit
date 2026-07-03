@@ -556,6 +556,8 @@ _CLUSTER_STOPWORDS = frozenset(
         "costs",
         "price",
         "prices",
+        "per",
+        "much",
         "company",
         "companies",
         "service",
@@ -565,6 +567,12 @@ _CLUSTER_STOPWORDS = frozenset(
         "home",
         "homes",
     }
+)
+
+# Function words that must never begin or end a topic label ("square foot to" -> "square
+# foot"). Trimmed only at the edges, so they can still appear mid-phrase ("build a house").
+_CLUSTER_EDGE_FILLERS = _CLUSTER_STOPWORDS | frozenset(
+    {"to", "a", "an", "of", "in", "on", "at", "by", "or", "is", "it", "as", "vs"}
 )
 
 
@@ -723,11 +731,13 @@ def _query_ngrams(query: str, brand_token: str) -> list[str]:
             piece = words[start : start + size]
             if brand_token and brand_token in piece:
                 continue
-            # Trim stopword edges so a label never reads "repair near me" or
-            # "roof repair near" — the rendered phrase keeps its subject noun.
-            while piece and piece[0] in _CLUSTER_STOPWORDS:
+            # Trim stopword/function-word edges so a label never reads "repair near me",
+            # "square foot to", or "per square" — the rendered phrase keeps its subject
+            # nouns. Only explicit fillers are stripped, so a meaningful short token like
+            # "df" (Mexico City) or "ai" survives.
+            while piece and piece[0] in _CLUSTER_EDGE_FILLERS:
                 piece = piece[1:]
-            while piece and piece[-1] in _CLUSTER_STOPWORDS:
+            while piece and piece[-1] in _CLUSTER_EDGE_FILLERS:
                 piece = piece[:-1]
             if len(piece) < 2:
                 continue
@@ -764,17 +774,40 @@ def _topic_clusters(
             weights[gram] = weights.get(gram, 0.0) + impressions
     if not weights:
         return []
-    # Longer phrases win ties so "cost per square foot" beats its own fragments, and a
-    # candidate that contains (or is contained by) a picked seed is skipped — the split
-    # that used to surface "square" and "foot" as two separate topics.
+    # A single token collects at least the impressions of every phrase containing it, so
+    # sorting phrases and tokens together lets the heaviest unigrams win every seed and
+    # then subsume their own phrases (the live run rendered "square", "foot" instead of
+    # "square foot"). Seed readable multi-word phrases FIRST — de-duplicated by shared
+    # content words so near-identical variants don't take two slots — then fill any
+    # remaining slots with tokens no phrase already covers.
     candidates = sorted(weights.items(), key=lambda kv: (-kv[1], -len(kv[0].split()), kv[0]))
     seeds: list[str] = []
+    seed_content: set[str] = set()
+
+    def _content_words(gram: str) -> set[str]:
+        return {word for word in gram.split() if len(word) >= 4 and word not in _CLUSTER_STOPWORDS}
+
     for gram, _weight in candidates:
         if len(seeds) >= max_clusters:
             break
+        if len(gram.split()) < 2:
+            continue
         if any(_contains_phrase(seed, gram) or _contains_phrase(gram, seed) for seed in seeds):
             continue
+        gram_content = _content_words(gram)
+        if gram_content & seed_content:
+            continue
         seeds.append(gram)
+        seed_content |= gram_content
+    for gram, _weight in candidates:
+        if len(seeds) >= max_clusters:
+            break
+        if len(gram.split()) != 1 or gram in seed_content:
+            continue
+        if any(_contains_phrase(seed, gram) for seed in seeds):
+            continue
+        seeds.append(gram)
+        seed_content.add(gram)
     buckets: dict[str, dict[str, float]] = {
         seed: {"impressions": 0.0, "position_weight": 0.0, "count": 0.0} for seed in seeds
     }
