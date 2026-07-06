@@ -282,3 +282,21 @@ def test_topic_clusters_avoid_awkward_mid_filler_labels() -> None:
     assert "foot to build" not in labels
     for label in labels:
         assert " to " not in f" {label} "
+
+
+def test_topic_clusters_folded_fragment_query_is_not_dropped() -> None:
+    # Regression (code review): a query whose only content token is a FRAGMENT folded into a
+    # heavier seed's label must land in that seed's cluster, not vanish. Before the ownership
+    # bucketing fix, "bravo" (folded into the "alpha bravo" label of the heavier "alpha" seed)
+    # matched no bare seed token and its 10 impressions were silently dropped, deflating the
+    # theme's total — the exact coverage loss the token-grouping rewrite is meant to prevent.
+    rows = [
+        {"query": "alpha bravo", "impressions": 1000, "position": 5},
+        {"query": "alpha extra", "impressions": 100, "position": 5},
+        {"query": "bravo", "impressions": 10, "position": 5},  # only content token is 'bravo'
+    ]
+    clusters = _topic_clusters(rows, "")
+    covered = sum(c["impressions"] for c in clusters)
+    total = sum(r["impressions"] for r in rows)
+    assert covered == total  # no impressions dropped
+    assert clusters == _topic_clusters(rows, "")  # deterministic

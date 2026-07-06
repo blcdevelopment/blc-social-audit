@@ -297,25 +297,22 @@ def extract_uxui_facts_for_page(page: object) -> JsonDict:
         form_detected = "provider_embed"
     else:
         form_detected = "none"
-    if forms:
-        total_field_count: int | None = sum(form["field_count"] for form in forms)
-        if total_field_count == 0 and frame_form_field_count:
-            # A zero-input <form> shell wrapping an iframe whose fields WERE measured:
-            # the iframe holds the real form, so its count is the honest one.
-            total_field_count = frame_form_field_count
-        elif total_field_count == 0 and (frame_form_count or embedded_providers):
-            # A zero-input <form> shell around a popup/lazy embed (LeadConnector-style):
-            # the real fields live in the embed and can't be counted from here —
-            # None (not 0) so the field-count rule skips instead of failing "0 fields".
-            total_field_count = None
-    elif frame_form_count and frame_form_field_count:
+    # The homepage field-count rule judges a form's SIZE (1-5 fields ideal). We only ever
+    # assert a size we actually measured: a positive count of real static inputs, or the
+    # crawler's frame pass count. A count of 0 never means "a usable form with zero fields"
+    # — it means we could not measure the form (a JS/popup form that loads on click, an
+    # embed, a lazy iframe, or no form at all). In every such case the fact is None so the
+    # rule SKIPS (rescales) instead of printing a false "0 homepage form fields". Whether a
+    # form EXISTS at all is judged separately by uxui.forms.present (which credits embeds
+    # and frame forms), so skipping the size check here never hides a missing form.
+    static_field_count = sum(form["field_count"] for form in forms)  # 0 when there are no forms
+    total_field_count: int | None
+    if static_field_count >= 1:
+        total_field_count = static_field_count
+    elif frame_form_field_count >= 1:
         total_field_count = frame_form_field_count
-    elif form_detected != "none":
-        # An embedded/popup form exists but its fields can't be counted from here —
-        # None (not 0) so the field-count rule skips and rescales instead of failing.
-        total_field_count = None
     else:
-        total_field_count = 0
+        total_field_count = None
 
     nav_links = [
         anchor

@@ -476,7 +476,11 @@ def test_runtime_iframe_form_counts_from_frame_pass() -> None:
     assert facts["summary"]["pages_with_form_capture"] == 1
 
 
-def test_page_with_no_form_of_any_kind_still_fails_honestly() -> None:
+def test_page_with_no_countable_form_does_not_assert_a_field_count() -> None:
+    # A page with no measurable form must NOT assert "0 homepage form fields": a count of 0
+    # never means "a usable form with zero fields", it means we could not measure a form
+    # (popup/JS/embed or none). total_field_count is None so the size rule SKIPS; whether a
+    # form exists at all is judged separately by forms.present (here: absent).
     from types import SimpleNamespace
 
     from apps.worker.stages.extractor_uxui import extract_uxui_facts
@@ -492,8 +496,36 @@ def test_page_with_no_form_of_any_kind_still_fails_honestly() -> None:
     )
     page = facts["pages"][0]
     assert page["forms"]["form_detected"] == "none"
-    assert page["forms"]["total_field_count"] == 0
+    assert page["forms"]["total_field_count"] is None
     assert facts["summary"]["pages_with_form_capture"] == 0
+
+
+def test_js_popup_form_homepage_never_prints_zero_fields() -> None:
+    # The live BLC case: the homepage form is a click-triggered popup, so the served/rendered
+    # HTML has no <form>, no <iframe>, no inputs, and no recognized provider signature. The
+    # audit must not print the false "0 homepage form fields" — the size fact is None (rule
+    # skips) rather than a scored 0.
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from apps.worker.stages.extractor_uxui import extract_uxui_facts
+    from apps.worker.stages.scoring import load_rubric, score_category
+
+    html = (
+        "<html><body>"
+        "<h1>Custom Home Builder</h1>"
+        '<a href="#" class="btn" data-open="quote">Get a quote</a>'  # popup trigger, no form in DOM
+        '<a href="tel:+15551234567">(555) 123-4567</a>'
+        "</body></html>"
+    )
+    uxui = extract_uxui_facts(
+        [SimpleNamespace(url="https://x.test/", final_url="https://x.test/", html=html)]
+    )
+    assert uxui["pages"][0]["forms"]["total_field_count"] is None
+
+    out = score_category(uxui, load_rubric(Path("rubrics/uxui.yaml")))
+    field_rule = next(r for r in out["rules"] if r["rule_id"] == "uxui.homepage_form.field_count")
+    assert field_rule["result"] == "skipped"  # no false "0 fields" finding
 
 
 def test_popup_embed_passes_form_rule_and_skips_field_count() -> None:

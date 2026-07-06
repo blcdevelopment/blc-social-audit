@@ -525,7 +525,7 @@ def _evidence_sentence(rule: JsonDict, context: JsonDict, facts: JsonDict) -> st
         return None
     fact_path = str(rule.get("fact_path") or "")
     if fact_path.endswith("_pct"):
-        return f"The audit measured this at {number}% across the crawled pages."
+        return f"The audit measured this at {number}% across the analyzed pages."
     noun = str(context.get("noun") or "item")
     # Multi-word noun phrases pluralize their head word, not the phrase end
     # ("pages missing a title tag", never "page missing a title tags").
@@ -542,7 +542,7 @@ _GENERIC_CONTEXT = {
     "meaning": "This finding marks a check that did not fully pass.",
     "why": "It matters because the issue can make the page harder to understand, trust, or act on.",
     "noun": "item",
-    "failed_check": "The audit check did not pass for the crawled page or pages.",
+    "failed_check": "The audit check did not pass for the analyzed page or pages.",
 }
 
 _RULE_CONTEXT: dict[str, JsonDict] = {
@@ -591,7 +591,7 @@ _RULE_CONTEXT: dict[str, JsonDict] = {
     "seo.homepage.canonical": {
         "meaning": "A canonical URL tells Google which version of a page should be treated as the preferred version.",
         "why": "Without it, duplicate URLs can split ranking signals or cause Google to choose a less useful version.",
-        "failed_check": "The homepage canonical URL was not detected in the crawled HTML.",
+        "failed_check": "The homepage canonical URL was not detected in the analyzed HTML.",
     },
     "seo.schema.present": {
         "meaning": "Schema markup is structured data that gives search engines extra context about the business, service, or page.",
@@ -610,14 +610,14 @@ _RULE_CONTEXT: dict[str, JsonDict] = {
         "noun": "noindex page",
     },
     "seo.internal_links.depth": {
-        "meaning": "Internal links help visitors and crawlers move from one useful page to the next.",
+        "meaning": "Internal links help visitors and search engines move from one useful page to the next.",
         "why": "Thin internal linking can leave good pages isolated and make next steps harder to find.",
         "noun": "internal link",
     },
     "seo.aeo.heading_hierarchy": {
         "meaning": "A clean heading outline uses one H1 and steps down through H2/H3 without skipping levels.",
         "why": "A broken outline makes the page harder for readers, screen readers, and answer engines to segment into the right sections.",
-        "failed_check": "The heading outline either repeated the H1 or jumped past a heading level on a crawled page.",
+        "failed_check": "The heading outline either repeated the H1 or jumped past a heading level on a analyzed page.",
     },
     "seo.aeo.question_headings": {
         "meaning": "Question-style subheadings phrase a section around the exact question a buyer would ask.",
@@ -628,42 +628,42 @@ _RULE_CONTEXT: dict[str, JsonDict] = {
     "seo.aeo.extractable_structure": {
         "meaning": "Lists and tables turn steps, services, and specs into scannable chunks instead of dense paragraphs.",
         "why": "Scannable structure helps visitors skim and lets answer engines lift a clean, self-contained block from the page.",
-        "failed_check": "No genuine content list or comparison table was found in the main content of the crawled page or pages.",
+        "failed_check": "No genuine content list or comparison table was found in the main content of the analyzed page or pages.",
     },
     "seo.local.nap_schema": {
         "meaning": "NAP structured data spells out the business name, postal address, and phone in a machine-readable LocalBusiness record.",
         "why": "Without complete NAP markup, search engines and AI assistants cannot confidently tie the site to a real, located business.",
-        "failed_check": "No LocalBusiness structured data with a complete name, address, and phone was found on the crawled page or pages.",
+        "failed_check": "No LocalBusiness structured data with a complete name, address, and phone was found on the analyzed page or pages.",
     },
     "seo.local.service_area": {
         "meaning": "A declared service area (areaServed or geo) tells search engines which places the business serves.",
         "why": "Local searches happen in specific cities, so an undeclared service area can keep the business out of the right local results.",
-        "failed_check": "No service area or geo coordinates were declared in the structured data on the crawled page or pages.",
+        "failed_check": "No service area or geo coordinates were declared in the structured data on the analyzed page or pages.",
     },
     "seo.local.map_or_gbp": {
         "meaning": "A Google Business Profile or map link connects the website to the verified, reviewed local listing.",
         "why": "That link reinforces the business as a real local entity and gives visitors a fast way to check the location and reviews.",
-        "failed_check": "No Google Business Profile or map link was found on the crawled page or pages.",
+        "failed_check": "No Google Business Profile or map link was found on the analyzed page or pages.",
     },
     "seo.local.visible_address": {
         "meaning": "A visible address block shows the business location to visitors, mirroring the structured-data NAP.",
         "why": "A visible, consistent address builds trust and confirms to search engines that the structured-data location is genuine.",
-        "failed_check": "No visible address block was found on the crawled page or pages.",
+        "failed_check": "No visible address block was found on the analyzed page or pages.",
     },
     "seo.a11y.html_lang": {
         "meaning": "The html element's lang attribute tells assistive technology which language the page is written in.",
         "why": "Without it, screen readers can mispronounce the content, making the page harder to use for visitors who rely on them.",
-        "failed_check": "A crawled page did not declare a language on its html element.",
+        "failed_check": "A analyzed page did not declare a language on its html element.",
     },
     "seo.a11y.viewport_zoom": {
         "meaning": "The viewport meta tag can either allow or block a visitor from pinching to zoom in.",
         "why": "Blocking zoom stops low-vision visitors from enlarging text, which is both an accessibility barrier and a conversion risk.",
-        "failed_check": "A crawled page's viewport tag disables zooming (user-scalable=no or a low maximum-scale).",
+        "failed_check": "A analyzed page's viewport tag disables zooming (user-scalable=no or a low maximum-scale).",
     },
     "seo.a11y.main_landmark": {
         "meaning": "A main landmark marks the primary content region so assistive tech can jump past the header and navigation.",
         "why": "Without it, screen-reader and keyboard users must wade through the menus on every page to reach the content.",
-        "failed_check": 'A crawled page has no main element or role="main" landmark.',
+        "failed_check": 'A analyzed page has no main element or role="main" landmark.',
     },
     "seo.a11y.no_positive_tabindex": {
         "meaning": "A positive tabindex forces an element earlier in the keyboard tab order than its position on the page.",
@@ -706,13 +706,13 @@ _RULE_CONTEXT: dict[str, JsonDict] = {
         "noun": "desktop performance point",
     },
     "seo.technical_crawl.no_broken_internal_urls": {
-        "meaning": "A broken internal URL is a link found during the crawl that returned an error instead of a usable page.",
-        "why": "Visitors and search engines can hit a dead end, which hurts trust, crawl quality, and the path to conversion.",
+        "meaning": "A broken internal URL is a link found during the site health check that returned an error instead of a usable page.",
+        "why": "Visitors and search engines can hit a dead end, which hurts trust, search visibility, and the path to conversion.",
         "noun": "broken internal URL",
         "noun_plural": "broken internal URLs",
     },
     "seo.technical_crawl.indexable_urls": {
-        "meaning": "A non-indexable internal URL is a page the crawler found but Google may not be able to include in search results.",
+        "meaning": "A non-indexable internal URL is a page the site health check found but Google may not be able to include in search results.",
         "why": "If these are important service, blog, or landing pages, they may not bring organic traffic.",
         "noun": "non-indexable internal URL",
         "noun_plural": "non-indexable internal URLs",
@@ -829,12 +829,12 @@ _RULE_CONTEXT: dict[str, JsonDict] = {
     "uxui.direct_contact.present": {
         "meaning": "Direct contact means a visitor can reach the business without hunting for another page.",
         "why": "When contact details are not obvious, high-intent visitors can drop off before converting.",
-        "failed_check": "The homepage did not show a direct contact path in the crawled HTML.",
+        "failed_check": "The homepage did not show a direct contact path in the analyzed HTML.",
     },
     "uxui.lead_capture.cta": {
         "meaning": "A homepage call to action tells visitors exactly what to do next.",
         "why": "Without it, the page can explain the business but still fail to create leads.",
-        "failed_check": "The homepage did not show a clear call to action in the crawled HTML.",
+        "failed_check": "The homepage did not show a clear call to action in the analyzed HTML.",
     },
 }
 

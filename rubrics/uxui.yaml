@@ -87,8 +87,11 @@ rules:
       full_credit: [1, 5]
       partial_credit:
         - [6, 8]
-    # An embedded/popup form's fields cannot be counted from the page HTML — the fact is
-    # None in that case, and this rule rescales instead of failing with "0 fields".
+    # This rule judges form SIZE, not presence (that is uxui.forms.present). The extractor
+    # only asserts a size it actually measured (>=1 real static input, or the crawler's
+    # frame-pass count); a count of 0 always means the form was unmeasurable (a click-driven
+    # JS/popup form, a lazy embed, or none) and becomes None, so this rule SKIPS and rescales
+    # instead of printing a false "0 homepage form fields" on sites that capture via popups.
     skip_if_missing: true
     impact: low
     tier: mid_term

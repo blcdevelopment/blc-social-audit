@@ -39,7 +39,7 @@ TECHNICAL_ISSUE_GUIDANCE: dict[str, dict[str, str]] = {
         ),
         "why_it_matters": _sentence(
             "Visitors and search engines can hit a dead end.",
-            "If important pages link to these URLs, trust, crawl quality,",
+            "If important pages link to these URLs, trust, search visibility,",
             "and user experience can suffer.",
         ),
         "recommended_fix": _sentence(
@@ -75,7 +75,7 @@ TECHNICAL_ISSUE_GUIDANCE: dict[str, dict[str, str]] = {
         "recommended_fix": _sentence(
             "Open each affected external link in a browser. Replace it with",
             "the current working URL, remove it, or use a more reliable",
-            "destination if the third-party site blocks crawlers.",
+            "destination if the third-party site blocks automated visits.",
         ),
         "location_label": "External URL returning a 4xx response",
     },
@@ -113,7 +113,8 @@ TECHNICAL_ISSUE_GUIDANCE: dict[str, dict[str, str]] = {
             "the final page.",
         ),
         "why_it_matters": _sentence(
-            "Each extra hop wastes crawl budget, slows the page for visitors,",
+            "Each extra hop makes search engines work harder to reach the page,",
+            "slows it for visitors,",
             "and can dilute the link's ranking signal.",
         ),
         "recommended_fix": _sentence(
@@ -274,11 +275,11 @@ SKIP_REASON_LABELS: dict[str, str] = {
         "property for this site."
     ),
     "screaming_frog_binary_not_found": ("Screaming Frog is not installed on the audit worker."),
-    "screaming_frog_timeout": "The Screaming Frog crawl ran out of time.",
+    "screaming_frog_timeout": "The extended site health check ran out of time.",
     "missing_google_psi_api_key": (
         "No Google PageSpeed API key is configured, so page speed was not measured."
     ),
-    "no_pages_to_analyze": "No crawled pages were available to measure.",
+    "no_pages_to_analyze": "No analyzed pages were available to measure.",
     "bot_blocked": (
         "The site's server or firewall throttled our automated link checker before it "
         "could finish, so link checks are incomplete and were not scored. Spot-check "
@@ -781,7 +782,7 @@ def _score_cards(result: Any, score_breakdown: JsonDict) -> list[ScoreCard]:
             band=_score_band(int(result.seo_score)),
             band_label=_score_band_label(int(result.seo_score)),
             description=(
-                "This score comes from checks for search visibility, metadata, crawl health, "
+                "This score comes from checks for search visibility, metadata, site health, "
                 "indexability, Search Console opportunity, PageSpeed, links, and schema. "
                 + _score_calculation_sentence("seo", score_breakdown, int(result.seo_score))
             ).strip(),

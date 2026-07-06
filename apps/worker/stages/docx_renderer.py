@@ -250,7 +250,7 @@ def _external_seo_xml(payload: ReportPayload) -> list[str]:
     )
     parts.append(
         _paragraph(
-            "How to use it: Fix high-severity crawl issues first, especially errors on "
+            "How to use it: Fix high-severity site health issues first, especially errors on "
             "important service, location, or lead pages. Use the example URLs as the starting "
             "list for the web team or CMS editor."
         )
@@ -287,7 +287,7 @@ def _external_seo_xml(payload: ReportPayload) -> list[str]:
         reason = f" Reason: {technical.reason_label}" if technical.reason_label else ""
         parts.append(
             _paragraph(
-                "Technical crawl data was not available for this report, so this section "
+                "Technical site health data was not available for this report, so this section "
                 f"does not make clean-or-broken technical SEO claims.{reason}"
             )
         )

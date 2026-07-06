@@ -720,6 +720,13 @@ def _query_terms(query: str) -> list[str]:
     return [term for term in re.split(r"[\W_]+", query.lower()) if term]
 
 
+def _is_content_word(word: str) -> bool:
+    """A word that carries topic meaning: at least 4 letters and not a cluster stopword.
+    Single source of truth for what counts as a content word across tokenizing, phrase
+    labelling, and cluster de-duplication (so the rule lives in one place, not four)."""
+    return len(word) >= 4 and word not in _CLUSTER_STOPWORDS
+
+
 def _query_ngrams(query: str, brand_token: str) -> list[str]:
     """Candidate topic labels for one query: readable phrases first (tri/bi-grams over the
     raw word sequence, so labels read like "cost per square foot" instead of disjoint
@@ -742,31 +749,23 @@ def _query_ngrams(query: str, brand_token: str) -> list[str]:
             if len(piece) < 2:
                 continue
             # A phrase must carry at least one content word to be a topic label.
-            if not any(len(word) >= 4 and word not in _CLUSTER_STOPWORDS for word in piece):
+            if not any(_is_content_word(word) for word in piece):
                 continue
             grams.append(" ".join(piece))
     grams.extend(_query_tokens(query, brand_token))
     return grams
 
 
-def _contains_phrase(container: str, phrase: str) -> bool:
-    return f" {phrase} " in f" {container} "
-
-
 def _query_tokens(query: str, brand_token: str) -> list[str]:
     return [
-        token
-        for token in _query_terms(query)
-        if len(token) >= 4 and token not in _CLUSTER_STOPWORDS and token != brand_token
+        token for token in _query_terms(query) if _is_content_word(token) and token != brand_token
     ]
 
 
 def _content_chars(phrase: str) -> int:
-    """Total length of a phrase's content words (>=4 letters, not a stopword) — a proxy for
-    how much real meaning it carries, used to prefer "plomería méxico" over "méxico df"."""
-    return sum(
-        len(word) for word in phrase.split() if len(word) >= 4 and word not in _CLUSTER_STOPWORDS
-    )
+    """Total length of a phrase's content words — a proxy for how much real meaning it
+    carries, used to prefer "plomería méxico" over "méxico df"."""
+    return sum(len(word) for word in phrase.split() if _is_content_word(word))
 
 
 def _topic_clusters(
@@ -810,7 +809,7 @@ def _topic_clusters(
                 chosen = phrase
         return chosen
 
-    seeds: list[tuple[str, str]] = []  # (grouping token, display label)
+    seeds: list[tuple[str, str, set[str]]] = []  # (grouping token, display label, owned words)
     claimed: set[str] = set()
     for token, _weight in sorted(token_weights.items(), key=lambda kv: (-kv[1], kv[0])):
         if len(seeds) >= max_clusters:
@@ -818,29 +817,33 @@ def _topic_clusters(
         if token in claimed:
             continue
         label = _label_for(token)
-        seeds.append((token, label))
-        # Fold every content word in the chosen label into "claimed" so a co-occurring
-        # fragment (the "foot" of "square foot") cannot open a second, duplicate cluster.
-        claimed.add(token)
-        claimed |= {
-            word for word in label.split() if len(word) >= 4 and word not in _CLUSTER_STOPWORDS
-        }
+        # A seed OWNS its grouping token plus every content word in its chosen label. Folding
+        # those words into "claimed" stops a co-occurring fragment (the "foot" of "square
+        # foot") from opening a second, duplicate cluster; OWNING them also means a query that
+        # carries only that fragment still lands in THIS cluster (see bucketing below) rather
+        # than being dropped — the 100% coverage the token-grouping rewrite is meant to give.
+        owned = {token} | {word for word in label.split() if _is_content_word(word)}
+        seeds.append((token, label, owned))
+        claimed |= owned
 
     buckets: dict[str, dict[str, float]] = {
-        token: {"impressions": 0.0, "position_weight": 0.0, "count": 0.0} for token, _ in seeds
+        token: {"impressions": 0.0, "position_weight": 0.0, "count": 0.0} for token, _, _ in seeds
     }
+    labels = {token: label for token, label, _ in seeds}
     for row in rows:
         impressions = float(row.get("impressions") or 0)
         position = float(row.get("position") or 0)
         terms = set(_query_terms(str(row.get("query") or "")))
-        token = next((seed_token for seed_token, _label in seeds if seed_token in terms), None)
+        # Assign to the first (heaviest) seed that OWNS any of the query's words — not just the
+        # one whose bare token appears — so a query sharing only a folded fragment lands in
+        # that fragment's cluster instead of being dropped (which silently deflated a theme).
+        token = next((seed_token for seed_token, _label, owned in seeds if owned & terms), None)
         if token is None:
             continue
         bucket = buckets[token]
         bucket["impressions"] += impressions
         bucket["position_weight"] += position * impressions
         bucket["count"] += 1
-    labels = dict(seeds)
     clusters = [
         {
             "cluster": labels[token],
