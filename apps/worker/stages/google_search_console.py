@@ -834,10 +834,16 @@ def _topic_clusters(
         impressions = float(row.get("impressions") or 0)
         position = float(row.get("position") or 0)
         terms = set(_query_terms(str(row.get("query") or "")))
-        # Assign to the first (heaviest) seed that OWNS any of the query's words — not just the
-        # one whose bare token appears — so a query sharing only a folded fragment lands in
-        # that fragment's cluster instead of being dropped (which silently deflated a theme).
-        token = next((seed_token for seed_token, _label, owned in seeds if owned & terms), None)
+        # Prefer the heaviest seed whose GROUPING TOKEN the query actually contains — that is the
+        # theme the query is genuinely about. Only when no grouping token matches (the query
+        # shares just a folded label fragment) fall back to owned-word matching, which rescues a
+        # fragment-only query into its fragment's cluster instead of dropping it, without
+        # stealing a query that belongs to a lighter seed's own grouping token.
+        token = next(
+            (seed_token for seed_token, _label, _owned in seeds if seed_token in terms), None
+        )
+        if token is None:
+            token = next((seed_token for seed_token, _label, owned in seeds if owned & terms), None)
         if token is None:
             continue
         bucket = buckets[token]

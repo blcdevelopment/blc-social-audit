@@ -300,3 +300,29 @@ def test_topic_clusters_folded_fragment_query_is_not_dropped() -> None:
     total = sum(r["impressions"] for r in rows)
     assert covered == total  # no impressions dropped
     assert clusters == _topic_clusters(rows, "")  # deterministic
+
+
+def test_topic_clusters_query_stays_in_its_own_token_theme() -> None:
+    # Regression (code review): owned-word bucketing must NOT steal a query that genuinely
+    # belongs to a lighter theme into a heavier one just because it shares a folded label
+    # fragment. "foot doctor" is a doctor query and contains the 'doctor' seed token; it must
+    # land in the doctor theme even though 'foot' is a folded fragment of the heavier
+    # "square foot" seed. (Owned matching is only a fallback when no grouping token matches.)
+    rows = [
+        {"query": "square foot", "impressions": 1000, "position": 5},
+        {"query": "square meter", "impressions": 900, "position": 5},
+        {"query": "doctor consultation", "impressions": 800, "position": 5},
+        {"query": "doctor visit", "impressions": 700, "position": 5},
+        {"query": "foot doctor", "impressions": 300, "position": 5},  # doctor query, not square
+    ]
+    clusters = _topic_clusters(rows, "")
+    doctor = next(c for c in clusters if "doctor" in c["cluster"])
+    # doctor theme holds all three doctor queries (consultation + visit + foot doctor).
+    assert doctor["impressions"] == 1800
+    assert doctor["query_count"] == 3
+    # the square theme did NOT absorb the 300-impression 'foot doctor' query.
+    square = next(c for c in clusters if "square" in c["cluster"])
+    assert square["impressions"] == 1900
+    covered = sum(c["impressions"] for c in clusters)
+    assert covered == sum(r["impressions"] for r in rows)  # no impressions lost
+    assert clusters == _topic_clusters(rows, "")  # deterministic

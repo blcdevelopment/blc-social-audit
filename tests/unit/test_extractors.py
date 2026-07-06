@@ -523,9 +523,12 @@ def test_js_popup_form_homepage_never_prints_zero_fields() -> None:
     )
     assert uxui["pages"][0]["forms"]["total_field_count"] is None
 
-    out = score_category(uxui, load_rubric(Path("rubrics/uxui.yaml")))
+    # Wrap as the real fact bundle ({"uxui": ...}) so the rubric's uxui.* fact paths resolve;
+    # the rule must skip because total_field_count is None, not because the whole path is missing.
+    out = score_category({"uxui": uxui}, load_rubric(Path("rubrics/uxui.yaml")))
     field_rule = next(r for r in out["rules"] if r["rule_id"] == "uxui.homepage_form.field_count")
     assert field_rule["result"] == "skipped"  # no false "0 fields" finding
+    assert field_rule["evidence"]["value"] is None  # skipped because None, not a missing path
 
 
 def test_popup_embed_passes_form_rule_and_skips_field_count() -> None:

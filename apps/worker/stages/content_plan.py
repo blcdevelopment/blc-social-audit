@@ -617,7 +617,7 @@ _RULE_CONTEXT: dict[str, JsonDict] = {
     "seo.aeo.heading_hierarchy": {
         "meaning": "A clean heading outline uses one H1 and steps down through H2/H3 without skipping levels.",
         "why": "A broken outline makes the page harder for readers, screen readers, and answer engines to segment into the right sections.",
-        "failed_check": "The heading outline either repeated the H1 or jumped past a heading level on a analyzed page.",
+        "failed_check": "The heading outline either repeated the H1 or jumped past a heading level on an analyzed page.",
     },
     "seo.aeo.question_headings": {
         "meaning": "Question-style subheadings phrase a section around the exact question a buyer would ask.",
@@ -653,17 +653,17 @@ _RULE_CONTEXT: dict[str, JsonDict] = {
     "seo.a11y.html_lang": {
         "meaning": "The html element's lang attribute tells assistive technology which language the page is written in.",
         "why": "Without it, screen readers can mispronounce the content, making the page harder to use for visitors who rely on them.",
-        "failed_check": "A analyzed page did not declare a language on its html element.",
+        "failed_check": "An analyzed page did not declare a language on its html element.",
     },
     "seo.a11y.viewport_zoom": {
         "meaning": "The viewport meta tag can either allow or block a visitor from pinching to zoom in.",
         "why": "Blocking zoom stops low-vision visitors from enlarging text, which is both an accessibility barrier and a conversion risk.",
-        "failed_check": "A analyzed page's viewport tag disables zooming (user-scalable=no or a low maximum-scale).",
+        "failed_check": "An analyzed page's viewport tag disables zooming (user-scalable=no or a low maximum-scale).",
     },
     "seo.a11y.main_landmark": {
         "meaning": "A main landmark marks the primary content region so assistive tech can jump past the header and navigation.",
         "why": "Without it, screen-reader and keyboard users must wade through the menus on every page to reach the content.",
-        "failed_check": 'A analyzed page has no main element or role="main" landmark.',
+        "failed_check": 'An analyzed page has no main element or role="main" landmark.',
     },
     "seo.a11y.no_positive_tabindex": {
         "meaning": "A positive tabindex forces an element earlier in the keyboard tab order than its position on the page.",
