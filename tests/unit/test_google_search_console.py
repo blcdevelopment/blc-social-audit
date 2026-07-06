@@ -1,6 +1,7 @@
 import json
 
 from apps.worker.stages.google_search_console import (
+    _aio_factor,
     _brand_token,
     _branded_split,
     _opportunity_estimate,
@@ -75,6 +76,30 @@ def test_opportunity_estimate_math_and_grounding_shape() -> None:
     assert json.dumps(opp, sort_keys=True) == json.dumps(
         _opportunity_estimate(striking, window_days=91, site_total_clicks=3000), sort_keys=True
     )
+
+
+def test_aio_discount_is_position_aware() -> None:
+    # Grounded in the Ahrefs Dec-2025 AI-Overview study: top ranks suffer more CTR suppression,
+    # so the upside factor is monotonically increasing in position (rank 1 keeps the least).
+    factors = [_aio_factor(p) for p in range(1, 11)]
+    assert factors == sorted(factors)  # rank 1 <= rank 2 <= ... <= rank 10
+    assert all(0 < f <= 1 for f in factors)
+    assert _aio_factor(1) < _aio_factor(10)  # a real spread, not flat
+    assert _aio_factor(11) == _aio_factor(10)  # positions past 10 clamp to the pos-10 value
+
+
+def test_opportunity_estimate_exposes_position_aware_aio_discount() -> None:
+    opp = _opportunity_estimate(
+        _ranking_opportunities(_STRIKING), window_days=91, site_total_clicks=3000
+    )
+    # The optimistic target (position 3) is discounted MORE than the conservative one (position 5).
+    assert opp["aio_discount_max_pct"] > opp["aio_discount_min_pct"]
+    assert opp["aio_model_version"] == "position-aware-v1"
+    # Displayed discount is derived from the SAME _aio_factor applied to the clicks (no drift).
+    assert opp["aio_discount_min_pct"] == int((1 - _aio_factor(5)) * 100 + 0.5)
+    assert opp["aio_discount_max_pct"] == int((1 - _aio_factor(3)) * 100 + 0.5)
+    # low-end estimate never exceeds the high-end even with different per-target discounts
+    assert opp["opportunity_clicks_low"] <= opp["opportunity_clicks_high"]
 
 
 def test_opportunity_estimate_empty_is_safe() -> None:

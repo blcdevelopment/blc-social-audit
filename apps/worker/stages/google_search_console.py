@@ -518,9 +518,33 @@ _STRIKING_POSITION_MIN, _STRIKING_POSITION_MAX = 4, 20
 # Model only the highest-impression striking queries — projecting every ranking query
 # moving at once is not defensible.
 _OPPORTUNITY_MAX_QUERIES = 25
-# AI Overviews appear on roughly 30% of queries and roughly halve top-position CTR there,
-# so modeled upside carries a flat 1 - (0.30 * 0.50) = 0.85 discount.
-_AIO_UPSIDE_FACTOR = 0.85
+# AI Overviews suppress organic CTR MOST at the top of the SERP and less further down, so the
+# modeled upside gets a POSITION-AWARE haircut, not a flat one. Per-rank CTR reduction (the CTR
+# loss on queries where an AI Overview is present) is from Ahrefs' Dec-2025 study of ~300k
+# keywords (https://ahrefs.com/blog/ai-overviews-reduce-clicks-update/): -58% at rank 1 decaying
+# to -19.4% at rank 10. Positions 6-9 are linearly interpolated between the published pos-5
+# (32.6%) and pos-10 (19.4%) points; past 10 falls back to the pos-10 value. The discount applied
+# at a target rank is prevalence * reduction-at-that-rank, so a query modeled reaching position 3
+# is discounted more than one reaching position 5 (the earlier code applied a single flat 15%,
+# which understated the top-of-page suppression the modeled targets sit in).
+_AIO_MODEL_VERSION = "position-aware-v1"
+_AIO_CTR_REDUCTION: dict[int, float] = {
+    1: 0.580,
+    2: 0.508,
+    3: 0.464,
+    4: 0.388,
+    5: 0.326,
+    6: 0.300,
+    7: 0.273,
+    8: 0.247,
+    9: 0.220,
+    10: 0.194,
+}
+# Share of the transactional/home-services queries this tool audits that surface an AI Overview.
+# AIOs grew from ~13% (mid-2024) toward ~40% of queries by late 2025; 0.40 is a conservative
+# blend for commercial SERPs. This is the one tunable here — raising it makes every forecast more
+# conservative (a larger upside haircut); it does not affect any score.
+_AIO_PREVALENCE = 0.40
 # Even correct fixes rarely capture 100% of modeled upside; the headline is conservative.
 _SCENARIO_CAPTURE = {"conservative": 0.5, "expected": 0.7, "optimistic": 1.0}
 # No scenario may exceed this multiple of the site's CURRENT monthly clicks — a
@@ -576,8 +600,21 @@ _CLUSTER_EDGE_FILLERS = _CLUSTER_STOPWORDS | frozenset(
 )
 
 
+def _lookup_rank(curve: dict[int, float], position: int) -> float:
+    """Read a per-rank curve value, clamping the position into the curve's 1..10 domain
+    (every such curve defines all of ranks 1-10, so the clamp always resolves to a key)."""
+    return curve[max(1, min(position, 10))]
+
+
 def _ctr_at(position: int) -> float:
-    return _CTR_CURVE.get(max(1, min(position, 10)), _CTR_CURVE[10])
+    return _lookup_rank(_CTR_CURVE, position)
+
+
+def _aio_factor(position: int) -> float:
+    """Position-aware AI-Overview upside multiplier: 1 - prevalence * CTR-reduction-at-rank.
+    Higher ranks suffer more AIO suppression, so they keep a smaller share of the modeled
+    upside. Always in (0, 1]; monotonically increasing in position (rank 1 keeps the least)."""
+    return 1.0 - _AIO_PREVALENCE * _lookup_rank(_AIO_CTR_REDUCTION, position)
 
 
 def _opportunity_for_target(rows: list[JsonDict], target_position: int) -> float:
@@ -617,8 +654,14 @@ def _opportunity_estimate(
     current_clicks = sum(
         float(row.get("impressions") or 0) * float(row.get("ctr") or 0) for row in striking_rows
     )
-    upside_low = _opportunity_for_target(modeled, _OPPORTUNITY_TARGET_LOW) * _AIO_UPSIDE_FACTOR
-    upside_high = _opportunity_for_target(modeled, _OPPORTUNITY_TARGET_HIGH) * _AIO_UPSIDE_FACTOR
+    # Position-aware AIO haircut: each target rank keeps its own share of the upside (the
+    # optimistic target 3 is discounted more than the conservative target 5).
+    upside_low = _opportunity_for_target(modeled, _OPPORTUNITY_TARGET_LOW) * _aio_factor(
+        _OPPORTUNITY_TARGET_LOW
+    )
+    upside_high = _opportunity_for_target(modeled, _OPPORTUNITY_TARGET_HIGH) * _aio_factor(
+        _OPPORTUNITY_TARGET_HIGH
+    )
 
     site_monthly_clicks = _per_month(site_total_clicks, window_days)
     # A zero-click site has no traffic baseline to cap against; the conservative capture
@@ -668,7 +711,13 @@ def _opportunity_estimate(
         "lead_rate_high_pct": _LEAD_RATE_HIGH_PCT,
         "target_position_low": _OPPORTUNITY_TARGET_LOW,
         "target_position_high": _OPPORTUNITY_TARGET_HIGH,
-        "aio_discount_pct": int((1 - _AIO_UPSIDE_FACTOR) * 100 + 0.5),
+        # Position-aware discount RANGE, derived from the SAME _aio_factor applied to the click
+        # figures (single source of truth, so the displayed and applied haircuts never drift and
+        # the target-position clamp is inherited): smaller at the conservative target (position 5),
+        # larger at the optimistic one (position 3), where AI Overviews suppress clicks most.
+        "aio_discount_min_pct": int((1 - _aio_factor(_OPPORTUNITY_TARGET_LOW)) * 100 + 0.5),
+        "aio_discount_max_pct": int((1 - _aio_factor(_OPPORTUNITY_TARGET_HIGH)) * 100 + 0.5),
+        "aio_model_version": _AIO_MODEL_VERSION,
         "capture_capped": capped,
         "cap_applied": cap is not None,
         "cap_multiple": _OPPORTUNITY_CAP_MULTIPLE,

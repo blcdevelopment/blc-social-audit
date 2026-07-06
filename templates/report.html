@@ -453,8 +453,9 @@
             {{ opp.modeled_query_count }} near-miss queries are modeled, reaching positions
             {{ opp.target_position_high }}–{{ opp.target_position_low }} (never position 1);
             click-through rates come from a {{ opp.ctr_curve_source }}; modeled upside is
-            discounted {{ opp.aio_discount_pct }}% for AI-Overview results; figures are monthly
-            averages from the last {{ opp.window_days }} days
+            discounted {{ opp.aio_discount_min_pct }}&ndash;{{ opp.aio_discount_max_pct }}% for
+            AI-Overview results (more at higher ranks, where AI Overviews suppress clicks most);
+            figures are monthly averages from the last {{ opp.window_days }} days
             {%- if opp.get("capture_capped") %} and are capped at {{ opp.cap_multiple }}&times;
             the site's current monthly clicks{% endif %}. The
             {{ opp.lead_rate_low_pct }}–{{ opp.lead_rate_high_pct }}% contact rate is a
