@@ -22,7 +22,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8">
-    <title>{{ payload.metadata.site_domain }} Website Audit Report</title>
+    <title>{{ payload.metadata.site_domain }} — Gooch Website Audit</title>
     <style>
       {{ report_css }}
     </style>
@@ -51,7 +51,7 @@
       {% set cover_overall = payload.get('overall_readiness') %}
       {% set cover_combined = cover_overall and cover_overall.get('status') == 'complete' and cover_overall.get('score') is not none %}
       <div class="cover-main">
-        <p class="cover-eyebrow">{% if cover_combined %}Comprehensive Website &amp; Social Media Audit{% else %}Comprehensive Website Audit{% endif %}</p>
+        <p class="cover-eyebrow">Gooch &middot; {% if cover_combined %}Comprehensive Website &amp; Social Media Audit{% else %}Comprehensive Website Audit{% endif %}</p>
         <h1>{% if cover_combined %}Website &amp; Social Media Audit Report{% else %}Website Audit Report{% endif %}</h1>
         <p class="cover-url">{{ payload.metadata.final_url }}</p>
         <div class="cover-scores">
@@ -186,6 +186,28 @@
         </article>
       </div>
     </section>
+
+    {% if payload.website_scope %}
+      {% set scope = payload.website_scope %}
+      <section class="page-section" id="website-scope">
+        <p class="eyebrow">Website Scope</p>
+        <h2>What your website consists of</h2>
+        <p class="helper-copy">
+          A snapshot of the whole site the audit discovered — how many pages and posts it found,
+          what the sitemap lists, and the media and outbound links on it. "Discovered" counts come
+          from the site's internal links plus its sitemap; the audit then analyzes the most
+          important pages in depth (see Crawl QA).
+        </p>
+        <dl class="metric-list inline">
+          {% if scope.pages_discovered %}<div><dt>Pages discovered</dt><dd>{{ scope.pages_discovered }}</dd></div>{% endif %}
+          {% if scope.pages_analyzed %}<div><dt>Pages analyzed in depth</dt><dd>{{ scope.pages_analyzed }}</dd></div>{% endif %}
+          {% if scope.blog_posts %}<div><dt>Blog / article posts</dt><dd>{{ scope.blog_posts }}</dd></div>{% endif %}
+          {% if scope.sitemap_entries %}<div><dt>Sitemap entries</dt><dd>{{ scope.sitemap_entries }}</dd></div>{% endif %}
+          {% if scope.outbound_links %}<div><dt>Outbound links</dt><dd>{{ scope.outbound_links }}</dd></div>{% endif %}
+          {% if scope.images %}<div><dt>Images</dt><dd>{{ scope.images }}</dd></div>{% endif %}
+        </dl>
+      </section>
+    {% endif %}
 
     {% for section in payload.sections %}
       {% if section.id in ["seo", "uxui"] %}

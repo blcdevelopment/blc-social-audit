@@ -16,7 +16,15 @@
 # made the video-share rule vacuous); Facebook post typing no longer counts a generic reach
 # field as video; hashtag counting requires at least one letter (so "#1" doesn't count); the
 # Instagram business-account flag is tri-state (missing => unknown => the rule rescales).
-version: "phase2-social-v3"
+#
+# v4 (2026, SAE-7..13 — domain-expert review): added profile-quality/consistency rules the
+# extractor now derives — handle consistency across platforms, a substantive (non-blank) bio,
+# a declared business category (feed platforms only), website<->social phone (NAP) match, and a
+# Google Business Profile reviews signal (from the Places API, combined audit only). All are
+# skip_if_missing where the signal is inapplicable (a single profile, a YouTube-only audit, a
+# standalone social audit with no website phone, or no Google listing) so they rescale, never
+# false-fail — so a keyless/standalone audit scores exactly as it did under v3.
+version: "phase2-social-v4"
 category: social
 max_score: 100
 normalization: rescale_to_max
@@ -205,3 +213,82 @@ rules:
     tier: quick_win
     finding_label: Few or no hashtags
     remediation: Add a handful of relevant, location- and niche-specific hashtags to each post to widen reach.
+
+  # --- v4: profile-quality & consistency (SAE-7..10) ------------------------------------------
+  - id: social.branding.handle_consistency
+    description: The brand uses a consistent handle/username across platforms.
+    weight: 4
+    fact_path: social.summary.handles_consistent
+    evaluator: boolean
+    # None when there are fewer than two comparable handles -> nothing to compare -> rescale.
+    skip_if_missing: true
+    impact: low
+    tier: quick_win
+    finding_label: Inconsistent handles across platforms
+    remediation: Use the same @handle/username on every platform so customers reach the right accounts.
+
+  - id: social.profile.bio_quality
+    description: Profiles have a substantive, descriptive bio (not blank or a bare name).
+    weight: 5
+    fact_path: social.summary.profiles_with_substantive_bio
+    evaluator: threshold
+    params:
+      min: 1
+    impact: medium
+    tier: quick_win
+    finding_label: Thin or missing profile bio
+    remediation: Write a clear bio that says what you do, who you serve, and the next step (call, book, or request a quote).
+
+  - id: social.local.business_category
+    description: Profiles declare a business category so they surface in the right searches.
+    weight: 5
+    fact_path: social.summary.category_coverage_pct
+    evaluator: threshold
+    params:
+      min: 100
+      partial_min: 50
+    # None when no feed (non-YouTube) profile is present -> the category concept doesn't apply.
+    skip_if_missing: true
+    impact: medium
+    tier: quick_win
+    finding_label: Missing business category
+    remediation: Set a specific business category (e.g. Contractor, Remodeler, Home Builder) on each Facebook/Instagram profile.
+
+  - id: social.local.category_relevance
+    description: The declared business category matches the business's niche/services.
+    weight: 4
+    fact_path: social.summary.category_matches_niche
+    evaluator: boolean
+    # None when the niche can't be classified or no category is set -> skip (never a false finding).
+    skip_if_missing: true
+    impact: low
+    tier: quick_win
+    finding_label: Business category does not match your services
+    remediation: Pick the most specific category for your trade (e.g. Home Builder, Remodeler, Roofing Contractor) instead of a generic one like "Local Business".
+
+  - id: social.nap.consistency
+    description: The phone number matches between the website and the social profiles (NAP consistency).
+    weight: 4
+    fact_path: social.summary.nap_phone_consistent
+    evaluator: boolean
+    # Set only in a combined (website + social) audit; None on a standalone social audit -> skip.
+    skip_if_missing: true
+    impact: medium
+    tier: quick_win
+    finding_label: Phone number differs between the website and social profiles
+    remediation: Use one identical business phone number on the website, Google Business Profile, and every social profile.
+
+  - id: social.reputation.google_reviews
+    description: The business has a healthy volume of Google reviews (a top local-ranking/trust signal).
+    weight: 5
+    fact_path: social.summary.google_review_count
+    evaluator: threshold
+    params:
+      min: 10
+      partial_min: 1
+    # Set only when the Google Places lookup succeeded (combined audit + key); None otherwise -> skip.
+    skip_if_missing: true
+    impact: medium
+    tier: mid_term
+    finding_label: Few or no Google reviews
+    remediation: Ask satisfied customers for Google reviews — review volume and star rating are among the strongest local-search and trust signals.

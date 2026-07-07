@@ -108,6 +108,9 @@ def build_social_report_data(
     facts = _dict(social_facts)
     breakdown = _dict(social_breakdown)
     summary = _dict(facts.get("summary"))
+    # Public Google Business Profile block (SAE-13), present only on a combined audit with a Places
+    # key + a matched listing; None otherwise so consumers hide the section (no dangling heading).
+    google_business = _dict(facts.get("google_business")) or None
     category = _dict(breakdown.get("category"))
     rules = category.get("rules") if isinstance(category.get("rules"), list) else []
 
@@ -232,6 +235,7 @@ def build_social_report_data(
         "content_insights": content_insights,
         "top_posts": top_posts,
         "per_platform": per_platform,
+        "google_business": google_business,
         "roadmap": roadmap,
     }
 

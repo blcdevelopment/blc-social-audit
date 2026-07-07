@@ -93,6 +93,28 @@ def _document_xml(payload: ReportPayload) -> str:
         parts.append(_paragraph(f"{score.label}: {score.score}/{score.max_score}", "Strong"))
         parts.append(_paragraph(score.description))
 
+    scope = payload.website_scope if isinstance(payload.website_scope, dict) else None
+    if scope:
+        parts.append(_heading("What Your Website Consists Of", 1))
+        parts.append(
+            _paragraph(
+                "A snapshot of the whole site the audit discovered — pages, posts, sitemap, "
+                "outbound links, and images. Discovered counts come from the site's internal links "
+                "plus its sitemap; the audit analyzes the most important pages in depth."
+            )
+        )
+        for label, key in (
+            ("Pages discovered", "pages_discovered"),
+            ("Pages analyzed", "pages_analyzed"),
+            ("Blog / article posts", "blog_posts"),
+            ("Sitemap entries", "sitemap_entries"),
+            ("Outbound links", "outbound_links"),
+            ("Images", "images"),
+        ):
+            value = scope.get(key)
+            if value is not None:
+                parts.append(_paragraph(f"{label}: {value}", "Meta"))
+
     for section in payload.sections:
         parts.append(_heading(section.label, 1))
         if section.score is not None:

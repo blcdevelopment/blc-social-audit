@@ -10,6 +10,8 @@
   "intro": "Independent design studio. Message us to book a consult.",
   "website": "https://acmestudio.example",
   "email": "hello@acmestudio.example",
+  "phone": "+1 (555) 100-2000",
+  "address": "123 Main St, Austin, TX 78701",
   "messenger": "https://m.me/acmestudio",
   "profilePhoto": "https://example.com/acme-fb.jpg",
   "profilePictureUrl": "https://example.com/acme-fb.png"

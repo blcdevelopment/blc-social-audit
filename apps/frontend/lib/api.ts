@@ -329,6 +329,16 @@ export interface AccessibilityAdvisorySection {
   notes: string[];
 }
 
+// "What the whole website consists of" scope panel (null when nothing was discovered).
+export interface WebsiteScope {
+  pages_discovered: number | null;
+  pages_analyzed: number | null;
+  blog_posts: number | null;
+  sitemap_entries: number | null;
+  outbound_links: number | null;
+  images: number | null;
+}
+
 export interface ReportPayload {
   version: string;
   metadata: ReportMetadata;
@@ -342,6 +352,7 @@ export interface ReportPayload {
   technical_seo_section: TechnicalSeoSection;
   search_performance_section: SearchPerformanceSection;
   accessibility_advisory_section?: AccessibilityAdvisorySection;
+  website_scope?: WebsiteScope | null;
   // Combined-audit only: the social section + overall readiness appended to the website report.
   social_audit?: SocialReport | null;
   overall_readiness?: OverallReadiness | null;

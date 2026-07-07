@@ -145,6 +145,19 @@ class Settings(BaseSettings):
     youtube_api_key: SecretStr | None = None
     youtube_timeout_seconds: int = Field(default=30, ge=5)
 
+    # Google Places API (New) — public Google Business Profile data (address, phone, category,
+    # rating, review count, website) for the combined audit's business-identity enrichment
+    # (SAE-12/13). A plain API key (no owner consent). Empty key => the Places enrichment skips
+    # gracefully, like the Apify/YouTube backends; a website audit stays byte-identical.
+    google_places_api_key: SecretStr | None = None
+    google_places_timeout_seconds: int = Field(default=30, ge=5)
+
+    # Connected-mode YouTube analytics (SAE-15, Wave 3): when True, the Google OAuth consent also
+    # requests the owner-only YouTube Analytics scopes so a connecting channel owner can grant
+    # private-metrics access (watch time, retention, demographics). Default False => the Google
+    # OAuth grant is unchanged (Search Console only) and no connected YouTube data is fetched.
+    youtube_analytics_connect_enabled: bool = False
+
     # Auto-discover social profile links (Instagram/Facebook/YouTube) from the crawled HTML to fill
     # any platform the operator left blank (explicit handles always win per platform — the
     # per-platform blank-fill the new-audit form promises). For a plain WEBSITE submission this

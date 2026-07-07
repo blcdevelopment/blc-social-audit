@@ -78,6 +78,15 @@ _BROWSER_RECHECK_UA = (
 _BROKEN_EXTERNAL_CLIENT_STATUSES = {404, 410}
 _MAX_REDIRECTS = 10
 
+# URL-path markers that identify a blog/article page, for the website-scope post count.
+_POST_PATH_MARKERS = ("/blog/", "/blogs/", "/post/", "/posts/", "/news/", "/article/", "/articles/")
+
+
+def _looks_like_post(url: str) -> bool:
+    """Heuristic: does this internal URL look like a blog/article post? (scope estimate only)."""
+    lowered = url.lower()
+    return any(marker in lowered for marker in _POST_PATH_MARKERS)
+
 
 class _BlockedHost(RuntimeError):
     """Raised when a request URL or redirect target fails the SSRF host guard."""
@@ -230,6 +239,12 @@ async def _collect(
         internal_urls = sorted(
             (set(internal_urls) | set(sitemap_urls)) - rendered_urls,
         )
+        # Website-scope counts ("what the whole site consists of") — captured over ALL discovered
+        # internal pages (rendered + link/sitemap-discovered) BEFORE the coverage cap truncates the
+        # sweep list, so the report can state the true site size, not just what was checked.
+        all_internal_urls = set(internal_urls) | rendered_urls
+        discovered_internal_urls = len(all_internal_urls)
+        discovered_blog_posts = sum(1 for url in all_internal_urls if _looks_like_post(url))
         if len(internal_urls) > settings.site_health_max_internal_urls:
             notes.append(
                 f"Checked the first {settings.site_health_max_internal_urls} of "
@@ -238,6 +253,7 @@ async def _collect(
             internal_urls = internal_urls[: settings.site_health_max_internal_urls]
 
         external_urls = sorted(set(external_urls))
+        discovered_external_urls = len(external_urls)
         if not settings.site_health_check_external_links:
             external_urls = []
         elif len(external_urls) > settings.site_health_max_external_urls:
@@ -263,6 +279,10 @@ async def _collect(
     summary["internal_urls_checked"] = checks["internal_checked"]
     summary["external_urls_checked"] = checks["external_checked"]
     summary["urls_checked"] = checks["internal_checked"] + checks["external_checked"]
+    # Website-scope totals (site size), independent of how many were checked.
+    summary["discovered_internal_urls"] = discovered_internal_urls
+    summary["discovered_blog_posts"] = discovered_blog_posts
+    summary["discovered_external_urls"] = discovered_external_urls
     if checks.get("error_classes"):
         # Retained so "did not respond" is diagnosable (timeout vs reset vs TLS).
         summary["unreachable_error_classes"] = checks["error_classes"]

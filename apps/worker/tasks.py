@@ -4,6 +4,7 @@ import time
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from celery.exceptions import SoftTimeLimitExceeded
@@ -29,8 +30,10 @@ from apps.worker.stages.scoring import (
     score_audit,
     score_social_audit,
 )
+from apps.worker.stages.social.categories import category_relevance
 from apps.worker.stages.social.collector import collect_social_facts
 from apps.worker.stages.social.discovery import discover_social_links
+from apps.worker.stages.social.places_provider import collect_google_business_facts
 from apps.worker.stages.social.providers import get_provider
 from apps.worker.stages.social.report import compose_social_report_payload
 
@@ -402,6 +405,97 @@ def _resolve_social_handles_safely(
         return _explicit_social_handles(job)
 
 
+def _phone_tail(value: Any) -> str:
+    """Last 10 digits of a phone string (US-style comparison key); "" if fewer than 10 digits."""
+    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
+    return digits[-10:] if len(digits) >= 10 else ""
+
+
+def _website_phone_keys(result: AuditResult) -> set[str]:
+    """Comparable phone keys extracted from the website's UX/UI contact facts (extractor_uxui)."""
+    keys: set[str] = set()
+    uxui = result.uxui_facts if isinstance(result.uxui_facts, dict) else {}
+    for page in uxui.get("pages") or []:
+        contact = page.get("contact") if isinstance(page, dict) else None
+        if not isinstance(contact, dict):
+            continue
+        for num in contact.get("phone_numbers") or []:
+            if key := _phone_tail(num):
+                keys.add(key)
+    return keys
+
+
+def _inject_nap_consistency(social_facts: JsonDict, result: AuditResult) -> None:
+    """Combined-audit only (SAE-10/13): set ``summary.nap_phone_consistent`` by comparing the
+    website's phone number(s) with the business's number(s) from the social profiles AND (when
+    available) the Google Business Profile. Left as ``None`` (so the NAP rule ``skip_if_missing``-
+    rescales) whenever either side has no comparable phone — which is why a standalone social audit,
+    or a page/profile that hides its number, never false-fails. Forgiving by design: consistent
+    when the website shares a number with any business source (avoids flagging a site that also
+    lists a fax/second line)."""
+    summary = social_facts.get("summary")
+    if not isinstance(summary, dict):
+        return
+    website = _website_phone_keys(result)
+    business = {
+        key
+        for p in social_facts.get("platforms") or []
+        if isinstance(p, dict) and (key := _phone_tail(p.get("phone")))
+    }
+    gbp = social_facts.get("google_business")
+    if isinstance(gbp, dict) and (key := _phone_tail(gbp.get("phone"))):
+        business.add(key)
+    if not website or not business:
+        return
+    summary["nap_phone_consistent"] = bool(website & business)
+
+
+def _business_query(job: AuditJob) -> str:
+    """A Google Places text query for the audited business, derived from its domain label
+    (e.g. ``https://www.builderleadconverter.com`` -> ``builderleadconverter``)."""
+    host = urlsplit(str(job.url or "")).hostname or ""
+    host = host[4:] if host.startswith("www.") else host
+    return host.split(".")[0] if host else ""
+
+
+def _inject_category_relevance(social_facts: JsonDict, job: AuditJob) -> None:
+    """SAE-9-full: set ``summary.category_matches_niche`` from the audit's niche and the declared
+    categories (feed profiles + the Google listing). ``None`` (rule skips) when the niche can't be
+    classified or no category is set, so a vague niche never yields a false 'wrong category'
+    finding."""
+    summary = social_facts.get("summary")
+    if not isinstance(summary, dict):
+        return
+    categories = [
+        p.get("category")
+        for p in social_facts.get("platforms") or []
+        if isinstance(p, dict) and p.get("platform") != "youtube"
+    ]
+    gbp = social_facts.get("google_business")
+    if isinstance(gbp, dict) and gbp.get("category"):
+        categories.append(gbp.get("category"))
+    summary["category_matches_niche"] = category_relevance(job.niche, categories)
+
+
+def _augment_with_google_business(
+    social_facts: JsonDict, settings: Settings, *, query: str
+) -> None:
+    """Combined-audit only (SAE-13): enrich the social facts with the business's PUBLIC Google
+    listing (Places API) — stashed under ``google_business`` for the report, plus the scored
+    ``google_rating`` / ``google_review_count`` summary signals and a phone for the NAP check.
+    Graceful: no key / no match / any failure leaves the social facts untouched (the reviews rule
+    then ``skip_if_missing``-rescales and the report shows no Google block)."""
+    gbp = collect_google_business_facts(settings, query=query)
+    if gbp.get("status") != "complete":
+        return
+    business = gbp.get("business") if isinstance(gbp.get("business"), dict) else {}
+    social_facts["google_business"] = business
+    summary = social_facts.get("summary")
+    if isinstance(summary, dict):
+        summary["google_rating"] = business.get("rating")
+        summary["google_review_count"] = business.get("review_count")
+
+
 def _augment_with_social(
     db: Session,
     job: AuditJob,
@@ -439,6 +533,12 @@ def _augment_with_social(
     # the next _mark_job commit. Only SoftTimeLimitExceeded propagates (the task is out of time).
     try:
         social_facts = social_collector(settings, handles)
+        # Combined-only enrichment: the business's public Google listing (reviews/rating + an
+        # authoritative phone), then the website<->business phone (NAP) cross-check. Both are
+        # graceful no-ops without their inputs, so a standalone social audit is unaffected.
+        _augment_with_google_business(social_facts, settings, query=_business_query(job))
+        _inject_category_relevance(social_facts, job)
+        _inject_nap_consistency(social_facts, result)
         social_result = score_social_audit(social_facts, settings)
         usable = (
             social_facts.get("status") in {"complete", "partial"}

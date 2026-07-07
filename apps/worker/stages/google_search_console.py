@@ -25,6 +25,20 @@ GSC_SCOPES = (
     "email",
     "https://www.googleapis.com/auth/webmasters.readonly",
 )
+# Owner-only YouTube Analytics scopes, appended to the Google consent only when connected-mode
+# YouTube is enabled (SAE-15). Same Google OAuth app + token store — no migration.
+YOUTUBE_ANALYTICS_SCOPES = (
+    "https://www.googleapis.com/auth/yt-analytics.readonly",
+    "https://www.googleapis.com/auth/youtube.readonly",
+)
+
+
+def oauth_scopes(settings: Settings) -> tuple[str, ...]:
+    """The Google OAuth scopes to request: Search Console always, plus YouTube Analytics when
+    connected-mode YouTube is enabled (so one consent grants both)."""
+    if getattr(settings, "youtube_analytics_connect_enabled", False):
+        return GSC_SCOPES + YOUTUBE_ANALYTICS_SCOPES
+    return GSC_SCOPES
 
 
 def build_google_oauth_url(settings: Settings, state: str) -> str:
@@ -32,7 +46,7 @@ def build_google_oauth_url(settings: Settings, state: str) -> str:
         "client_id": settings.google_oauth_client_id,
         "redirect_uri": settings.google_oauth_redirect_uri,
         "response_type": "code",
-        "scope": " ".join(GSC_SCOPES),
+        "scope": " ".join(oauth_scopes(settings)),
         "access_type": "offline",
         "prompt": "consent",
         "state": state,

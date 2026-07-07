@@ -10,6 +10,7 @@ import {
   AuditShareResponse,
   OverallReadiness,
   ReportFormat,
+  ReportPayload,
   ReportSection,
   RoadmapTier,
   ScoreCard,
@@ -52,6 +53,39 @@ function ScoreCards({ scores }: { scores: ScoreCard[] }) {
         </div>
       ))}
     </div>
+  );
+}
+
+function WebsiteScopeBlock({ report }: { report: ReportPayload }) {
+  const scope = report.website_scope;
+  if (!scope) return null;
+  const rows: [string, number | null][] = [
+    ["Pages discovered", scope.pages_discovered],
+    ["Pages analyzed", scope.pages_analyzed],
+    ["Blog / article posts", scope.blog_posts],
+    ["Sitemap entries", scope.sitemap_entries],
+    ["Outbound links", scope.outbound_links],
+    ["Images", scope.images],
+  ];
+  const shown = rows.filter(([, value]) => value != null);
+  if (shown.length === 0) return null;
+  return (
+    <section className="card section-block">
+      <h3>What your website consists of</h3>
+      <p className="muted">
+        A snapshot of the whole site the audit discovered — pages, posts, sitemap, outbound links,
+        and images. Discovered counts come from the site&apos;s internal links plus its sitemap; the
+        audit analyzes the most important pages in depth.
+      </p>
+      <div className="meta-grid">
+        {shown.map(([label, value]) => (
+          <div key={label}>
+            <h4>{label}</h4>
+            <p className="muted">{value}</p>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -986,6 +1020,8 @@ export default function AuditDetailPage() {
                     <p className="summary-text">{detail.report.executive_summary}</p>
                   </section>
                 )}
+
+                <WebsiteScopeBlock report={detail.report} />
 
                 <ExternalSeoBlock report={detail.report} />
 

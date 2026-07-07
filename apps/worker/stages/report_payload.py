@@ -598,6 +598,9 @@ class ReportPayload(BaseModel):
         default_factory=AccessibilityAdvisorySection
     )
     crawl_summary: CrawlSummary
+    # "What the whole website consists of" scope panel (pages, posts, sitemap, outbound, images).
+    # Default None => not rendered, so a stored result without it stays valid and byte-identical.
+    website_scope: JsonDict | None = None
     appendix: Appendix
     # Combined-audit only (default None => not rendered; a website-only report is byte-identical).
     # `social_audit` is the appended social-media section (same deterministic builder as the
@@ -691,6 +694,7 @@ def compose_report_payload(job: Any, result: Any) -> ReportPayload:
             _dict(getattr(result, "accessibility_facts", None))
         ),
         crawl_summary=_crawl_summary(crawled_pages),
+        website_scope=_website_scope(external_seo_facts, crawled_pages, _dict(result.seo_facts)),
         appendix=_appendix(score_breakdown),
         social_audit=social_audit,
         overall_readiness=overall_readiness,
@@ -1341,6 +1345,39 @@ def _technical_crawl_facts(external_seo_facts: JsonDict) -> JsonDict:
     if isinstance(technical, dict) and technical:
         return technical
     return _dict(external_seo_facts.get("screaming_frog"))
+
+
+def _website_scope(
+    external_seo_facts: JsonDict, crawled_pages: JsonDict, seo_facts: JsonDict
+) -> JsonDict | None:
+    """ "What the whole website consists of" — a plain-language scope panel (Dru's request).
+
+    Pure surfacing of already-collected numbers: total pages/posts/outbound come from the
+    site-health sweep summary (site size, captured before its coverage cap), pages analyzed from
+    the crawl, images from the extracted SEO facts. Returns ``None`` when nothing is known (e.g. a
+    failed crawl) so the section simply doesn't render. Counts are honest estimates — the sweep
+    discovers via internal links + sitemap, and 'posts' is a URL-pattern heuristic — so the labels
+    say "discovered"/"detected" rather than implying an exhaustive CMS count.
+    """
+    tsummary = _dict(_technical_crawl_facts(external_seo_facts).get("summary"))
+    pages_analyzed = int(_dict(crawled_pages.get("summary")).get("successful_pages") or 0)
+    images = sum(
+        int(_dict(page.get("images")).get("total") or 0) for page in _list(seo_facts.get("pages"))
+    )
+
+    def _pos(value: Any) -> int | None:
+        number = int(value) if isinstance(value, (int, float)) else 0
+        return number if number > 0 else None
+
+    scope = {
+        "pages_discovered": _pos(tsummary.get("discovered_internal_urls")),
+        "pages_analyzed": pages_analyzed or None,
+        "blog_posts": _pos(tsummary.get("discovered_blog_posts")),
+        "sitemap_entries": _pos(tsummary.get("sitemap_url_count")),
+        "outbound_links": _pos(tsummary.get("discovered_external_urls")),
+        "images": _pos(images),
+    }
+    return scope if any(v is not None for v in scope.values()) else None
 
 
 def _external_seo_summary(external_seo_facts: JsonDict) -> ExternalSeoSummary:

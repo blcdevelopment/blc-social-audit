@@ -82,9 +82,70 @@ def test_facebook_profile_normalizes() -> None:
     assert profile["profile_complete"] is True
     assert profile["link_in_bio"] == "https://acmestudio.example"
     assert profile["has_cta"] is True
+    # SAE-6: the FB Pages actor's public phone/address/about are now extracted (were discarded).
+    assert profile["phone"] == "+1 (555) 100-2000"
+    assert profile["address"] == "123 Main St, Austin, TX 78701"
+    assert profile["bio_text"] == "Independent design studio. Message us to book a consult."
     # No posts from the FB pages actor -> cadence/engagement unknown (skip in scoring).
     assert profile["posts_per_month"] is None
     assert profile["avg_engagement_rate_pct"] is None
+
+
+def test_handle_consistency_across_platforms() -> None:
+    # SAE-7: same brand key on both profiles (case/format-insensitive) -> consistent.
+    facts = extract_social_facts(
+        [
+            _entry("social_instagram_strong.json", "acmestudio"),
+            {
+                "platform": "facebook",
+                "handle": "AcmeStudio",
+                "raw": _load("social_facebook_strong.json"),
+            },
+        ],
+        now=NOW,
+    )
+    assert facts["summary"]["handles_consistent"] is True
+
+
+def test_handle_inconsistency_is_flagged() -> None:
+    facts = extract_social_facts(
+        [
+            _entry("social_instagram_strong.json", "acmestudio"),
+            {
+                "platform": "facebook",
+                "handle": "acme-builders-official",
+                "raw": _load("social_facebook_strong.json"),
+            },
+        ],
+        now=NOW,
+    )
+    assert facts["summary"]["handles_consistent"] is False
+
+
+def test_single_profile_handle_consistency_is_none() -> None:
+    # Fewer than two comparable handles -> nothing to compare -> None (the rule skip-rescales).
+    facts = extract_social_facts([_entry("social_instagram_strong.json", "acme")], now=NOW)
+    assert facts["summary"]["handles_consistent"] is None
+
+
+def test_substantive_bio_and_category_coverage() -> None:
+    # SAE-8/9: strong profile has a real bio + a declared category; weak has neither.
+    strong = extract_social_facts([_entry("social_instagram_strong.json", "acme")], now=NOW)
+    assert strong["summary"]["profiles_with_substantive_bio"] == 1
+    assert strong["summary"]["category_coverage_pct"] == 100.0
+    weak = extract_social_facts([_entry("social_instagram_weak.json", "weak")], now=NOW)
+    assert weak["summary"]["profiles_with_substantive_bio"] == 0
+    assert weak["summary"]["category_coverage_pct"] == 0.0
+
+
+def test_youtube_only_category_coverage_is_none() -> None:
+    # YouTube has no business-category concept; a YouTube-only audit yields None (rule skips),
+    # never a vacuous 0% that would false-fail the category rule.
+    facts = extract_social_facts(
+        [{"platform": "youtube", "handle": "acme", "raw": _load("social_youtube_strong.json")}],
+        now=NOW,
+    )
+    assert facts["summary"]["category_coverage_pct"] is None
 
 
 def test_facebook_with_posts_computes_cadence_and_engagement() -> None:
