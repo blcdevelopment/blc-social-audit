@@ -219,7 +219,9 @@ def test_combined_audit_renders_one_report_with_social_and_overall(tmp_path, mon
         )
         with ZipFile(docx_res.docx_path) as archive:
             doc_xml = archive.read("word/document.xml").decode("utf-8")
-        assert "Website Audit Report" in doc_xml  # website content intact
+        # Combined audits are titled for both surfaces (the website-only DOCX keeps the
+        # original title — covered by the website-unchanged invariant test).
+        assert "Website &amp; Social Media Audit Report" in doc_xml
         assert "Social Media Audit" in doc_xml
         assert "Overall Lead-Gen Readiness" in doc_xml
 
@@ -302,6 +304,14 @@ def test_explicit_combined_audit_merges_failed_social_collection(tmp_path, monke
         assert result.score_breakdown["social"]["status"] == "failed"
         assert result.score_breakdown["overall_readiness"]["status"] == "website_only"
         assert result.score_breakdown["overall_readiness"]["score"] == result.lead_gen_score
+        # The cover must not promise social content: the website_only overall carries a
+        # real score, but the report has no social data behind it.
+        from pypdf import PdfReader
+
+        cover_text = " ".join(PdfReader(result.pdf_path).pages[0].extract_text().split())
+        assert "Website Audit Report" in cover_text
+        assert "Website & Social Media Audit Report" not in cover_text
+        assert "Overall Lead-Gen Readiness" not in cover_text
 
 
 def test_rerun_enrichment_preserves_combined_sections(tmp_path, monkeypatch) -> None:

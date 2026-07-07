@@ -25,6 +25,20 @@ GSC_SCOPES = (
     "email",
     "https://www.googleapis.com/auth/webmasters.readonly",
 )
+# Owner-only YouTube Analytics scopes, appended to the Google consent only when connected-mode
+# YouTube is enabled (SAE-15). Same Google OAuth app + token store — no migration.
+YOUTUBE_ANALYTICS_SCOPES = (
+    "https://www.googleapis.com/auth/yt-analytics.readonly",
+    "https://www.googleapis.com/auth/youtube.readonly",
+)
+
+
+def oauth_scopes(settings: Settings) -> tuple[str, ...]:
+    """The Google OAuth scopes to request: Search Console always, plus YouTube Analytics when
+    connected-mode YouTube is enabled (so one consent grants both)."""
+    if getattr(settings, "youtube_analytics_connect_enabled", False):
+        return GSC_SCOPES + YOUTUBE_ANALYTICS_SCOPES
+    return GSC_SCOPES
 
 
 def build_google_oauth_url(settings: Settings, state: str) -> str:
@@ -32,7 +46,7 @@ def build_google_oauth_url(settings: Settings, state: str) -> str:
         "client_id": settings.google_oauth_client_id,
         "redirect_uri": settings.google_oauth_redirect_uri,
         "response_type": "code",
-        "scope": " ".join(GSC_SCOPES),
+        "scope": " ".join(oauth_scopes(settings)),
         "access_type": "offline",
         "prompt": "consent",
         "state": state,
@@ -276,17 +290,33 @@ def collect_search_analytics(
     low_ctr_pages = _low_ctr_pages(top_pages)
     declining_pages = _declining_pages(top_pages, previous_pages)
     brand_token = _brand_token(site_url)
+    window_days = (end_date - start_date).days + 1
+    # Site totals from the page dimension, computed BEFORE truncation — used to cap the
+    # opportunity model and to let prose reconcile against the site's real click volume.
+    site_total_clicks = sum(float(row.get("clicks") or 0) for row in top_pages)
+    site_total_impressions = sum(float(row.get("impressions") or 0) for row in top_pages)
     return {
         "status": "complete",
         "source": "search_console_api",
         "site_url": site_url,
-        "date_range": {"start": start_date.isoformat(), "end": end_date.isoformat()},
+        "date_range": {
+            "start": start_date.isoformat(),
+            "end": end_date.isoformat(),
+            "days": window_days,
+        },
+        "previous_date_range": {
+            "start": previous_start.isoformat(),
+            "end": previous_end.isoformat(),
+            "days": window_days,
+        },
         "summary": {
             "top_query_count": len(top_queries),
             "top_page_count": len(top_pages),
             "ranking_opportunities": len(opportunities),
             "high_impression_low_ctr_pages": len(low_ctr_pages),
             "declining_pages": len(declining_pages),
+            "total_clicks": int(site_total_clicks + 0.5),
+            "total_impressions": int(site_total_impressions + 0.5),
         },
         "top_queries": top_queries[:50],
         "top_pages": top_pages[:50],
@@ -295,7 +325,9 @@ def collect_search_analytics(
         "declining_pages": declining_pages[:25],
         # Business-opportunity framing (P1-P4); see helpers above. Stored as facts so the grounding
         # validator keeps any executive-summary prose that cites these numbers.
-        "opportunity": _opportunity_estimate(opportunities),
+        "opportunity": _opportunity_estimate(
+            opportunities, window_days=window_days, site_total_clicks=site_total_clicks
+        ),
         "branded": _branded_split(top_queries, site_url),
         "topic_clusters": _topic_clusters(top_queries, brand_token)[:8],
         "started_at": started_at,
@@ -449,7 +481,8 @@ def _ranking_opportunities(rows: list[JsonDict]) -> list[JsonDict]:
     return [
         row
         for row in rows
-        if float(row.get("impressions") or 0) >= 50 and 4 <= float(row.get("position") or 0) <= 20
+        if float(row.get("impressions") or 0) >= 50
+        and _STRIKING_POSITION_MIN <= float(row.get("position") or 0) <= _STRIKING_POSITION_MAX
     ]
 
 
@@ -469,24 +502,69 @@ def _low_ctr_pages(rows: list[JsonDict]) -> list[JsonDict]:
 # and never a revenue/CAC figure (out of scope without CRM data). Half-up rounding (int(x + 0.5))
 # matches the project convention.
 
-# Published organic CTR-by-position meta-analysis (First Page Sage, 2025). Used only to model the
-# opportunity range from real impressions; positions past 10 fall back to the position-10 CTR.
+# Blended organic CTR-by-position curve, deliberately conservative: the position-1 value
+# sits in the 20-28% band reported by the large GSC-derived studies (Backlinko, SISTRIX,
+# seoClarity). The First Page Sage meta-analysis (P1 = 39.8%) is the optimistic outlier
+# and is no longer the default. Versioned like a rubric so stored estimates stay
+# explainable; positions past 10 fall back to the position-10 CTR.
+_CTR_CURVE_VERSION = "blended-conservative-v1"
 _CTR_CURVE: dict[int, float] = {
-    1: 0.398,
-    2: 0.187,
-    3: 0.102,
-    4: 0.072,
-    5: 0.051,
-    6: 0.044,
-    7: 0.030,
-    8: 0.021,
-    9: 0.019,
-    10: 0.016,
+    1: 0.276,
+    2: 0.157,
+    3: 0.110,
+    4: 0.080,
+    5: 0.061,
+    6: 0.047,
+    7: 0.038,
+    8: 0.031,
+    9: 0.026,
+    10: 0.022,
 }
-_CTR_CURVE_SOURCE = "First Page Sage organic CTR-by-position meta-analysis (2025)"
-# Conservative target band: model near-miss pages reaching the top of page 1 (position 5 = low end,
-# position 3 = high end). Never position 1 — that would overstate the opportunity.
+_CTR_CURVE_SOURCE = (
+    "blended average of GSC-derived organic CTR studies (Backlinko / SISTRIX / seoClarity)"
+)
+# Conservative target band: model near-miss queries reaching the top of page 1 (position 5 =
+# low end, position 3 = high end). Never position 1 — that would overstate the opportunity.
 _OPPORTUNITY_TARGET_LOW, _OPPORTUNITY_TARGET_HIGH = 5, 3
+# The striking-distance ("near-miss") definition, stored as facts so grounded prose can
+# state it: queries already ranking just below the top results.
+_STRIKING_POSITION_MIN, _STRIKING_POSITION_MAX = 4, 20
+# Model only the highest-impression striking queries — projecting every ranking query
+# moving at once is not defensible.
+_OPPORTUNITY_MAX_QUERIES = 25
+# AI Overviews suppress organic CTR MOST at the top of the SERP and less further down, so the
+# modeled upside gets a POSITION-AWARE haircut, not a flat one. Per-rank CTR reduction (the CTR
+# loss on queries where an AI Overview is present) is from Ahrefs' Dec-2025 study of ~300k
+# keywords (https://ahrefs.com/blog/ai-overviews-reduce-clicks-update/): -58% at rank 1 decaying
+# to -19.4% at rank 10. Positions 6-9 are linearly interpolated between the published pos-5
+# (32.6%) and pos-10 (19.4%) points; past 10 falls back to the pos-10 value. The discount applied
+# at a target rank is prevalence * reduction-at-that-rank, so a query modeled reaching position 3
+# is discounted more than one reaching position 5 (the earlier code applied a single flat 15%,
+# which understated the top-of-page suppression the modeled targets sit in).
+_AIO_MODEL_VERSION = "position-aware-v1"
+_AIO_CTR_REDUCTION: dict[int, float] = {
+    1: 0.580,
+    2: 0.508,
+    3: 0.464,
+    4: 0.388,
+    5: 0.326,
+    6: 0.300,
+    7: 0.273,
+    8: 0.247,
+    9: 0.220,
+    10: 0.194,
+}
+# Share of the transactional/home-services queries this tool audits that surface an AI Overview.
+# AIOs grew from ~13% (mid-2024) toward ~40% of queries by late 2025; 0.40 is a conservative
+# blend for commercial SERPs. This is the one tunable here — raising it makes every forecast more
+# conservative (a larger upside haircut); it does not affect any score.
+_AIO_PREVALENCE = 0.40
+# Even correct fixes rarely capture 100% of modeled upside; the headline is conservative.
+_SCENARIO_CAPTURE = {"conservative": 0.5, "expected": 0.7, "optimistic": 1.0}
+# No scenario may exceed this multiple of the site's CURRENT monthly clicks — a
+# step-function projection of many times current traffic is not defensible.
+_OPPORTUNITY_CAP_MULTIPLE = 3
+_AVG_DAYS_PER_MONTH = 30.44
 # Published home-services service-page contact (call/form) conversion benchmark RANGE — an industry
 # figure, NOT measured on the audited site; only ever applied as a labeled range, never x job value.
 _LEAD_RATE_LOW_PCT, _LEAD_RATE_HIGH_PCT = 5, 10
@@ -502,6 +580,7 @@ _CLUSTER_STOPWORDS = frozenset(
         "our",
         "best",
         "near",
+        "me",
         "are",
         "can",
         "does",
@@ -515,7 +594,8 @@ _CLUSTER_STOPWORDS = frozenset(
         "costs",
         "price",
         "prices",
-        "near me",
+        "per",
+        "much",
         "company",
         "companies",
         "service",
@@ -527,9 +607,28 @@ _CLUSTER_STOPWORDS = frozenset(
     }
 )
 
+# Function words that must never begin or end a topic label ("square foot to" -> "square
+# foot"). Trimmed only at the edges, so they can still appear mid-phrase ("build a house").
+_CLUSTER_EDGE_FILLERS = _CLUSTER_STOPWORDS | frozenset(
+    {"to", "a", "an", "of", "in", "on", "at", "by", "or", "is", "it", "as", "vs"}
+)
+
+
+def _lookup_rank(curve: dict[int, float], position: int) -> float:
+    """Read a per-rank curve value, clamping the position into the curve's 1..10 domain
+    (every such curve defines all of ranks 1-10, so the clamp always resolves to a key)."""
+    return curve[max(1, min(position, 10))]
+
 
 def _ctr_at(position: int) -> float:
-    return _CTR_CURVE.get(max(1, min(position, 10)), _CTR_CURVE[10])
+    return _lookup_rank(_CTR_CURVE, position)
+
+
+def _aio_factor(position: int) -> float:
+    """Position-aware AI-Overview upside multiplier: 1 - prevalence * CTR-reduction-at-rank.
+    Higher ranks suffer more AIO suppression, so they keep a smaller share of the modeled
+    upside. Always in (0, 1]; monotonically increasing in position (rank 1 keeps the least)."""
+    return 1.0 - _AIO_PREVALENCE * _lookup_rank(_AIO_CTR_REDUCTION, position)
 
 
 def _opportunity_for_target(rows: list[JsonDict], target_position: int) -> float:
@@ -543,35 +642,101 @@ def _opportunity_for_target(rows: list[JsonDict], target_position: int) -> float
     return total
 
 
-def _opportunity_estimate(striking_rows: list[JsonDict]) -> JsonDict:
-    """P1+P2: deterministic 'clicks/leads left on the table' from the striking-distance set."""
+def _per_month(value: float, window_days: int) -> int:
+    """Convert a collection-window total to a true monthly rate (half-up)."""
+    months = max(window_days, 1) / _AVG_DAYS_PER_MONTH
+    return int(value / months + 0.5)
+
+
+def _opportunity_estimate(
+    striking_rows: list[JsonDict], *, window_days: int, site_total_clicks: float
+) -> JsonDict:
+    """Deterministic 'clicks/leads left on the table' from the striking-distance set.
+
+    Defensibility rules: model only the top-N striking queries; target positions 3-5,
+    never 1; discount for AI Overviews; present conservative/expected/optimistic capture
+    scenarios and lead with conservative; cap every scenario at a small multiple of the
+    site's current monthly clicks; state true monthly rates with the window recorded.
+    Every figure is stored as a fact so grounded prose can cite it.
+    """
     if not striking_rows:
         return {}
+    modeled = sorted(
+        striking_rows, key=lambda row: float(row.get("impressions") or 0), reverse=True
+    )[:_OPPORTUNITY_MAX_QUERIES]
     total_impressions = sum(float(row.get("impressions") or 0) for row in striking_rows)
     current_clicks = sum(
         float(row.get("impressions") or 0) * float(row.get("ctr") or 0) for row in striking_rows
     )
-    opp_low = _opportunity_for_target(striking_rows, _OPPORTUNITY_TARGET_LOW)
-    opp_high = _opportunity_for_target(striking_rows, _OPPORTUNITY_TARGET_HIGH)
-    opp_clicks_low, opp_clicks_high = int(opp_low + 0.5), int(opp_high + 0.5)
-    # No modeled headroom (every near-miss query already out-performs the target CTR) => emit
-    # nothing rather than a degenerate "0 to 0 more visits" estimate; the callout simply won't show.
-    if opp_clicks_high <= 0:
+    # Position-aware AIO haircut: each target rank keeps its own share of the upside (the
+    # optimistic target 3 is discounted more than the conservative target 5).
+    upside_low = _opportunity_for_target(modeled, _OPPORTUNITY_TARGET_LOW) * _aio_factor(
+        _OPPORTUNITY_TARGET_LOW
+    )
+    upside_high = _opportunity_for_target(modeled, _OPPORTUNITY_TARGET_HIGH) * _aio_factor(
+        _OPPORTUNITY_TARGET_HIGH
+    )
+
+    site_monthly_clicks = _per_month(site_total_clicks, window_days)
+    # A zero-click site has no traffic baseline to cap against; the conservative capture
+    # + AIO discount are the only brakes there (capping to max(0, ...) would pin every
+    # scenario at a meaningless floor while the report claims "3x current clicks").
+    cap = _OPPORTUNITY_CAP_MULTIPLE * site_monthly_clicks if site_monthly_clicks > 0 else None
+    capped = False
+    scenarios: JsonDict = {}
+    for name, capture in _SCENARIO_CAPTURE.items():
+        low = _per_month(upside_low * capture, window_days)
+        high = _per_month(upside_high * capture, window_days)
+        if cap is not None:
+            if low > cap or high > cap:
+                capped = True
+            low = min(low, cap)
+            high = min(high, cap)
+        scenarios[name] = {
+            "clicks_low": low,
+            "clicks_high": high,
+            "capture_pct": int(capture * 100),
+        }
+
+    headline = scenarios["conservative"]
+    # The reader sees the conservative MONTHLY range; guard on that same number (the raw
+    # window-total upside is ~6x larger at the default 91-day window and 50% capture, so
+    # testing it lets a degenerate "0 to 0 visits per month" estimate through).
+    if headline["clicks_high"] <= 0:
         return {}
     return {
         "is_estimate": True,
+        "per_month": True,
+        "window_days": window_days,
         "striking_query_count": len(striking_rows),
-        "total_striking_impressions": int(total_impressions + 0.5),
-        "current_clicks": int(current_clicks + 0.5),
-        "opportunity_clicks_low": opp_clicks_low,
-        "opportunity_clicks_high": opp_clicks_high,
-        "estimated_leads_low": int(opp_clicks_low * _LEAD_RATE_LOW_PCT / 100 + 0.5),
-        "estimated_leads_high": int(opp_clicks_high * _LEAD_RATE_HIGH_PCT / 100 + 0.5),
+        "modeled_query_count": len(modeled),
+        "striking_position_min": _STRIKING_POSITION_MIN,
+        "striking_position_max": _STRIKING_POSITION_MAX,
+        "total_striking_impressions": _per_month(total_impressions, window_days),
+        "current_clicks": _per_month(current_clicks, window_days),
+        "site_monthly_clicks": site_monthly_clicks,
+        "scenarios": scenarios,
+        # Headline = the conservative scenario, by design.
+        "opportunity_clicks_low": headline["clicks_low"],
+        "opportunity_clicks_high": headline["clicks_high"],
+        "estimated_leads_low": int(headline["clicks_low"] * _LEAD_RATE_LOW_PCT / 100 + 0.5),
+        "estimated_leads_high": int(headline["clicks_high"] * _LEAD_RATE_HIGH_PCT / 100 + 0.5),
         "lead_rate_low_pct": _LEAD_RATE_LOW_PCT,
         "lead_rate_high_pct": _LEAD_RATE_HIGH_PCT,
         "target_position_low": _OPPORTUNITY_TARGET_LOW,
         "target_position_high": _OPPORTUNITY_TARGET_HIGH,
+        # Position-aware discount RANGE, derived from the SAME _aio_factor applied to the click
+        # figures (single source of truth, so the displayed and applied haircuts never drift and
+        # the target-position clamp is inherited): smaller at the conservative target (position 5),
+        # larger at the optimistic one (position 3), where AI Overviews suppress clicks most.
+        "aio_discount_min_pct": int((1 - _aio_factor(_OPPORTUNITY_TARGET_LOW)) * 100 + 0.5),
+        "aio_discount_max_pct": int((1 - _aio_factor(_OPPORTUNITY_TARGET_HIGH)) * 100 + 0.5),
+        "aio_model_version": _AIO_MODEL_VERSION,
+        "capture_capped": capped,
+        "cap_applied": cap is not None,
+        "cap_multiple": _OPPORTUNITY_CAP_MULTIPLE,
         "ctr_curve_source": _CTR_CURVE_SOURCE,
+        "ctr_curve_version": _CTR_CURVE_VERSION,
     }
 
 
@@ -612,55 +777,152 @@ def _branded_split(rows: list[JsonDict], site_url: str) -> JsonDict:
     }
 
 
+def _query_terms(query: str) -> list[str]:
+    # \w is unicode-aware: "plomería" stays one term instead of fragmenting into
+    # garbage pieces that would join back into unreadable phrase labels.
+    return [term for term in re.split(r"[\W_]+", query.lower()) if term]
+
+
+def _is_content_word(word: str) -> bool:
+    """A word that carries topic meaning: at least 4 letters and not a cluster stopword.
+    Single source of truth for what counts as a content word across tokenizing, phrase
+    labelling, and cluster de-duplication (so the rule lives in one place, not four)."""
+    return len(word) >= 4 and word not in _CLUSTER_STOPWORDS
+
+
+def _query_ngrams(query: str, brand_token: str) -> list[str]:
+    """Candidate topic labels for one query: readable phrases first (tri/bi-grams over the
+    raw word sequence, so labels read like "cost per square foot" instead of disjoint
+    tokens), with single content tokens as fallback granularity."""
+    words = _query_terms(query)
+    grams: list[str] = []
+    for size in (3, 2):
+        for start in range(len(words) - size + 1):
+            piece = words[start : start + size]
+            if brand_token and brand_token in piece:
+                continue
+            # Trim stopword/function-word edges so a label never reads "repair near me",
+            # "square foot to", or "per square" — the rendered phrase keeps its subject
+            # nouns. Only explicit fillers are stripped, so a meaningful short token like
+            # "df" (Mexico City) or "ai" survives.
+            while piece and piece[0] in _CLUSTER_EDGE_FILLERS:
+                piece = piece[1:]
+            while piece and piece[-1] in _CLUSTER_EDGE_FILLERS:
+                piece = piece[:-1]
+            if len(piece) < 2:
+                continue
+            # A phrase must carry at least one content word to be a topic label.
+            if not any(_is_content_word(word) for word in piece):
+                continue
+            grams.append(" ".join(piece))
+    grams.extend(_query_tokens(query, brand_token))
+    return grams
+
+
 def _query_tokens(query: str, brand_token: str) -> list[str]:
-    tokens = re.split(r"[^a-z0-9]+", query.lower())
     return [
-        token
-        for token in tokens
-        if len(token) >= 4 and token not in _CLUSTER_STOPWORDS and token != brand_token
+        token for token in _query_terms(query) if _is_content_word(token) and token != brand_token
     ]
+
+
+def _content_chars(phrase: str) -> int:
+    """Total length of a phrase's content words — a proxy for how much real meaning it
+    carries, used to prefer "plomería méxico" over "méxico df"."""
+    return sum(len(word) for word in phrase.split() if _is_content_word(word))
 
 
 def _topic_clusters(
     rows: list[JsonDict], brand_token: str, *, max_clusters: int = 6
 ) -> list[JsonDict]:
-    """P4: deterministic topic-cluster visibility. Seeds are the highest-impression content tokens
-    across the query set; each query joins the first seed it contains. No LLM, no external
-    taxonomy."""
-    weights: dict[str, float] = {}
+    """P4: deterministic topic-cluster visibility. Groups queries by the heaviest CONTENT TOKEN
+    they share (broad coverage — the way a marketer thinks in themes), but LABELS each group
+    with its cleanest phrase so the report reads "square foot", not the bare token "square"
+    (nor the two fragments "square" + "foot" the live run once showed). Co-occurring fragments
+    are folded into one cluster. No LLM, no external taxonomy.
+
+    Seeding on phrases directly (an earlier attempt) read well but under-counted: a broad query
+    like "square footage estimate" contains no exact phrase seed and vanished, deflating every
+    theme. Token grouping restores coverage; the phrase is used only for display.
+    """
+    token_weights: dict[str, float] = {}
+    phrase_weights: dict[str, float] = {}
     for row in rows:
         impressions = float(row.get("impressions") or 0)
-        for token in _query_tokens(str(row.get("query") or ""), brand_token):
-            weights[token] = weights.get(token, 0.0) + impressions
-    if not weights:
+        query = str(row.get("query") or "")
+        for token in set(_query_tokens(query, brand_token)):
+            token_weights[token] = token_weights.get(token, 0.0) + impressions
+        for gram in set(_query_ngrams(query, brand_token)):
+            if len(gram.split()) >= 2:
+                phrase_weights[gram] = phrase_weights.get(gram, 0.0) + impressions
+    if not token_weights:
         return []
-    seeds = [token for token, _ in sorted(weights.items(), key=lambda kv: (-kv[1], kv[0]))][
-        :max_clusters
-    ]
+
+    def _label_for(token: str) -> str:
+        # Cleanest phrase that includes this token as a word: prefer heavier, then SHORTER
+        # (so "square foot" wins over "foot to build"), then more real content, then alpha.
+        # Falls back to the bare token when no multi-word query contains it.
+        best_key: tuple[float, int, int, str] | None = None
+        chosen = token
+        for phrase, weight in phrase_weights.items():
+            if token not in phrase.split():
+                continue
+            key = (-weight, len(phrase.split()), -_content_chars(phrase), phrase)
+            if best_key is None or key < best_key:
+                best_key = key
+                chosen = phrase
+        return chosen
+
+    seeds: list[tuple[str, str, set[str]]] = []  # (grouping token, display label, owned words)
+    claimed: set[str] = set()
+    for token, _weight in sorted(token_weights.items(), key=lambda kv: (-kv[1], kv[0])):
+        if len(seeds) >= max_clusters:
+            break
+        if token in claimed:
+            continue
+        label = _label_for(token)
+        # A seed OWNS its grouping token plus every content word in its chosen label. Folding
+        # those words into "claimed" stops a co-occurring fragment (the "foot" of "square
+        # foot") from opening a second, duplicate cluster; OWNING them also means a query that
+        # carries only that fragment still lands in THIS cluster (see bucketing below) rather
+        # than being dropped — the 100% coverage the token-grouping rewrite is meant to give.
+        owned = {token} | {word for word in label.split() if _is_content_word(word)}
+        seeds.append((token, label, owned))
+        claimed |= owned
+
     buckets: dict[str, dict[str, float]] = {
-        seed: {"impressions": 0.0, "position_weight": 0.0, "count": 0.0} for seed in seeds
+        token: {"impressions": 0.0, "position_weight": 0.0, "count": 0.0} for token, _, _ in seeds
     }
+    labels = {token: label for token, label, _ in seeds}
     for row in rows:
         impressions = float(row.get("impressions") or 0)
         position = float(row.get("position") or 0)
-        tokens = set(_query_tokens(str(row.get("query") or ""), brand_token))
-        seed = next((candidate for candidate in seeds if candidate in tokens), None)
-        if seed is None:
+        terms = set(_query_terms(str(row.get("query") or "")))
+        # Prefer the heaviest seed whose GROUPING TOKEN the query actually contains — that is the
+        # theme the query is genuinely about. Only when no grouping token matches (the query
+        # shares just a folded label fragment) fall back to owned-word matching, which rescues a
+        # fragment-only query into its fragment's cluster instead of dropping it, without
+        # stealing a query that belongs to a lighter seed's own grouping token.
+        token = next(
+            (seed_token for seed_token, _label, _owned in seeds if seed_token in terms), None
+        )
+        if token is None:
+            token = next((seed_token for seed_token, _label, owned in seeds if owned & terms), None)
+        if token is None:
             continue
-        bucket = buckets[seed]
+        bucket = buckets[token]
         bucket["impressions"] += impressions
         bucket["position_weight"] += position * impressions
         bucket["count"] += 1
     clusters = [
         {
-            "cluster": seed,
+            "cluster": labels[token],
             "query_count": int(bucket["count"]),
             "impressions": int(bucket["impressions"] + 0.5),
             "avg_position": round(bucket["position_weight"] / bucket["impressions"], 1)
             if bucket["impressions"] > 0
             else 0.0,
         }
-        for seed, bucket in buckets.items()
+        for token, bucket in buckets.items()
         if bucket["count"] > 0 and bucket["impressions"] > 0
     ]
     clusters.sort(key=lambda item: (-item["impressions"], item["cluster"]))

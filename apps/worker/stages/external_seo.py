@@ -92,9 +92,11 @@ def _collect_technical_crawl(
         settings=settings,
         deadline=deadline,
     )
-    if screaming_frog is not None and site_health.get("status") != "complete":
-        # Neither tool produced usable data — report the Screaming Frog attempt,
-        # which the operator explicitly enabled.
+    # A "partial" sweep (bot-blocked or budget-stopped) still carries every link it DID
+    # check plus the honest politeness/bot-block notes — far more useful than a failed
+    # Screaming Frog attempt, so that failure is shown only when the sweep produced
+    # nothing usable at all.
+    if screaming_frog is not None and site_health.get("status") not in {"complete", "partial"}:
         return screaming_frog
     if screaming_frog is not None:
         site_health["screaming_frog_attempt"] = {

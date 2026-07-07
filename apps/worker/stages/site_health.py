@@ -24,6 +24,7 @@ URL before it is requested.
 from __future__ import annotations
 
 import asyncio
+import random
 import time
 from collections import defaultdict
 from collections.abc import Sequence
@@ -49,7 +50,22 @@ from apps.worker.stages.technical_crawl_common import empty_summary, issues_from
 JsonDict = dict[str, Any]
 
 SITE_HEALTH_SOURCE = "site_health_sweep"
-_RETRY_GET_STATUSES = {403, 405, 406, 429, 501}
+_RETRY_GET_STATUSES = {403, 405, 406, 501}
+# 429 is a rate-limit signal, handled separately: the checker honors Retry-After and
+# backs off instead of immediately doubling the traffic with a GET retry.
+_RATE_LIMIT_STATUS = 429
+_MAX_RATE_LIMIT_RETRIES = 2
+_RETRY_AFTER_CAP_SECONDS = 30
+# Response fingerprints that indicate a WAF/bot-management layer answered instead of
+# the origin — used only to explain failures honestly, never to bypass anything.
+_WAF_HEADER_MARKERS = ("cf-ray", "cf-mitigated")
+_WAF_SERVER_TOKENS = ("cloudflare", "akamai", "sucuri", "imperva", "incapsula")
+# One diagnostic recheck with a regular browser profile distinguishes "the site blocks
+# automated checkers" from "the site is down" before the report says anything.
+_BROWSER_RECHECK_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
 # Outbound links are checked by a server-side bot, which cannot distinguish a
 # genuinely broken external link from a host that simply blocks automated
 # traffic. Big platforms (Spotify, social networks, anything behind Cloudflare)
@@ -62,9 +78,83 @@ _RETRY_GET_STATUSES = {403, 405, 406, 429, 501}
 _BROKEN_EXTERNAL_CLIENT_STATUSES = {404, 410}
 _MAX_REDIRECTS = 10
 
+# URL-path markers that identify a blog/article page, for the website-scope post count.
+_POST_PATH_MARKERS = ("/blog/", "/blogs/", "/post/", "/posts/", "/news/", "/article/", "/articles/")
+
+
+def _looks_like_post(url: str) -> bool:
+    """Heuristic: does this internal URL look like a blog/article post? (scope estimate only)."""
+    lowered = url.lower()
+    return any(marker in lowered for marker in _POST_PATH_MARKERS)
+
 
 class _BlockedHost(RuntimeError):
     """Raised when a request URL or redirect target fails the SSRF host guard."""
+
+
+def _error_class(exc: Exception) -> str:
+    """Coarse transport-failure class, retained so 'did not respond' is explainable."""
+    if isinstance(exc, httpx.TimeoutException):
+        return "timeout"
+    if isinstance(exc, httpx.TooManyRedirects):
+        return "redirect_loop"
+    text = str(exc).lower()
+    if isinstance(exc, httpx.ConnectError):
+        return (
+            "tls"
+            if "ssl" in text or "tls" in text or "certificate" in text
+            else "connection_failed"
+        )
+    if isinstance(exc, httpx.RemoteProtocolError):
+        return "protocol"
+    return "network"
+
+
+def _looks_waf(response: httpx.Response) -> bool:
+    headers = response.headers
+    if any(marker in headers for marker in _WAF_HEADER_MARKERS):
+        return True
+    server = (headers.get("server") or "").lower()
+    return any(token in server for token in _WAF_SERVER_TOKENS)
+
+
+def _retry_after_seconds(response: httpx.Response, attempt: int) -> float:
+    raw = (response.headers.get("retry-after") or "").strip()
+    try:
+        seconds = float(raw)
+    except ValueError:
+        seconds = float(2**attempt)
+    return max(0.0, min(seconds, _RETRY_AFTER_CAP_SECONDS))
+
+
+async def _browser_ua_recheck(url: str | None, settings: Settings) -> bool:
+    """One best-effort GET with a regular browser profile. True = the URL answered, so
+    the earlier failures were the server filtering automated traffic, not a dead page.
+
+    ``follow_redirects`` stays False: the sample URL's host was SSRF-vetted at sweep
+    time, but a redirect target is attacker-controlled (an open redirect to a private
+    or cloud-metadata host) — and any response, 3xx included, already proves the server
+    answers a browser, which is all this diagnostic needs.
+    """
+    if not url:
+        return False
+    try:
+        async with httpx.AsyncClient(
+            follow_redirects=False,
+            verify=False,
+            headers={
+                "User-Agent": _BROWSER_RECHECK_UA,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+            timeout=settings.site_health_request_timeout_seconds,
+        ) as client:
+            response = await client.get(url)
+        return response.status_code < 500
+    except SoftTimeLimitExceeded:
+        raise
+    except Exception:
+        return False
 
 
 def collect_site_health_facts(
@@ -149,6 +239,12 @@ async def _collect(
         internal_urls = sorted(
             (set(internal_urls) | set(sitemap_urls)) - rendered_urls,
         )
+        # Website-scope counts ("what the whole site consists of") — captured over ALL discovered
+        # internal pages (rendered + link/sitemap-discovered) BEFORE the coverage cap truncates the
+        # sweep list, so the report can state the true site size, not just what was checked.
+        all_internal_urls = set(internal_urls) | rendered_urls
+        discovered_internal_urls = len(all_internal_urls)
+        discovered_blog_posts = sum(1 for url in all_internal_urls if _looks_like_post(url))
         if len(internal_urls) > settings.site_health_max_internal_urls:
             notes.append(
                 f"Checked the first {settings.site_health_max_internal_urls} of "
@@ -157,6 +253,7 @@ async def _collect(
             internal_urls = internal_urls[: settings.site_health_max_internal_urls]
 
         external_urls = sorted(set(external_urls))
+        discovered_external_urls = len(external_urls)
         if not settings.site_health_check_external_links:
             external_urls = []
         elif len(external_urls) > settings.site_health_max_external_urls:
@@ -182,14 +279,26 @@ async def _collect(
     summary["internal_urls_checked"] = checks["internal_checked"]
     summary["external_urls_checked"] = checks["external_checked"]
     summary["urls_checked"] = checks["internal_checked"] + checks["external_checked"]
+    # Website-scope totals (site size), independent of how many were checked.
+    summary["discovered_internal_urls"] = discovered_internal_urls
+    summary["discovered_blog_posts"] = discovered_blog_posts
+    summary["discovered_external_urls"] = discovered_external_urls
+    if checks.get("error_classes"):
+        # Retained so "did not respond" is diagnosable (timeout vs reset vs TLS).
+        summary["unreachable_error_classes"] = checks["error_classes"]
 
     # Sweep results arrive in network-completion order; sort the example URLs so
     # the same site state renders the same report.
     for key in examples:
         examples[key].sort()
 
-    return {
-        "status": "complete",
+    # A tripped breaker means the host stopped answering this checker: the link results
+    # are incomplete and must not be scored or rendered as broken-link findings. The
+    # non-complete status makes the scoring trust gate strip the summary and the report
+    # fall back to the honest "not available" framing with the explanatory note.
+    bot_blocked = bool(checks.get("bot_blocked"))
+    result: JsonDict = {
+        "status": "partial" if bot_blocked else "complete",
         "source": SITE_HEALTH_SOURCE,
         "summary": summary,
         "issues": issues_from_summary(summary, examples, source=SITE_HEALTH_SOURCE),
@@ -200,12 +309,18 @@ async def _collect(
             "inconclusive_external_urls": checks["inconclusive_external"],
             "blocked_urls": checks["blocked"],
             "rendered_pages_excluded": len(rendered_urls),
+            "waf_signals": checks.get("waf_signals", 0),
+            "skipped_breaker": checks.get("skipped_breaker", 0),
+            "browser_recheck_ok": checks.get("browser_recheck_ok"),
         },
         "notes": notes,
         "files": [],
         "started_at": started_at,
         "completed_at": _utc_now(),
     }
+    if bot_blocked:
+        result["reason"] = "bot_blocked"
+    return result
 
 
 def _apply_on_page_checks(
@@ -418,7 +533,11 @@ async def _sweep(
     host_allowed_cache: dict[str, bool],
     global_deadline: float | None = None,
 ) -> JsonDict:
-    semaphore = asyncio.Semaphore(settings.site_health_concurrency)
+    # The sweep targets ONE host, so per-host politeness is the effective limit; the
+    # legacy global knob still acts as an upper cap.
+    lanes = max(1, min(settings.site_health_concurrency, settings.site_health_per_host_concurrency))
+    delay_seconds = max(0, settings.site_health_request_delay_ms) / 1000.0
+    semaphore = asyncio.Semaphore(lanes)
     deadline = time.monotonic() + settings.site_health_total_budget_seconds
     if global_deadline is not None:
         # Never run past the whole-audit deadline, even if the sweep's own budget is
@@ -430,11 +549,22 @@ async def _sweep(
         "blocked": 0,
         "skipped_budget": 0,
         "inconclusive_external": 0,
+        "skipped_breaker": 0,
+        "waf_signals": 0,
     }
+    error_classes: dict[str, int] = defaultdict(int)
+    # Circuit breaker: consecutive INTERNAL transport failures mean the host (or its
+    # firewall) has stopped answering this checker — keep hammering and every remaining
+    # URL becomes a false "dead link".
+    breaker = {"consecutive": 0, "tripped": False, "sample_url": None}
     lock = asyncio.Lock()
 
     async def check(url: str, *, internal: bool) -> None:
         async with semaphore:
+            async with lock:
+                if breaker["tripped"]:
+                    counters["skipped_breaker"] += 1
+                    return
             # Budget is checked AFTER acquiring the semaphore: all coroutines are
             # scheduled up front by gather(), so a pre-semaphore check would run at
             # t~0 for every URL and the budget could never actually fire.
@@ -442,6 +572,10 @@ async def _sweep(
                 async with lock:
                     counters["skipped_budget"] += 1
                 return
+            if delay_seconds:
+                # Polite pacing with jitter so the checker never bursts. Only timing
+                # varies — the collected facts stay deterministic.
+                await asyncio.sleep(delay_seconds * (0.75 + random.random() * 0.5))
             # getaddrinfo is blocking; keep it off the event loop so one slow DNS
             # lookup cannot stall every in-flight request.
             allowed = await asyncio.to_thread(_host_allowed, url, settings, host_allowed_cache)
@@ -450,7 +584,7 @@ async def _sweep(
                     counters["blocked"] += 1
                 return
             try:
-                status_code, x_robots, error, redirect_hops = await _check_url(
+                status_code, x_robots, error, redirect_hops, err_class, waf = await _check_url(
                     client, url, settings, host_allowed_cache
                 )
             except _BlockedHost:
@@ -460,6 +594,8 @@ async def _sweep(
 
         async with lock:
             counters["internal_checked" if internal else "external_checked"] += 1
+            if waf:
+                counters["waf_signals"] += 1
             if error is not None:
                 key = "unreachable_internal_urls" if internal else "unreachable_external_urls"
                 summary[key] = int(summary.get(key) or 0) + 1
@@ -467,7 +603,15 @@ async def _sweep(
                     # Only internal unreachables surface as a report issue; dead
                     # outbound hosts are often bot-blocking and would over-claim.
                     _example(examples, "unreachable_internal_urls", url)
+                    error_classes[err_class or "network"] += 1
+                    breaker["consecutive"] += 1
+                    if breaker["sample_url"] is None:
+                        breaker["sample_url"] = url
+                    if breaker["consecutive"] >= settings.site_health_breaker_threshold:
+                        breaker["tripped"] = True
                 return
+            if internal:
+                breaker["consecutive"] = 0
             if status_code is None:
                 return
             if internal:
@@ -505,12 +649,56 @@ async def _sweep(
         *(check(url, internal=False) for url in external_urls),
     )
 
+    if counters["internal_checked"] or counters["external_checked"]:
+        # Answer "what was the crawl rate?" in the report itself.
+        notes.append(
+            f"Link checks ran politely: up to {lanes} concurrent requests with "
+            f"~{settings.site_health_request_delay_ms} ms spacing between requests."
+        )
     if counters["skipped_budget"]:
         notes.append(
             f"{counters['skipped_budget']} discovered URLs were not checked because the "
-            f"sweep reached its {settings.site_health_total_budget_seconds}s time budget."
+            f"site health check reached its {settings.site_health_total_budget_seconds}s "
+            "time budget."
+        )
+
+    counters["error_classes"] = dict(sorted(error_classes.items()))
+    counters["bot_blocked"] = bool(breaker["tripped"])
+    if breaker["tripped"]:
+        recheck_ok = await _browser_ua_recheck(breaker["sample_url"], settings)
+        counters["browser_recheck_ok"] = recheck_ok
+        detail = (
+            "the same URL answered a regular browser profile, so the server is filtering "
+            "automated traffic"
+            if recheck_ok
+            else "the server stopped answering our checker entirely"
+        )
+        notes.append(
+            f"Link checking stopped early after "
+            f"{settings.site_health_breaker_threshold} consecutive network failures "
+            f"({detail}); {counters['skipped_breaker']} URLs were left unchecked. Link "
+            "results are incomplete, are not scored, and flagged URLs should be verified "
+            "manually in a browser."
         )
     return counters
+
+
+async def _request_polite(
+    client: httpx.AsyncClient,
+    method: str,
+    url: str,
+    settings: Settings,
+    host_allowed_cache: dict[str, bool],
+) -> tuple[httpx.Response, int]:
+    """One request with rate-limit awareness: a 429 is honored (Retry-After, capped)
+    and retried a bounded number of times instead of hammered."""
+    response, hops = await _guarded_request(client, method, url, settings, host_allowed_cache)
+    for attempt in range(_MAX_RATE_LIMIT_RETRIES):
+        if response.status_code != _RATE_LIMIT_STATUS:
+            break
+        await asyncio.sleep(_retry_after_seconds(response, attempt))
+        response, hops = await _guarded_request(client, method, url, settings, host_allowed_cache)
+    return response, hops
 
 
 async def _check_url(
@@ -518,30 +706,48 @@ async def _check_url(
     url: str,
     settings: Settings,
     host_allowed_cache: dict[str, bool],
-) -> tuple[int | None, str | None, str | None, int]:
-    """Return (status_code, x_robots_tag_header, error, redirect_hops).
+) -> tuple[int | None, str | None, str | None, int, str | None, bool]:
+    """Return (status_code, x_robots_tag_header, error, redirect_hops, error_class,
+    waf_suspected).
 
     GET is retried only when HEAD specifically is the problem (servers that
     reject or mishandle HEAD). Timeouts and connection failures would fail a GET
     identically, so retrying them would just double the worst-case latency.
     """
     try:
-        response, hops = await _guarded_request(client, "HEAD", url, settings, host_allowed_cache)
+        response, hops = await _request_polite(client, "HEAD", url, settings, host_allowed_cache)
         if response.status_code in _RETRY_GET_STATUSES:
-            response, hops = await _guarded_request(
-                client, "GET", url, settings, host_allowed_cache
-            )
-        return response.status_code, response.headers.get("x-robots-tag"), None, hops
+            response, hops = await _request_polite(client, "GET", url, settings, host_allowed_cache)
+        return (
+            response.status_code,
+            response.headers.get("x-robots-tag"),
+            None,
+            hops,
+            None,
+            _looks_waf(response),
+        )
     except httpx.RemoteProtocolError:
         try:
-            response, hops = await _guarded_request(
-                client, "GET", url, settings, host_allowed_cache
+            response, hops = await _request_polite(client, "GET", url, settings, host_allowed_cache)
+            return (
+                response.status_code,
+                response.headers.get("x-robots-tag"),
+                None,
+                hops,
+                None,
+                _looks_waf(response),
             )
-            return response.status_code, response.headers.get("x-robots-tag"), None, hops
         except httpx.HTTPError as exc:
-            return None, None, _trim(str(exc) or exc.__class__.__name__), 0
+            return (
+                None,
+                None,
+                _trim(str(exc) or exc.__class__.__name__),
+                0,
+                _error_class(exc),
+                False,
+            )
     except httpx.HTTPError as exc:
-        return None, None, _trim(str(exc) or exc.__class__.__name__), 0
+        return None, None, _trim(str(exc) or exc.__class__.__name__), 0, _error_class(exc), False
 
 
 async def _guarded_request(

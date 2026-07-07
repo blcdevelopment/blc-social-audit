@@ -101,14 +101,20 @@ def _build_section(
     max_findings: int,
     max_recs: int,
 ) -> CommentarySection:
-    surfaced = _surfaced_rules(section_id, score_breakdown)
+    surfaced = _merge_overlapping_rules(_surfaced_rules(section_id, score_breakdown))
     score = _int(_dict(score_breakdown.get("scores")).get(section_id))
 
     finding_order = sorted(surfaced, key=_finding_sort_key)
-    findings = [_finding(rule, facts) for rule in finding_order[:max_findings]]
+    selected = finding_order[:max_findings]
+    findings = [_finding(rule, facts) for rule in selected]
 
-    rec_order = sorted(surfaced, key=_recommendation_sort_key)
-    recommendations = [_recommendation(rule, facts) for rule in rec_order[:max_recs]]
+    # A rendered finding without its fix reads as an unanswered problem (a tier-first
+    # sort used to push long_term fixes like PageSpeed past the cap), so recommendations
+    # are the SAME selected rules, ordered for display by tier. ``max_recs`` therefore
+    # no longer truncates below the findings cap.
+    del max_recs
+    rec_order = sorted(selected, key=_recommendation_sort_key)
+    recommendations = [_recommendation(rule, facts) for rule in rec_order]
 
     label = SECTION_TITLES.get(section_id, section_id.upper())
     return CommentarySection(
@@ -116,6 +122,65 @@ def _build_section(
         findings=findings,
         recommendations=recommendations,
     )
+
+
+# Rule pairs that ask for the same site change from two different checks. When both
+# surface, the report reads as repeating itself, so the secondary (key) is folded into
+# the primary (value) as a covered-by note. Presentation-level only — scores untouched.
+_OVERLAPPING_RULE_MERGES: dict[str, str] = {
+    "seo.aeo.heading_hierarchy": "seo.h1.present_once",
+    "seo.technical_crawl.missing_h1": "seo.h1.present_once",
+    "seo.technical_crawl.missing_image_alt": "seo.images.alt_coverage",
+}
+
+
+def _merge_overlapping_rules(surfaced: list[JsonDict]) -> list[JsonDict]:
+    """Fold secondary rules into their surfaced primary; each alone still surfaces.
+
+    The merged card adopts the strongest severity and weight in its group: a ``fail``
+    secondary folded into a ``partial`` primary must not sink the combined card below
+    the findings cap (the issue would vanish from the report) or display a softer
+    severity than the check it absorbed.
+    """
+    surfaced_ids = {str(rule.get("rule_id") or "") for rule in surfaced}
+    covered: dict[str, list[JsonDict]] = {}
+    kept: list[JsonDict] = []
+    for rule in surfaced:
+        rule_id = str(rule.get("rule_id") or "")
+        primary_id = _OVERLAPPING_RULE_MERGES.get(rule_id)
+        if primary_id and primary_id in surfaced_ids:
+            covered.setdefault(primary_id, []).append(rule)
+            continue
+        kept.append(rule)
+    if not covered:
+        return kept
+    merged: list[JsonDict] = []
+    for rule in kept:
+        rule_id = str(rule.get("rule_id") or "")
+        secondaries = covered.get(rule_id)
+        if secondaries:
+            rule = dict(rule)
+            rule["covers_related"] = "; ".join(
+                str(sec.get("finding_label") or sec.get("description") or sec.get("rule_id"))
+                for sec in secondaries
+            )
+            group = [rule, *secondaries]
+            rule["severity_override"] = max(
+                (_rule_severity(member) for member in group),
+                key=lambda severity: SEVERITY_RANK[severity],
+            )
+            rule["weight"] = max(_float(member.get("weight")) for member in group)
+        merged.append(rule)
+    return merged
+
+
+def _with_covered_note(rule: JsonDict, why: str) -> str:
+    """Append the merged secondary check(s) so the single card covers both (number-free
+    so the grounding validator never strips it)."""
+    covered = rule.get("covers_related")
+    if not covered:
+        return why
+    return f"{why} Fixing this also resolves a related check: {covered}.".strip()
 
 
 def _surfaced_rules(section_id: str, score_breakdown: JsonDict) -> list[JsonDict]:
@@ -132,8 +197,16 @@ def _surfaced_rules(section_id: str, score_breakdown: JsonDict) -> list[JsonDict
     ]
 
 
+def _rule_severity(rule: JsonDict) -> Severity:
+    """Severity for ranking/display; merged cards carry their group's strongest severity."""
+    override = rule.get("severity_override")
+    if isinstance(override, str) and override in SEVERITY_RANK:
+        return override  # type: ignore[return-value]
+    return _severity(rule.get("impact"), rule.get("result"))
+
+
 def _finding_sort_key(rule: JsonDict) -> tuple[int, float, str]:
-    severity = _severity(rule.get("impact"), rule.get("result"))
+    severity = _rule_severity(rule)
     return (-SEVERITY_RANK[severity], -_float(rule.get("weight")), str(rule.get("rule_id") or ""))
 
 
@@ -143,11 +216,19 @@ def _recommendation_sort_key(rule: JsonDict) -> tuple[int, int, float, str]:
     return (tier_rank, severity_rank, neg_weight, rule_id)
 
 
+def _rule_action(rule: JsonDict) -> str:
+    remediation = rule.get("remediation")
+    if isinstance(remediation, str) and remediation.strip():
+        return remediation.strip()
+    return _DEFAULT_ACTION
+
+
 def _finding(rule: JsonDict, facts: JsonDict) -> CommentaryFinding:
     meaning, why = _meaning_and_why(rule, facts)
+    why = _with_covered_note(rule, why)
     label, urls = _location_bullets(rule, facts)
     return CommentaryFinding(
-        severity=_severity(rule.get("impact"), rule.get("result")),
+        severity=_rule_severity(rule),
         title=_finding_title(rule),
         meaning=meaning,
         why=why,
@@ -155,17 +236,15 @@ def _finding(rule: JsonDict, facts: JsonDict) -> CommentaryFinding:
         location_label=label,
         location_urls=urls,
         evidence_refs=_evidence_refs(rule),
+        action_items=[_rule_action(rule)],
+        tier=_tier(rule.get("tier")),
     )
 
 
 def _recommendation(rule: JsonDict, facts: JsonDict) -> CommentaryRecommendation:
-    remediation = rule.get("remediation")
-    action = (
-        remediation.strip()
-        if isinstance(remediation, str) and remediation.strip()
-        else _DEFAULT_ACTION
-    )
+    action = _rule_action(rule)
     meaning, why = _meaning_and_why(rule, facts)
+    why = _with_covered_note(rule, why)
     label, urls = _location_bullets(rule, facts)
     rationale = " ".join(part for part in (meaning, why) if part).strip()
     return CommentaryRecommendation(
@@ -210,26 +289,45 @@ def _opportunity_lead_in(opportunity: JsonDict) -> str:
     "to" (never a hyphen) so the grounding validator does not read the upper bound as negative."""
     if not opportunity:
         return ""
+    days = _int(opportunity.get("window_days"))
+    site_clicks = _int(opportunity.get("site_monthly_clicks"))
     impressions = _int(opportunity.get("total_striking_impressions"))
-    current = _int(opportunity.get("current_clicks"))
     queries = _int(opportunity.get("striking_query_count"))
+    modeled = _int(opportunity.get("modeled_query_count"))
+    pos_min = _int(opportunity.get("striking_position_min"))
+    pos_max = _int(opportunity.get("striking_position_max"))
     clicks_low = _int(opportunity.get("opportunity_clicks_low"))
     clicks_high = _int(opportunity.get("opportunity_clicks_high"))
     leads_low = _int(opportunity.get("estimated_leads_low"))
     leads_high = _int(opportunity.get("estimated_leads_high"))
     rate_low = _int(opportunity.get("lead_rate_low_pct"))
     rate_high = _int(opportunity.get("lead_rate_high_pct"))
-    if queries <= 0 or impressions <= 0:
+    if queries <= 0 or impressions <= 0 or clicks_high <= 0:
         return ""
+    # "it" needs the site_line antecedent; without one, name the subject explicitly.
+    site_line = (
+        f"the site currently earns about {site_clicks} Google clicks a month, and "
+        if site_clicks > 0
+        else ""
+    )
+    subject = "it" if site_line else "the site"
+    # "0 to 0 extra inquiries" reads as a broken report — only quantify leads when the
+    # conservative click range is large enough to yield at least one.
+    leads_clause = (
+        f", which is about {leads_low} to {leads_high} extra inquiries at a typical "
+        f"{rate_low}% to {rate_high}% home-services contact rate"
+        if leads_high > 0
+        else ""
+    )
     return (
-        f"Your site already appears in Google for an estimated {impressions} searches a month "
-        "from people looking for services like yours, but it currently captures only about "
-        f"{current} of the available clicks. Closing the gap on your {queries} near-miss pages "
-        "— pages already ranking just below the top of the first page — could bring an estimated "
-        f"{clicks_low} to {clicks_high} more visits a month, and at a typical {rate_low}% to "
-        f"{rate_high}% home-services contact rate that is roughly {leads_low} to {leads_high} more "
-        "leads. These are estimates from your real Search Console data and published click-through "
-        "rates, not a guarantee, but they show where the fastest wins are. "
+        f"Based on your last {days} days of Search Console data, {site_line}searchers see "
+        f"{subject} about {impressions} times a month for near-miss queries — searches where it "
+        f"already ranks in positions {pos_min} to {pos_max}, just below the top results. A "
+        f"conservative scenario that lifts the top {modeled} of those {queries} near-miss "
+        f"queries toward the top of page one could add roughly {clicks_low} to {clicks_high} "
+        f"visits a month{leads_clause}. This is a projection from your own Search "
+        "Console data and published click-through benchmarks, not a promise, but it shows where "
+        "the fastest wins are. "
     )
 
 
@@ -254,7 +352,11 @@ def _executive_summary(scores: JsonDict, top_label: str | None, opportunity: Jso
 
 
 def _top_priority_label(score_breakdown: JsonDict) -> str | None:
-    surfaced = _surfaced_rules("seo", score_breakdown) + _surfaced_rules("uxui", score_breakdown)
+    # Merge before picking, so the label always names a card the findings section renders
+    # (an unmerged secondary can outrank its primary yet never appear as its own card).
+    surfaced = _merge_overlapping_rules(
+        _surfaced_rules("seo", score_breakdown)
+    ) + _merge_overlapping_rules(_surfaced_rules("uxui", score_breakdown))
     if not surfaced:
         return None
     top = min(surfaced, key=_finding_sort_key)
@@ -364,7 +466,7 @@ _ACTION_TITLES: dict[str, str] = {
     "uxui.forms.present": "Add a short lead-capture form",
     "uxui.homepage_form.field_count": "Right-size the homepage lead form",
     "uxui.phone.visible": "Show a clickable phone number",
-    "uxui.email.visible": "Show a contact email on key pages",
+    "uxui.contact_path.low_pressure": "Give visitors an easy low-pressure contact path",
     "uxui.trust.present": "Add trust signals like reviews and testimonials",
     "uxui.trust.depth": "Add more types of trust evidence",
     "uxui.navigation.present": "Add clear primary navigation",
@@ -423,7 +525,7 @@ def _evidence_sentence(rule: JsonDict, context: JsonDict, facts: JsonDict) -> st
         return None
     fact_path = str(rule.get("fact_path") or "")
     if fact_path.endswith("_pct"):
-        return f"The audit measured this at {number}% across the crawled pages."
+        return f"The audit measured this at {number}% across the analyzed pages."
     noun = str(context.get("noun") or "item")
     # Multi-word noun phrases pluralize their head word, not the phrase end
     # ("pages missing a title tag", never "page missing a title tags").
@@ -440,7 +542,7 @@ _GENERIC_CONTEXT = {
     "meaning": "This finding marks a check that did not fully pass.",
     "why": "It matters because the issue can make the page harder to understand, trust, or act on.",
     "noun": "item",
-    "failed_check": "The audit check did not pass for the crawled page or pages.",
+    "failed_check": "The audit check did not pass for the analyzed page or pages.",
 }
 
 _RULE_CONTEXT: dict[str, JsonDict] = {
@@ -489,7 +591,7 @@ _RULE_CONTEXT: dict[str, JsonDict] = {
     "seo.homepage.canonical": {
         "meaning": "A canonical URL tells Google which version of a page should be treated as the preferred version.",
         "why": "Without it, duplicate URLs can split ranking signals or cause Google to choose a less useful version.",
-        "failed_check": "The homepage canonical URL was not detected in the crawled HTML.",
+        "failed_check": "The homepage canonical URL was not detected in the analyzed HTML.",
     },
     "seo.schema.present": {
         "meaning": "Schema markup is structured data that gives search engines extra context about the business, service, or page.",
@@ -508,14 +610,14 @@ _RULE_CONTEXT: dict[str, JsonDict] = {
         "noun": "noindex page",
     },
     "seo.internal_links.depth": {
-        "meaning": "Internal links help visitors and crawlers move from one useful page to the next.",
+        "meaning": "Internal links help visitors and search engines move from one useful page to the next.",
         "why": "Thin internal linking can leave good pages isolated and make next steps harder to find.",
         "noun": "internal link",
     },
     "seo.aeo.heading_hierarchy": {
         "meaning": "A clean heading outline uses one H1 and steps down through H2/H3 without skipping levels.",
         "why": "A broken outline makes the page harder for readers, screen readers, and answer engines to segment into the right sections.",
-        "failed_check": "The heading outline either repeated the H1 or jumped past a heading level on a crawled page.",
+        "failed_check": "The heading outline either repeated the H1 or jumped past a heading level on an analyzed page.",
     },
     "seo.aeo.question_headings": {
         "meaning": "Question-style subheadings phrase a section around the exact question a buyer would ask.",
@@ -526,42 +628,42 @@ _RULE_CONTEXT: dict[str, JsonDict] = {
     "seo.aeo.extractable_structure": {
         "meaning": "Lists and tables turn steps, services, and specs into scannable chunks instead of dense paragraphs.",
         "why": "Scannable structure helps visitors skim and lets answer engines lift a clean, self-contained block from the page.",
-        "failed_check": "No genuine content list or comparison table was found in the main content of the crawled page or pages.",
+        "failed_check": "No genuine content list or comparison table was found in the main content of the analyzed page or pages.",
     },
     "seo.local.nap_schema": {
         "meaning": "NAP structured data spells out the business name, postal address, and phone in a machine-readable LocalBusiness record.",
         "why": "Without complete NAP markup, search engines and AI assistants cannot confidently tie the site to a real, located business.",
-        "failed_check": "No LocalBusiness structured data with a complete name, address, and phone was found on the crawled page or pages.",
+        "failed_check": "No LocalBusiness structured data with a complete name, address, and phone was found on the analyzed page or pages.",
     },
     "seo.local.service_area": {
         "meaning": "A declared service area (areaServed or geo) tells search engines which places the business serves.",
         "why": "Local searches happen in specific cities, so an undeclared service area can keep the business out of the right local results.",
-        "failed_check": "No service area or geo coordinates were declared in the structured data on the crawled page or pages.",
+        "failed_check": "No service area or geo coordinates were declared in the structured data on the analyzed page or pages.",
     },
     "seo.local.map_or_gbp": {
         "meaning": "A Google Business Profile or map link connects the website to the verified, reviewed local listing.",
         "why": "That link reinforces the business as a real local entity and gives visitors a fast way to check the location and reviews.",
-        "failed_check": "No Google Business Profile or map link was found on the crawled page or pages.",
+        "failed_check": "No Google Business Profile or map link was found on the analyzed page or pages.",
     },
     "seo.local.visible_address": {
         "meaning": "A visible address block shows the business location to visitors, mirroring the structured-data NAP.",
         "why": "A visible, consistent address builds trust and confirms to search engines that the structured-data location is genuine.",
-        "failed_check": "No visible address block was found on the crawled page or pages.",
+        "failed_check": "No visible address block was found on the analyzed page or pages.",
     },
     "seo.a11y.html_lang": {
         "meaning": "The html element's lang attribute tells assistive technology which language the page is written in.",
         "why": "Without it, screen readers can mispronounce the content, making the page harder to use for visitors who rely on them.",
-        "failed_check": "A crawled page did not declare a language on its html element.",
+        "failed_check": "An analyzed page did not declare a language on its html element.",
     },
     "seo.a11y.viewport_zoom": {
         "meaning": "The viewport meta tag can either allow or block a visitor from pinching to zoom in.",
         "why": "Blocking zoom stops low-vision visitors from enlarging text, which is both an accessibility barrier and a conversion risk.",
-        "failed_check": "A crawled page's viewport tag disables zooming (user-scalable=no or a low maximum-scale).",
+        "failed_check": "An analyzed page's viewport tag disables zooming (user-scalable=no or a low maximum-scale).",
     },
     "seo.a11y.main_landmark": {
         "meaning": "A main landmark marks the primary content region so assistive tech can jump past the header and navigation.",
         "why": "Without it, screen-reader and keyboard users must wade through the menus on every page to reach the content.",
-        "failed_check": 'A crawled page has no main element or role="main" landmark.',
+        "failed_check": 'An analyzed page has no main element or role="main" landmark.',
     },
     "seo.a11y.no_positive_tabindex": {
         "meaning": "A positive tabindex forces an element earlier in the keyboard tab order than its position on the page.",
@@ -604,13 +706,13 @@ _RULE_CONTEXT: dict[str, JsonDict] = {
         "noun": "desktop performance point",
     },
     "seo.technical_crawl.no_broken_internal_urls": {
-        "meaning": "A broken internal URL is a link found during the crawl that returned an error instead of a usable page.",
-        "why": "Visitors and search engines can hit a dead end, which hurts trust, crawl quality, and the path to conversion.",
+        "meaning": "A broken internal URL is a link found during the site health check that returned an error instead of a usable page.",
+        "why": "Visitors and search engines can hit a dead end, which hurts trust, search visibility, and the path to conversion.",
         "noun": "broken internal URL",
         "noun_plural": "broken internal URLs",
     },
     "seo.technical_crawl.indexable_urls": {
-        "meaning": "A non-indexable internal URL is a page the crawler found but Google may not be able to include in search results.",
+        "meaning": "A non-indexable internal URL is a page the site health check found but Google may not be able to include in search results.",
         "why": "If these are important service, blog, or landing pages, they may not bring organic traffic.",
         "noun": "non-indexable internal URL",
         "noun_plural": "non-indexable internal URLs",
@@ -682,9 +784,9 @@ _RULE_CONTEXT: dict[str, JsonDict] = {
         "noun_plural": "early calls to action",
     },
     "uxui.forms.present": {
-        "meaning": "A lead capture form gives visitors a direct way to request contact or start a conversation.",
-        "why": "Without a form, some visitors will not take the next step even if the offer is relevant.",
-        "noun": "form",
+        "meaning": "A lead capture form - on the page or as an embedded/popup form - gives visitors a direct way to request contact or start a conversation.",
+        "why": "Without any form, some visitors will not take the next step even if the offer is relevant.",
+        "noun": "page with a lead form",
     },
     "uxui.homepage_form.field_count": {
         "meaning": "The homepage form should be short enough that a serious buyer can complete it without friction.",
@@ -697,11 +799,11 @@ _RULE_CONTEXT: dict[str, JsonDict] = {
         "noun": "page with a visible phone number",
         "noun_plural": "pages with a visible phone number",
     },
-    "uxui.email.visible": {
-        "meaning": "A visible email or clear contact link gives visitors a lower-pressure way to reach out.",
-        "why": "Some prospects are not ready to call, so hiding email contact can reduce inquiries.",
-        "noun": "page with a visible email",
-        "noun_plural": "pages with a visible email",
+    "uxui.contact_path.low_pressure": {
+        "meaning": "A low-pressure contact path is an easy first step for visitors who are not ready to call - a visible email, a contact page link, or a short lead form.",
+        "why": "Without one, phone-shy prospects have no comfortable way to start the conversation, which reduces inquiries.",
+        "noun": "page with a low-pressure contact path",
+        "noun_plural": "pages with a low-pressure contact path",
     },
     "uxui.trust.present": {
         "meaning": "Trust signals are proof points such as reviews, testimonials, certifications, awards, or credible case studies.",
@@ -727,12 +829,12 @@ _RULE_CONTEXT: dict[str, JsonDict] = {
     "uxui.direct_contact.present": {
         "meaning": "Direct contact means a visitor can reach the business without hunting for another page.",
         "why": "When contact details are not obvious, high-intent visitors can drop off before converting.",
-        "failed_check": "The homepage did not show a direct contact path in the crawled HTML.",
+        "failed_check": "The homepage did not show a direct contact path in the analyzed HTML.",
     },
     "uxui.lead_capture.cta": {
         "meaning": "A homepage call to action tells visitors exactly what to do next.",
         "why": "Without it, the page can explain the business but still fail to create leads.",
-        "failed_check": "The homepage did not show a clear call to action in the crawled HTML.",
+        "failed_check": "The homepage did not show a clear call to action in the analyzed HTML.",
     },
 }
 
@@ -868,7 +970,8 @@ def _uxui_relevant_pages(rule_id: str, facts: JsonDict) -> list[str]:
         return [
             str(page.get("url"))
             for page in pages
-            if int(_dict(page.get("forms")).get("count") or 0) == 0 and page.get("url")
+            if str(_dict(page.get("forms")).get("form_detected") or "none") == "none"
+            and page.get("url")
         ] or ([str(pages[0].get("url"))] if pages and pages[0].get("url") else [])
     if rule_id in {"uxui.phone.visible", "uxui.direct_contact.present"}:
         return [
@@ -876,11 +979,11 @@ def _uxui_relevant_pages(rule_id: str, facts: JsonDict) -> list[str]:
             for page in pages
             if not _dict(page.get("contact")).get("has_phone") and page.get("url")
         ]
-    if rule_id == "uxui.email.visible":
+    if rule_id == "uxui.contact_path.low_pressure":
         return [
             str(page.get("url"))
             for page in pages
-            if not _dict(page.get("contact")).get("has_email") and page.get("url")
+            if not _dict(page.get("lead_capture")).get("has_low_pressure_path") and page.get("url")
         ]
     if rule_id in {"uxui.trust.present", "uxui.trust.depth"}:
         return [

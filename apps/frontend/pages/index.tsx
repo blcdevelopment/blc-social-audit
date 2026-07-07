@@ -192,12 +192,15 @@ export default function SubmitAuditPage() {
               id="niche"
               name="niche"
               type="text"
-              placeholder="e.g. coffee shop, law firm, gym"
+              placeholder="e.g. custom home builder, kitchen remodeler"
               value={niche}
               maxLength={255}
               onChange={(event) => setNiche(event.target.value)}
               disabled={submitting}
             />
+            <p className="field-hint">
+              The audited business&apos;s trade. Printed on the report cover exactly as typed.
+            </p>
           </div>
 
           <div className="field">
@@ -206,12 +209,16 @@ export default function SubmitAuditPage() {
               id="target_audience"
               name="target_audience"
               type="text"
-              placeholder="e.g. customers in your area"
+              placeholder="e.g. homeowners planning a custom build or remodel"
               value={targetAudience}
               maxLength={255}
               onChange={(event) => setTargetAudience(event.target.value)}
               disabled={submitting}
             />
+            <p className="field-hint">
+              Who the audited business sells to (its customers — not BLC&apos;s). Printed on the
+              report cover exactly as typed.
+            </p>
           </div>
 
           <details className="brand-panel">

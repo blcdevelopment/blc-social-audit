@@ -32,6 +32,11 @@ class CommentaryFinding(BaseModel):
     location_label: str = ""
     location_urls: list[str] = Field(default_factory=list)
     evidence_refs: list[str]
+    # The fix, carried on the finding itself so the report presents ONE card per issue
+    # (problem + "Do this") instead of a separate, repetitive Recommendations list.
+    # Defaults keep previously stored commentary payloads valid.
+    action_items: list[str] = Field(default_factory=list)
+    tier: str = ""
 
 
 class CommentaryRecommendation(BaseModel):

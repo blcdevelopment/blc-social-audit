@@ -59,6 +59,24 @@ def _int(value: Any, default: int = 0) -> int:
         return default
 
 
+# A bio shorter than this (after whitespace collapse) reads as blank/placeholder rather than a
+# real, descriptive profile bio — used by the substantive-bio aggregate (SAE-8).
+_SUBSTANTIVE_BIO_MIN_CHARS = 20
+
+
+def _handle_key(value: Any) -> str:
+    """Normalize a handle (or full profile URL) to a comparable brand key: last path segment,
+    lowercased, non-alphanumerics stripped. So ``@Acme_Studio`` / ``acmestudio`` /
+    ``https://facebook.com/AcmeStudio/`` all collapse to ``acmestudio`` for the consistency check.
+    Returns "" when nothing usable remains."""
+    text = str(value or "").strip()
+    if "://" in text:
+        segments = [seg for seg in text.split("/") if seg and "." not in seg and "@" not in seg]
+        text = segments[-1] if segments else text
+    text = text.lstrip("@")
+    return "".join(ch for ch in text.lower() if ch.isalnum())
+
+
 def _round_half_up(value: float, digits: int = 1) -> float:
     """Half-up rounding for non-negative values (project convention: int(x + 0.5), not round())."""
     factor = 10**digits
@@ -297,6 +315,9 @@ def normalize_instagram_profile(raw: JsonDict, handle: str, *, now: datetime) ->
             "is_business": is_business,
             "category": _clean(raw.get("businessCategoryName")) or None,
             "bio_present": bool(bio),
+            "bio_text": bio or None,
+            # The official Instagram scraper returns no public phone/address (verified) -> None,
+            # so the NAP cross-check leans on Facebook/Places and skips here.
             "link_in_bio": external or None,
             "has_cta": bool(is_business) or bool(_CTA_RE.search(bio)),
             "profile_complete": bool(bio and external and full_name),
@@ -326,6 +347,10 @@ def normalize_facebook_profile(raw: JsonDict, handle: str, *, now: datetime) -> 
     followers = _int(raw.get("followers")) or _int(raw.get("likes"))
     messenger = _clean(raw.get("messenger"))
     email = _clean(raw.get("email"))
+    # The Facebook Pages actor DOES return phone/address, but only when the Page exposes them
+    # publicly (fill-rate is a per-page unknown — SAE-2); None otherwise so NAP skips.
+    phone = _clean(raw.get("phone")) or _clean(raw.get("phoneNumber"))
+    address = _clean(raw.get("address")) or _clean(raw.get("addressStreet"))
 
     raw_posts = [p for p in (raw.get("posts") or []) if isinstance(p, dict)]
     posts: list[JsonDict] = []
@@ -364,6 +389,9 @@ def normalize_facebook_profile(raw: JsonDict, handle: str, *, now: datetime) -> 
             "is_business": True,
             "category": _clean(raw.get("category")) or None,
             "bio_present": bool(intro),
+            "bio_text": intro or None,
+            "phone": phone or None,
+            "address": address or None,
             "link_in_bio": website or None,
             "has_cta": bool(messenger or email),
             "profile_complete": bool(intro and website and name),
@@ -440,6 +468,7 @@ def normalize_youtube_channel(raw: JsonDict, handle: str, *, now: datetime) -> J
             "is_business": None,
             "category": None,
             "bio_present": bool(description),
+            "bio_text": description or None,
             "link_in_bio": link or None,
             "has_cta": bool(link) or bool(_CTA_RE.search(description)),
             "profile_complete": bool(description and title and (link or banner)),
@@ -488,6 +517,16 @@ def summarize_profiles(profiles: list[JsonDict]) -> JsonDict:
     # scored video-share rule vacuous (and swamp the image/carousel shares). Content-mix shares
     # aggregate over non-YouTube profiles only; None when none supplies a value (rule rescales).
     feed_profiles = [p for p in profiles if p.get("platform") != "youtube"]
+    # Handle consistency (SAE-7): compare the normalized brand key across profiles. Needs >= 2
+    # comparable handles; None otherwise so the boolean rule skip_if_missing-rescales.
+    handle_keys = [k for k in (_handle_key(p.get("handle")) for p in profiles) if k]
+    handles_consistent = (len(set(handle_keys)) == 1) if len(handle_keys) >= 2 else None
+    # Category coverage (SAE-9) over feed platforms only — YouTube has no business-category concept,
+    # so a YouTube-only audit yields None and the rule skips instead of false-failing.
+    categorized_feed = sum(1 for p in feed_profiles if p.get("category"))
+    category_coverage_pct = (
+        _round_half_up(categorized_feed / len(feed_profiles) * 100) if feed_profiles else None
+    )
     return _summary_facts(
         {
             "platforms_audited": count,
@@ -509,6 +548,13 @@ def summarize_profiles(profiles: list[JsonDict]) -> JsonDict:
             "profiles_verified": sum(1 for p in profiles if p.get("verified")),
             "profiles_business_account": sum(1 for v in business if v) if business else None,
             "profiles_with_category": sum(1 for p in profiles if p.get("category")),
+            "handles_consistent": handles_consistent,
+            "profiles_with_substantive_bio": sum(
+                1
+                for p in profiles
+                if len((p.get("bio_text") or "").strip()) >= _SUBSTANTIVE_BIO_MIN_CHARS
+            ),
+            "category_coverage_pct": category_coverage_pct,
             "avg_follower_following_ratio": _mean(_collect(profiles, "follower_following_ratio")),
             "video_share_pct": _mean(_collect(feed_profiles, "video_share_pct")),
             "image_share_pct": _mean(_collect(feed_profiles, "image_share_pct")),

@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 
 import httpx
+import pytest
 
 from apps.worker.stages import site_health
 from apps.worker.stages.external_seo import collect_external_seo_facts
@@ -25,6 +26,10 @@ def _settings(**overrides) -> SimpleNamespace:
         "site_health_max_external_urls": 50,
         "site_health_check_external_links": False,
         "site_health_concurrency": 4,
+        "site_health_per_host_concurrency": 2,
+        # Tests run against a local fixture server; politeness pacing would only slow them.
+        "site_health_request_delay_ms": 0,
+        "site_health_breaker_threshold": 5,
         "site_health_request_timeout_seconds": 5,
         "site_health_total_budget_seconds": 30,
         "site_health_sitemap_max_urls": 100,
@@ -51,6 +56,12 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     }
 
     def _respond(self, include_body: bool) -> None:
+        if "drop" in self.path:
+            # Not a valid HTTP response: the checker sees a protocol-level transport
+            # failure (counts toward the breaker) without the server raising.
+            self.close_connection = True
+            self.wfile.write(b"garbage\r\n\r\n")
+            return
         status, body = self.routes.get(self.path, (404, b"unknown"))
         body = body.replace(b"{host}", self.headers.get("Host", "").encode())
         self.send_response(status)
@@ -381,3 +392,258 @@ def test_external_seo_uses_site_health_when_screaming_frog_disabled() -> None:
     assert facts["sources"]["technical_crawl_tool"] == "site_health_sweep"
     assert facts["technical_crawl"]["summary"]["duplicate_titles"] == 2
     assert facts["gsc"]["status"] == "skipped"
+
+
+def test_partial_sweep_preferred_over_failed_screaming_frog(monkeypatch) -> None:
+    # Prod runs with Screaming Frog ENABLED but the binary is not installed, so SF
+    # fails; the sweep then returns partial:bot_blocked (a WAF throttled it). The
+    # partial sweep still carries the links it DID check plus the honest bot-block
+    # note, so it must win over the SF failure (which used to blank the whole section).
+    from apps.worker.stages import external_seo
+
+    def _failed_sf(url, audit_id, settings, deadline=None):
+        return {"status": "failed", "error": "screaming frog binary not found", "summary": {}}
+
+    def _partial_sweep(**kwargs):
+        return {
+            "status": "partial",
+            "reason": "bot_blocked",
+            "summary": {"duplicate_titles": 1},
+            "issues": [],
+            "notes": ["Link checks stopped early after repeated blocks."],
+        }
+
+    monkeypatch.setattr(external_seo, "collect_screaming_frog_facts", _failed_sf)
+    monkeypatch.setattr(external_seo, "collect_site_health_facts", _partial_sweep)
+
+    facts = external_seo._collect_technical_crawl(
+        url="https://example.com/",
+        audit_id="audit-1",
+        settings=_settings(screaming_frog_enabled=True),
+        seo_facts={"status": "complete", "pages": []},
+        crawled_pages={"final_url": "https://example.com/"},
+        rendered_pages=None,
+    )
+
+    assert facts["status"] == "partial"
+    assert facts["reason"] == "bot_blocked"
+    # The SF attempt is recorded as context, not shown as the section's whole content.
+    assert facts["screaming_frog_attempt"]["status"] == "failed"
+    assert any("stopped early" in note for note in facts["notes"])
+
+
+def test_failed_screaming_frog_still_shown_when_sweep_also_fails(monkeypatch) -> None:
+    # When BOTH tools produce nothing usable, the operator-enabled SF failure is what
+    # the section reports (unchanged behavior — the fix only rescues a partial sweep).
+    from apps.worker.stages import external_seo
+
+    def _failed_sf(url, audit_id, settings, deadline=None):
+        return {"status": "failed", "error": "screaming frog binary not found", "summary": {}}
+
+    def _failed_sweep(**kwargs):
+        return {"status": "failed", "reason": "unknown_error", "summary": {}, "issues": []}
+
+    monkeypatch.setattr(external_seo, "collect_screaming_frog_facts", _failed_sf)
+    monkeypatch.setattr(external_seo, "collect_site_health_facts", _failed_sweep)
+
+    facts = external_seo._collect_technical_crawl(
+        url="https://example.com/",
+        audit_id="audit-1",
+        settings=_settings(screaming_frog_enabled=True),
+        seo_facts={"status": "complete", "pages": []},
+        crawled_pages={"final_url": "https://example.com/"},
+        rendered_pages=None,
+    )
+
+    assert facts["status"] == "failed"
+    assert facts["error"] == "screaming frog binary not found"
+
+
+def test_breaker_trips_and_reports_bot_blocked(monkeypatch) -> None:
+    # Consecutive connection failures (a WAF dropping the checker, or a dead host) must
+    # stop the sweep and mark the source partial:bot_blocked instead of emitting mass
+    # false "dead link" findings — the non-complete status keeps it out of scoring.
+    async def _fake_recheck(url, settings):
+        return True
+
+    monkeypatch.setattr(site_health, "_browser_ua_recheck", _fake_recheck)
+    dead = [{"url": f"http://127.0.0.1:9/page-{i}"} for i in range(10)]
+    facts = collect_site_health_facts(
+        url="http://127.0.0.1:9/",
+        seo_facts={"status": "complete", "pages": []},
+        crawled_pages={"final_url": "http://127.0.0.1:9/", "discovered_links": dead},
+        rendered_pages=None,
+        settings=_settings(
+            site_health_breaker_threshold=3,
+            site_health_per_host_concurrency=1,
+            site_health_sitemap_max_urls=0,
+        ),
+    )
+
+    assert facts["status"] == "partial"
+    assert facts["reason"] == "bot_blocked"
+    assert facts["checks"]["browser_recheck_ok"] is True
+    # The breaker stopped the run: at most threshold failures counted, the rest skipped.
+    assert facts["summary"]["unreachable_internal_urls"] <= 4
+    assert facts["checks"]["skipped_breaker"] >= 1
+    assert facts["summary"]["unreachable_error_classes"].get("connection_failed", 0) >= 3
+    assert any("stopped early" in note for note in facts["notes"])
+    assert any("regular browser profile" in note for note in facts["notes"])
+
+
+def test_breaker_resets_on_success_between_failures(monkeypatch) -> None:
+    # "Consecutive" means consecutive: failures interleaved with working URLs must never
+    # trip the breaker (4 total failures here >= threshold 3, but the max run is 2).
+    async def _fake_recheck(url, settings):
+        return True
+
+    monkeypatch.setattr(site_health, "_browser_ua_recheck", _fake_recheck)
+    with _serve() as base:
+        # The sweep sorts its check list, so interleave by SORTED path order:
+        # a-drop, b-ok, c-drop, d-ok, e-drop, f-drop -> max failure run of 2.
+        links = [
+            {"url": f"{base}/a-drop"},
+            {"url": f"{base}/b-ok"},
+            {"url": f"{base}/c-drop"},
+            {"url": f"{base}/d-ok"},
+            {"url": f"{base}/e-drop"},
+            {"url": f"{base}/f-drop"},
+        ]
+        facts = collect_site_health_facts(
+            url=f"{base}/",
+            seo_facts={"status": "complete", "pages": []},
+            crawled_pages={"final_url": f"{base}/", "discovered_links": links},
+            rendered_pages=None,
+            settings=_settings(
+                site_health_breaker_threshold=3,
+                site_health_per_host_concurrency=1,
+                site_health_sitemap_max_urls=0,
+            ),
+        )
+
+    assert facts["status"] == "complete"
+    assert "reason" not in facts
+    assert facts["checks"]["skipped_breaker"] == 0
+    assert facts["summary"]["unreachable_internal_urls"] == 4
+
+
+def test_browser_recheck_never_follows_redirects(monkeypatch) -> None:
+    # The recheck's sample URL was SSRF-vetted at sweep time, but a redirect target is
+    # attacker-controlled (open redirect -> cloud metadata). The client must not follow
+    # redirects — a 3xx already proves the server answers a browser profile.
+    captured: dict = {}
+
+    class _FakeResponse:
+        status_code = 302
+
+    class _FakeClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def get(self, url):
+            return _FakeResponse()
+
+    monkeypatch.setattr(site_health.httpx, "AsyncClient", _FakeClient)
+    ok = asyncio.run(site_health._browser_ua_recheck("https://example.com/x", _settings()))
+    assert ok is True  # 302 counts as "answered"
+    assert captured["follow_redirects"] is False
+
+
+def test_browser_recheck_reraises_soft_time_limit(monkeypatch) -> None:
+    from celery.exceptions import SoftTimeLimitExceeded
+
+    class _FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def get(self, url):
+            raise SoftTimeLimitExceeded()
+
+    monkeypatch.setattr(site_health.httpx, "AsyncClient", _FakeClient)
+    with pytest.raises(SoftTimeLimitExceeded):
+        asyncio.run(site_health._browser_ua_recheck("https://example.com/x", _settings()))
+
+
+def test_healthy_sweep_stays_complete_and_reports_rate() -> None:
+    with _serve() as base:
+        crawled_pages = {
+            "final_url": f"{base}/",
+            "pages": [{"url": f"{base}/", "final_url": f"{base}/"}],
+            "discovered_links": [{"url": f"{base}/ok"}],
+        }
+        facts = collect_site_health_facts(
+            url=f"{base}/",
+            seo_facts={"status": "complete", "pages": []},
+            crawled_pages=crawled_pages,
+            rendered_pages=None,
+            settings=_settings(site_health_sitemap_max_urls=0),
+        )
+
+    assert facts["status"] == "complete"
+    assert "reason" not in facts
+    assert any("ran politely" in note for note in facts["notes"])
+
+
+def test_rate_limited_url_is_retried_after_retry_after(monkeypatch) -> None:
+    # A 429 must be honored (Retry-After) and retried — never insta-hammered with a GET.
+    class _Handler429(_Handler):
+        attempts: dict[str, int] = {}
+
+        def _respond(self, include_body: bool) -> None:
+            if self.path == "/limited":
+                count = self.attempts.get(self.path, 0) + 1
+                self.attempts[self.path] = count
+                if count == 1:
+                    self.send_response(429)
+                    self.send_header("Retry-After", "0")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                body = b"ok now"
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                if include_body:
+                    self.wfile.write(body)
+                return
+            super()._respond(include_body)
+
+    handler = functools.partial(_Handler429)
+    httpd = socketserver.TCPServer(("127.0.0.1", 0), handler)
+    port = int(httpd.server_address[1])
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        base = f"http://127.0.0.1:{port}"
+        facts = collect_site_health_facts(
+            url=f"{base}/",
+            seo_facts={"status": "complete", "pages": []},
+            crawled_pages={
+                "final_url": f"{base}/",
+                "pages": [{"url": f"{base}/", "final_url": f"{base}/"}],
+                "discovered_links": [{"url": f"{base}/limited"}],
+            },
+            rendered_pages=None,
+            settings=_settings(site_health_sitemap_max_urls=0),
+        )
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+    assert facts["status"] == "complete"
+    # The retried request succeeded, so the URL is NOT a client error or unreachable.
+    assert facts["summary"]["client_error_internal_urls"] == 0
+    assert facts["summary"]["unreachable_internal_urls"] == 0
+    assert facts["summary"]["internal_urls_checked"] == 1

@@ -98,10 +98,52 @@ def test_phase_1_rubrics_load_and_validate() -> None:
     composite = load_composite_rubric(settings.rubric_composite_path)
 
     assert seo.version == "phase2-seo-v11"
-    assert uxui.version == "phase1-uxui-v2"
+    assert uxui.version == "phase2-uxui-v3"
     assert sum(rule.weight for rule in seo.rules) == 261
     assert sum(rule.weight for rule in uxui.rules) == 100
     assert composite.weights == {"seo": 0.45, "uxui": 0.55}
+
+
+def test_v3_renamed_rules_skip_on_pre_v3_stored_facts() -> None:
+    # Rerun-enrichment rescores STORED uxui facts with the current rubric. Facts stored
+    # by the v2 extractor have neither pages_with_form_capture nor pages_with_contact_path;
+    # those rules must rescale out (skip), not flip a previously-passing audit to
+    # "No lead capture form was found".
+    settings = Settings(_env_file=None)
+    rubric = load_rubric(settings.rubric_uxui_path)
+    legacy_facts = {
+        "uxui": {
+            "status": "complete",
+            "summary": {
+                "pages_with_primary_cta": 1,
+                "total_ctas": 4,
+                "above_fold_ctas": 1,
+                "pages_with_form": 1,  # the v2 key
+                "pages_with_phone": 1,
+                "pages_with_email": 1,  # the v2 key
+                "pages_with_trust_signals": 1,
+                "total_trust_signals": 3,
+            },
+            "pages": [
+                {
+                    "navigation": {"has_nav": True},
+                    "content": {"has_substantial_copy": True},
+                    "forms": {"total_field_count": 4},
+                    "lead_capture": {"has_direct_contact": True, "has_cta": True},
+                }
+            ],
+        }
+    }
+    out = score_category(legacy_facts, rubric)
+    by_id = {rule["rule_id"]: rule for rule in out["rules"]}
+    assert by_id["uxui.forms.present"]["result"] == "skipped"
+    assert by_id["uxui.contact_path.low_pressure"]["result"] == "skipped"
+    # Nothing fabricated a failure; the category rescales around the missing facts.
+    assert not any(
+        rule["result"] == "fail"
+        and rule["rule_id"] in {"uxui.forms.present", "uxui.contact_path.low_pressure"}
+        for rule in out["rules"]
+    )
 
 
 def test_scoring_calibrates_strong_and_weak_fixture_sites() -> None:

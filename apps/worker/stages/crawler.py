@@ -249,6 +249,11 @@ class CrawledPage:
     # ONLY (deliberately NOT serialized in to_public_dict): it is consumed by the advisory
     # normalizer in tasks.py right after the crawl, and never reaches the scoring path.
     axe_results: dict[str, Any] | None = None
+    # Forms found inside child iframes by the post-capture frame pass (popup/lazy-embed
+    # forms are invisible in the page HTML). In-memory only, consumed by the UX extractor;
+    # counted AFTER page.content() so the captured HTML/screenshot stay unchanged.
+    frame_form_count: int = 0
+    frame_form_field_count: int = 0
 
     def to_public_dict(self) -> dict[str, Any]:
         return {
@@ -559,9 +564,17 @@ async def _render_page(
 
             axe_results = await run_axe_on_page(page, settings)
 
+        # Capture the URL before the frame pass: its scrolling can fire scrollspy
+        # history/hash updates, and final_url must describe the same state as the
+        # HTML/text/screenshot captured above.
+        final_url = page.url
+        # Popup/lazy-iframe lead forms never appear in page.content(); a bounded frame
+        # pass counts them so the UX extractor can credit "form present" honestly.
+        frame_form_count, frame_form_field_count = await _scan_frames_for_forms(page)
+
         return CrawledPage(
             url=url,
-            final_url=page.url,
+            final_url=final_url,
             status_code=status_code,
             title=title.strip() or None,
             html=html,
@@ -572,6 +585,8 @@ async def _render_page(
             screenshot_path=screenshot_path,
             screenshot_error=screenshot_error,
             axe_results=axe_results,
+            frame_form_count=frame_form_count,
+            frame_form_field_count=frame_form_field_count,
         )
     except playwright_api.TimeoutError as exc:
         raise CrawlerError(f"Timed out rendering {url}") from exc
@@ -579,6 +594,52 @@ async def _render_page(
         raise CrawlerError(f"Could not render {url}: {exc}") from exc
     finally:
         await page.close()
+
+
+async def _scan_frames_for_forms(page: Any, timeout_seconds: float = 3.0) -> tuple[int, int]:
+    """Count <form> elements (and their fields) inside child frames, nudging lazy iframes
+    into loading with a quick scroll first. Runs AFTER the page HTML/screenshot are
+    captured, so it cannot change any other extracted fact. Best-effort with a hard time
+    cap: any failure returns (0, 0) and the audit continues (graceful, like PSI/axe)."""
+    try:
+        async with asyncio.timeout(timeout_seconds):
+            with suppress(Exception):
+                await page.evaluate(
+                    "async () => {"
+                    " const h = document.body ? document.body.scrollHeight : 0;"
+                    " for (const y of [0.25, 0.5, 0.75, 1]) {"
+                    "   window.scrollTo(0, h * y);"
+                    "   await new Promise(r => setTimeout(r, 200));"
+                    " }"
+                    " window.scrollTo(0, 0);"
+                    "}"
+                )
+            with suppress(playwright_api.TimeoutError):
+                await page.wait_for_load_state("networkidle", timeout=1000)
+            forms = 0
+            fields = 0
+            for frame in page.frames:
+                if frame is page.main_frame:
+                    continue
+                try:
+                    counts = await frame.evaluate(
+                        "() => {"
+                        " const forms = document.querySelectorAll('form');"
+                        " let inputs = 0;"
+                        " forms.forEach((el) => {"
+                        "   inputs += el.querySelectorAll('input,textarea,select').length;"
+                        " });"
+                        " return [forms.length, inputs];"
+                        "}"
+                    )
+                    forms += int(counts[0] or 0)
+                    fields += int(counts[1] or 0)
+                except Exception:
+                    # Cross-origin/permission edge cases: skip the frame, keep the rest.
+                    continue
+            return forms, fields
+    except Exception:
+        return 0, 0
 
 
 async def crawl_site(url: str, settings: Settings, audit_id: str | None = None) -> CrawlResult:

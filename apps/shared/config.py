@@ -113,6 +113,13 @@ class Settings(BaseSettings):
     site_health_request_timeout_seconds: int = Field(default=10, ge=1, le=60)
     site_health_total_budget_seconds: int = Field(default=180, ge=10)
     site_health_sitemap_max_urls: int = Field(default=500, ge=0, le=5000)
+    # Politeness: the sweep hits ONE host, so it must behave like a considerate crawler
+    # (~1-2 req/s), or WAFs rate-limit it and dead-link findings become false positives.
+    site_health_per_host_concurrency: int = Field(default=2, ge=1, le=8)
+    site_health_request_delay_ms: int = Field(default=750, ge=0, le=5000)
+    # Circuit breaker: after this many CONSECUTIVE internal network failures the sweep
+    # stops and reports itself bot-blocked instead of emitting mass false "dead links".
+    site_health_breaker_threshold: int = Field(default=5, ge=2, le=50)
 
     google_oauth_client_id: str = ""
     google_oauth_client_secret: SecretStr | None = None
@@ -137,6 +144,19 @@ class Settings(BaseSettings):
     # gracefully, like the Apify backends.
     youtube_api_key: SecretStr | None = None
     youtube_timeout_seconds: int = Field(default=30, ge=5)
+
+    # Google Places API (New) — public Google Business Profile data (address, phone, category,
+    # rating, review count, website) for the combined audit's business-identity enrichment
+    # (SAE-12/13). A plain API key (no owner consent). Empty key => the Places enrichment skips
+    # gracefully, like the Apify/YouTube backends; a website audit stays byte-identical.
+    google_places_api_key: SecretStr | None = None
+    google_places_timeout_seconds: int = Field(default=30, ge=5)
+
+    # Connected-mode YouTube analytics (SAE-15, Wave 3): when True, the Google OAuth consent also
+    # requests the owner-only YouTube Analytics scopes so a connecting channel owner can grant
+    # private-metrics access (watch time, retention, demographics). Default False => the Google
+    # OAuth grant is unchanged (Search Console only) and no connected YouTube data is fetched.
+    youtube_analytics_connect_enabled: bool = False
 
     # Auto-discover social profile links (Instagram/Facebook/YouTube) from the crawled HTML to fill
     # any platform the operator left blank (explicit handles always win per platform — the

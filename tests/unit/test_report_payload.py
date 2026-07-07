@@ -19,7 +19,10 @@ def test_compose_report_payload_includes_epic_4_contract() -> None:
         "It evaluated 2 checks and earned 76 of 100 available points" in (score_descriptions["seo"])
     )
     assert "1 check worth 6 points was skipped" in score_descriptions["seo"]
-    assert "normalized to 68/100" in score_descriptions["uxui"]
+    # Earned points already read as the /100 score, so the redundant
+    # "normalized to" clause is suppressed for this section.
+    assert "earned 68 of 100 available points." in score_descriptions["uxui"]
+    assert "normalized to" not in score_descriptions["uxui"]
     assert payload.sections[0].id == "seo"
     assert payload.sections[1].id == "uxui"
     assert payload.roadmap[0].tier == "quick_win"
@@ -34,7 +37,7 @@ def test_compose_report_payload_includes_epic_4_contract() -> None:
     assert "Visitors" in payload.technical_seo_section.issues[0].why_it_matters
     assert "Update the link" in payload.technical_seo_section.issues[0].recommended_fix
     assert payload.technical_seo_section.issues[0].location_label == (
-        "Affected URL found during crawl"
+        "Affected URL found during the check"
     )
     assert payload.search_performance_section.ranking_opportunities[0]["query"] == "custom homes"
     assert payload.crawl_summary.failed_pages == 1

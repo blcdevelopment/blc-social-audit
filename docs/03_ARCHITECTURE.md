@@ -226,9 +226,9 @@ the website composite — see §6).
   Vitals, P2-16 canonical + redirect-chain, P2-18 HTTPS + mixed-content security, P2-13
   answer-engine (AEO) content-structure, P2-17 local-SEO (NAP/service-area/GBP/address), and
   P2-15 static-HTML accessibility (lang/zoom/landmark/labels/link+button names/tabindex/dup-ids)
-  rules), `uxui.yaml` (`phase1-uxui-v2`, 14 rules), `composite.yaml` (`phase1-composite-v1`,
+  rules), `uxui.yaml` (`phase2-uxui-v3`, 14 rules), `composite.yaml` (`phase1-composite-v1`,
   weights only). The combined `rubric_version` stored on the result is
-  `phase2-seo-v11+phase1-uxui-v2+phase1-composite-v1`.
+  `phase2-seo-v11+phase2-uxui-v3+phase1-composite-v1`.
   - **Separate from scoring:** an **optional, opt-in axe-core advisory accessibility pass**
     (`accessibility.py`, `accessibility_advisory_enabled`, default off) runs in the live crawl
     browser and stores render-dependent findings (colour contrast, computed ARIA, …) in the
