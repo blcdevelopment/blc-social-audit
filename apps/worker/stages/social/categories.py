@@ -84,17 +84,32 @@ def _classify_niche(niche: str | None) -> str | None:
     return None
 
 
+# Placeholder/generic categories that are safe to flag as "wrong" for a known niche. A SPECIFIC
+# but different category (e.g. "Marketing Agency") is NOT flagged — we can't confidently call a real
+# category wrong from a coarse niche, and doing so produces false findings (a marketing agency that
+# serves home builders is correctly "Marketing Agency", not "Home Builder").
+_GENERIC_CATEGORIES = ("local business", "business", "page", "local", "company", "website")
+
+
 def category_matches_niche(niche: str | None, category: str | None) -> bool | None:
     """Whether ``category`` fits the business ``niche``.
 
-    None (=> the rule skips) when the niche is unclassifiable or the category is empty — so we never
-    guess a "wrong category" finding on a vague niche or a profile with no category set.
+    Returns True when the category matches the niche family, False ONLY when the category is
+    generic/placeholder (so a clear "set a specific category" nudge is warranted), and None
+    (=> the rule skips) when the niche is unclassifiable, no category is set, OR the category is a
+    specific-but-different one — because we can't confidently call a real category wrong, and doing
+    so produced false "wrong category" findings.
     """
     family = _classify_niche(niche)
     if family is None or not category or not category.strip():
         return None
     cat = category.lower()
-    return any(token in cat for token in NICHE_CATEGORY_FAMILIES[family]["acceptable_categories"])
+    if any(token in cat for token in NICHE_CATEGORY_FAMILIES[family]["acceptable_categories"]):
+        return True
+    if any(generic in cat for generic in _GENERIC_CATEGORIES):
+        return False
+    # Specific but different category -> ambiguous -> skip rather than false-flag.
+    return None
 
 
 def category_relevance(niche: str | None, categories: list[str | None]) -> bool | None:

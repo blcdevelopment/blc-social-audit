@@ -13,10 +13,17 @@ def test_matching_category_for_home_services_niche() -> None:
     assert category_matches_niche("kitchen remodeling", "Kitchen Remodeler") is True
 
 
-def test_generic_or_wrong_category_is_false() -> None:
-    # A recognized niche + a category that clearly doesn't fit -> False (a real finding).
-    assert category_matches_niche("home builder", "Restaurant") is False
+def test_generic_category_is_flagged_false() -> None:
+    # A recognized niche + a GENERIC/placeholder category -> False (a real "set a specific one").
     assert category_matches_niche("remodeling", "Local Business") is False
+    assert category_matches_niche("home builder", "Page") is False
+
+
+def test_specific_but_different_category_is_skipped_not_false() -> None:
+    # A specific real category that just isn't home-services (e.g. a marketing agency) is ambiguous
+    # -> None (skip), NOT a false "wrong category" finding. This is the BLC-audits-itself case.
+    assert category_matches_niche("home builder", "Marketing Agency") is None
+    assert category_matches_niche("homes", "Restaurant") is None
 
 
 def test_unclassifiable_niche_returns_none() -> None:
@@ -34,8 +41,10 @@ def test_missing_category_returns_none() -> None:
 def test_relevance_rollup_any_match_wins() -> None:
     # At least one profile categorized relevantly -> True.
     assert category_relevance("homes", ["Local Business", "General Contractor"]) is True
-    # Categories set but none fit -> False.
-    assert category_relevance("home builder", ["Restaurant", "Cafe"]) is False
+    # A generic category with no relevant match -> False.
+    assert category_relevance("home builder", ["Local Business"]) is False
+    # Only specific-but-different categories -> None (skip), not a false "wrong" (BLC's own case).
+    assert category_relevance("home builder", ["Marketing Agency", "Entrepreneur"]) is None
     # Nothing comparable (unknown niche, or no categories) -> None.
     assert category_relevance("mystery niche", ["Contractor"]) is None
     assert category_relevance("homes", [None, ""]) is None
