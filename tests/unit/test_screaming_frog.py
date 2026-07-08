@@ -37,6 +37,10 @@ def test_parse_screaming_frog_exports_counts_technical_issues(tmp_path) -> None:
     assert summary["html_urls_crawled"] == 6
     assert summary["client_error_internal_urls"] == 1
     assert summary["non_indexable_internal_urls"] == 1
+    # Website-scope parity with the sweep: a Screaming Frog run must still feed the
+    # "what your website consists of" panel (internal HTML URLs + the blog-post heuristic).
+    assert summary["discovered_internal_urls"] == 6
+    assert summary["discovered_blog_posts"] == 0
     assert summary["missing_titles"] == 1
     assert summary["duplicate_titles"] == 2
     assert summary["missing_meta_descriptions"] == 1
@@ -50,6 +54,25 @@ def test_parse_screaming_frog_exports_counts_technical_issues(tmp_path) -> None:
         issue for issue in parsed["issues"] if issue["id"] == "missing_titles"
     )
     assert "https://example.com/photo.jpg" not in missing_title_issue["examples"]
+
+
+def test_scope_count_excludes_redirect_rows(tmp_path) -> None:
+    # Screaming Frog lists a redirect source AND its target as separate rows; counting both
+    # would double-count every redirected page in the client-facing "Pages discovered".
+    (tmp_path / "internal_all.csv").write_text(
+        "\n".join(
+            [
+                "Address,Status Code,Content Type,Indexability,Title 1,Meta Description 1,"
+                "H1-1,Canonical Link Element 1",
+                "http://example.com/,301,,Non-Indexable,,,,",
+                "https://www.example.com/,200,text/html,Indexable,Home,Welcome,Home,"
+                "https://www.example.com/",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    parsed = parse_screaming_frog_exports(tmp_path, site_url="https://www.example.com/")
+    assert parsed["summary"]["discovered_internal_urls"] == 1
 
 
 def test_parse_screaming_frog_exports_ignores_redirect_metadata_and_splits_external_errors(

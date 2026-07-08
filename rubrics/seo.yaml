@@ -1,4 +1,7 @@
-version: "phase2-seo-v11"
+# v12: no scoring changes — the three presentation-level merge pairs (which finding folds
+# into which when both surface) moved from content_plan code into per-rule `merged_into`
+# metadata here, so a rule rename/split updates the pair in the same file.
+version: "phase2-seo-v12"
 category: seo
 max_score: 100
 normalization: rescale_to_max
@@ -205,6 +208,8 @@ rules:
     finding_label: The heading outline repeats the H1 or skips heading levels
     remediation: Use exactly one H1 per page and step heading levels in order (H1 then H2 then H3)
       so readers, assistive tech, and search engines can follow the page structure.
+    # Same site change as the H1 rule; fold into its card when both surface.
+    merged_into: seo.h1.present_once
 
   - id: seo.aeo.question_headings
     description: Subheadings answer the questions buyers actually ask.
@@ -588,6 +593,8 @@ rules:
     tier: quick_win
     finding_label: Pages are missing H1 headings
     remediation: Add one clear, descriptive H1 heading to each important page.
+    # Same site change as the H1 rule; fold into its card when both surface.
+    merged_into: seo.h1.present_once
 
   - id: seo.technical_crawl.missing_image_alt
     description: The technical crawl found few or no images missing alt text.
@@ -602,6 +609,8 @@ rules:
     tier: quick_win
     finding_label: Images are missing alt text
     remediation: Add descriptive alt text to meaningful images.
+    # Same site change as the on-page alt-coverage rule; fold into its card when both surface.
+    merged_into: seo.images.alt_coverage
 
   - id: seo.gsc.low_ctr_pages
     description: Search Console shows few high-impression pages with weak CTR.

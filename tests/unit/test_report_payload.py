@@ -552,3 +552,12 @@ def test_core_web_vitals_absent_when_psi_skipped() -> None:
     assert not cwv.available
     assert not cwv.field_available
     assert cwv.lab_rows == []
+
+
+def test_rate_limited_reason_has_client_facing_label() -> None:
+    # site_health emits reason="rate_limited" on widespread throttling; the client-facing
+    # report must render a human sentence, never the raw machine token.
+    from apps.worker.stages.report_payload import SKIP_REASON_LABELS, _reason_label
+
+    assert "rate_limited" in SKIP_REASON_LABELS
+    assert _reason_label("rate_limited") != "rate_limited"

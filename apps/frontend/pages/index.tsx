@@ -63,6 +63,7 @@ export default function SubmitAuditPage() {
   // White-label branding (P2-11) — all optional; blanks fall back to the default BLC brand.
   const [brandName, setBrandName] = useState("");
   const [brandShortName, setBrandShortName] = useState("");
+  const [brandProductName, setBrandProductName] = useState("");
   const [brandPrimaryColor, setBrandPrimaryColor] = useState("");
   const [brandAccentColor, setBrandAccentColor] = useState("");
   const [brandLogoUrl, setBrandLogoUrl] = useState("");
@@ -72,6 +73,7 @@ export default function SubmitAuditPage() {
     const overrides: BrandOverrides = {};
     if (brandName.trim()) overrides.name = brandName.trim();
     if (brandShortName.trim()) overrides.short_name = brandShortName.trim();
+    if (brandProductName.trim()) overrides.product_name = brandProductName.trim();
     if (brandPrimaryColor.trim()) overrides.primary_color = brandPrimaryColor.trim();
     if (brandAccentColor.trim()) overrides.accent_color = brandAccentColor.trim();
     if (brandLogoUrl.trim()) overrides.logo_url = brandLogoUrl.trim();
@@ -272,7 +274,7 @@ export default function SubmitAuditPage() {
           </details>
 
           <details className="brand-panel">
-            <summary>White-label branding (optional)</summary>
+            <summary>White-label branding (optional, applies to the PDF report)</summary>
             <p className="muted">
               Override the report logo, name, and colours for a prospect-facing PDF. Leave any
               field blank to keep the default BLC brand.
@@ -307,6 +309,20 @@ export default function SubmitAuditPage() {
                 value={brandShortName}
                 maxLength={40}
                 onChange={(event) => setBrandShortName(event.target.value)}
+                disabled={submitting}
+              />
+            </div>
+
+            <div className="field">
+              <label htmlFor="brand_product_name">Report product name</label>
+              <input
+                id="brand_product_name"
+                name="brand_product_name"
+                type="text"
+                placeholder='Cover/title branding (default "Gooch")'
+                value={brandProductName}
+                maxLength={60}
+                onChange={(event) => setBrandProductName(event.target.value)}
                 disabled={submitting}
               />
             </div>

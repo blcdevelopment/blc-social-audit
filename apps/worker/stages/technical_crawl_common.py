@@ -10,8 +10,70 @@ rubric (``rubrics/seo.yaml``) and the report guidance
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlparse
 
 JsonDict = dict[str, Any]
+
+# --- Site identity ----------------------------------------------------------------------------
+# Second-level labels that never name the brand: TLD families (acme.co.uk) and multi-tenant
+# hosting platforms (smithbuilders.wixsite.com) — in both cases the brand sits further left.
+# ONE shared home (this module is imported by both technical-crawl collectors and the social
+# stages) so the GSC branded split, the Places business query + identity gate, and social
+# discovery's brand tokens can never disagree about what counts as a brand label.
+GENERIC_SECOND_LEVELS = frozenset({"ac", "co", "com", "edu", "gov", "net", "org"})
+MULTI_TENANT_PLATFORMS = frozenset(
+    {
+        "blogspot",
+        "business",
+        "github",
+        "godaddysites",
+        "myshopify",
+        "netlify",
+        "pages",
+        "square",
+        "squarespace",
+        "vercel",
+        "webflow",
+        "weebly",
+        "wixsite",
+        "wordpress",
+    }
+)
+
+
+def registrable_brand_label(url_or_host: str) -> str:
+    """The label most likely to be the BRAND in a site URL/host: strip ``www.``, take the
+    registrable label, walking LEFT past EVERY generic second-level and multi-tenant platform
+    label — ``smith.co.uk`` -> ``smith``, ``smithbuilders.wixsite.com`` -> ``smithbuilders``,
+    and the stacked form ``smith.blogspot.co.uk`` -> ``smith`` (a single step would stop at
+    the platform name). The ONE brand deriver — consumed by the GSC branded split
+    (``_brand_token``), the Places business query (``tasks._business_query``), and the Places
+    identity gate, so they can never disagree about a site's brand."""
+    host = url_or_host
+    if "/" in host or ":" in host:
+        host = urlparse(url_or_host).hostname or ""
+    host = host.lower().rstrip(".").removeprefix("www.")
+    labels = [label for label in host.split(".") if label]
+    if not labels:
+        return ""
+    index = len(labels) - 2 if len(labels) >= 2 else 0
+    non_brand = GENERIC_SECOND_LEVELS | MULTI_TENANT_PLATFORMS
+    while index > 0 and labels[index] in non_brand:
+        index -= 1
+    return labels[index]
+
+
+# URL-path markers that identify a blog/article page, for the website-scope post count.
+# Shared by BOTH technical-crawl collectors so the report's "what your website consists of"
+# panel means the same thing whichever tool filled the slot.
+POST_PATH_MARKERS = ("/blog/", "/blogs/", "/post/", "/posts/", "/news/", "/article/", "/articles/")
+
+
+def looks_like_post(url: str) -> bool:
+    """Heuristic: does this internal URL look like a blog/article post? (scope estimate only)."""
+    lowered = url.lower()
+    return any(marker in lowered for marker in POST_PATH_MARKERS)
+
 
 ISSUE_LABELS: dict[str, str] = {
     "client_error_internal_urls": "Site URLs returning 'not found' or blocked errors (4xx)",

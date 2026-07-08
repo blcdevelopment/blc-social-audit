@@ -8,6 +8,7 @@ LLM), so the report is reproducible.
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -29,6 +30,8 @@ def _fmt(value: Any) -> str:
 
 
 def _unit(fact_path: str) -> str:
+    """Legacy fact-path heuristic — the fallback for stored breakdowns that predate the
+    rubric's declared per-rule ``unit`` metadata (pre-social-v6 runs)."""
     if fact_path.endswith("_pct") or "engagement" in fact_path:
         return "%"
     if "days" in fact_path:
@@ -43,7 +46,10 @@ def _metric_line(rule: JsonDict) -> str | None:
     value = evidence.get("value")
     if value is None or isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    unit = _unit(str(rule.get("fact_path", "")))
+    # Prefer the unit the rubric declares next to the rule (social.yaml `unit:`); fall back to
+    # the fact-path heuristic for breakdowns stored before units were declared.
+    declared = rule.get("unit")
+    unit = declared if isinstance(declared, str) else _unit(str(rule.get("fact_path", "")))
     params = _dict(evidence.get("params"))
     targets: list[str] = []
     if params.get("min") is not None:
@@ -52,6 +58,22 @@ def _metric_line(rule: JsonDict) -> str | None:
         targets.append(f"≤ {_fmt(params['max'])}{unit}")
     measured = f"{_fmt(value)}{unit}"
     return f"{measured} (target {' / '.join(targets)})" if targets else measured
+
+
+def _google_rating_line(google_business: JsonDict) -> str | None:
+    """One precomposed rating sentence for the Google Business block — single-sourced so the
+    PDF and DOCX copy can never drift ("Rated 4.7/5 from 128 Google reviews")."""
+    rating = google_business.get("rating")
+    count = google_business.get("review_count")
+    if rating is not None and count is not None:
+        plural = "s" if count != 1 else ""
+        return f"Rated {rating}/5 from {count} Google review{plural}"
+    if rating is not None:
+        return f"Rated {rating}/5 on Google"
+    if count is not None:
+        plural = "s" if count != 1 else ""
+        return f"{count} Google review{plural}"
+    return None
 
 
 def _display_handle(value: Any) -> str:
@@ -71,9 +93,16 @@ def _display_handle(value: Any) -> str:
         profile_id = parse_qs(parsed.query).get("id", [""])[0]
         return f"id {profile_id}" if profile_id else segments[-1]
     lowered = [segment.lower() for segment in segments]
-    # facebook.com/pages/<slug>/<id> — the slug names the page.
-    if "pages" in lowered and lowered.index("pages") + 1 < len(segments):
-        return segments[lowered.index("pages") + 1]
+    # facebook.com/pages/<slug>/<id>, /people/<Name>/<id>, legacy /pg/<name>, modern
+    # /p/<Name-ID> — the name segment follows the marker (mirroring extractor._handle_key);
+    # the directory form /pages/category/<Category>/<Name-ID>/ nests it last, and FB appends
+    # a long numeric id — strip it for display.
+    for marker in ("pages", "people", "pg", "p"):
+        if marker in lowered and lowered.index(marker) + 1 < len(segments):
+            index = lowered.index(marker) + 1
+            if lowered[index] == "category" and index + 1 < len(segments):
+                index = len(segments) - 1
+            return re.sub(r"-\d{5,}$", "", segments[index])
     # youtube.com/channel/UC…, /c/<name>, /user/<name>.
     for marker in ("channel", "c", "user"):
         if marker in lowered and lowered.index(marker) + 1 < len(segments):
@@ -89,6 +118,48 @@ def _strength_label(rule: JsonDict) -> str:
     """A positive one-liner for a passing check (strip the parenthetical from the description)."""
     text = str(rule.get("description") or rule.get("finding_label") or rule.get("rule_id") or "")
     return text.split("(")[0].strip().rstrip(".") or text
+
+
+def _connected_youtube_block(facts: JsonDict) -> JsonDict | None:
+    """Owner-consent YouTube Analytics block (SAE-15/SMWA-140), or None when not collected.
+
+    The display LINES are precomposed HERE — the shared builder — so the PDF, DOCX, and web UI
+    render byte-identical prose (the same no-drift pattern as ``rating_line``)."""
+    data = _dict(facts.get("youtube_analytics"))
+    if not data:
+        return None
+    lines: list[str] = []
+    if data.get("views") is not None:
+        lines.append(f"Views: {_fmt(data['views'])}")
+    if data.get("estimated_minutes_watched") is not None:
+        lines.append(f"Watch time: {_fmt(data['estimated_minutes_watched'])} minutes")
+    if data.get("avg_view_duration_seconds") is not None:
+        duration = f"Average view duration: {_fmt(data['avg_view_duration_seconds'])}s"
+        if data.get("avg_view_percentage") is not None:
+            duration += f" ({_fmt(data['avg_view_percentage'])}% of video watched)"
+        lines.append(duration)
+    if data.get("subscribers_gained") is not None or data.get("subscribers_lost") is not None:
+        gained = _fmt(data.get("subscribers_gained") or 0)
+        lost = _fmt(data.get("subscribers_lost") or 0)
+        lines.append(f"Subscribers: +{gained} / -{lost}")
+    sources = [
+        s
+        for s in (data.get("traffic_sources") or [])
+        if isinstance(s, dict) and s.get("source") and s.get("views") is not None
+    ][:3]
+    if sources:
+        lines.append(
+            "Top traffic sources: "
+            + ", ".join(f"{s['source']} ({_fmt(s['views'])} views)" for s in sources)
+        )
+    if not lines:
+        # Nothing renderable — hide the section rather than emit a dangling heading.
+        return None
+    window = _dict(data.get("window"))
+    meta = "Owner-consent YouTube Analytics"
+    if window.get("start_date") and window.get("end_date"):
+        meta += f" · {window['start_date']} to {window['end_date']}"
+    return {"meta": meta, "lines": lines}
 
 
 def build_social_report_data(
@@ -110,7 +181,15 @@ def build_social_report_data(
     summary = _dict(facts.get("summary"))
     # Public Google Business Profile block (SAE-13), present only on a combined audit with a Places
     # key + a matched listing; None otherwise so consumers hide the section (no dangling heading).
+    # rating_line is precomposed HERE (the shared builder) so the PDF and DOCX prose can't drift.
     google_business = _dict(facts.get("google_business")) or None
+    if google_business:
+        google_business = {
+            **google_business,
+            "rating_line": _google_rating_line(google_business),
+        }
+    # Connected-mode YouTube Analytics (flag-gated OFF by default); None ⇒ section hidden.
+    connected_youtube = _connected_youtube_block(facts)
     category = _dict(breakdown.get("category"))
     rules = category.get("rules") if isinstance(category.get("rules"), list) else []
 
@@ -236,6 +315,7 @@ def build_social_report_data(
         "top_posts": top_posts,
         "per_platform": per_platform,
         "google_business": google_business,
+        "connected_youtube": connected_youtube,
         "roadmap": roadmap,
     }
 

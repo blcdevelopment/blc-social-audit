@@ -97,11 +97,85 @@ def test_phase_1_rubrics_load_and_validate() -> None:
     uxui = load_rubric(settings.rubric_uxui_path)
     composite = load_composite_rubric(settings.rubric_composite_path)
 
-    assert seo.version == "phase2-seo-v11"
+    assert seo.version == "phase2-seo-v12"
     assert uxui.version == "phase2-uxui-v3"
     assert sum(rule.weight for rule in seo.rules) == 261
     assert sum(rule.weight for rule in uxui.rules) == 100
     assert composite.weights == {"seo": 0.45, "uxui": 0.55}
+
+
+def test_shipped_seo_rubric_declares_the_merge_pairs() -> None:
+    # The presentation-level merges live in the rubric (merged_into), not in code: a rule
+    # rename/split must update the pair in the same file (a dangling target fails rubric
+    # load via Rubric._merged_into_targets_exist — exercised by loading here).
+    settings = Settings(_env_file=None)
+    seo = load_rubric(settings.rubric_seo_path)
+    merges = {rule.id: rule.merged_into for rule in seo.rules if rule.merged_into}
+    assert merges == {
+        "seo.aeo.heading_hierarchy": "seo.h1.present_once",
+        "seo.technical_crawl.missing_h1": "seo.h1.present_once",
+        "seo.technical_crawl.missing_image_alt": "seo.images.alt_coverage",
+    }
+
+
+def _merge_rule(rule_id: str, merged_into: str | None = None) -> dict:
+    rule = {
+        "id": rule_id,
+        "description": rule_id,
+        "weight": 1,
+        "fact_path": f"seo.summary.{rule_id.split('.')[-1]}",
+        "evaluator": "boolean",
+    }
+    if merged_into:
+        rule["merged_into"] = merged_into
+    return rule
+
+
+def test_rubric_with_dangling_merge_target_fails_to_load() -> None:
+    import pytest
+    from pydantic import ValidationError
+
+    from apps.worker.stages.scoring import Rubric
+
+    with pytest.raises(ValidationError, match="unknown rule id"):
+        Rubric.model_validate(
+            {
+                "version": "test-v1",
+                "category": "seo",
+                "rules": [_merge_rule("seo.a", merged_into="seo.does_not_exist")],
+            }
+        )
+
+
+def test_rubric_with_self_merge_or_chain_fails_to_load() -> None:
+    # A self-merge or a merge chain silently DROPS a finding from every client report
+    # (the rule is diverted into a covered-by group that never renders), so both are
+    # hard load-time errors, not silent config hazards.
+    import pytest
+    from pydantic import ValidationError
+
+    from apps.worker.stages.scoring import Rubric
+
+    with pytest.raises(ValidationError, match="cannot merge into itself"):
+        Rubric.model_validate(
+            {
+                "version": "test-v1",
+                "category": "seo",
+                "rules": [_merge_rule("seo.a", merged_into="seo.a")],
+            }
+        )
+    with pytest.raises(ValidationError, match="must be terminal"):
+        Rubric.model_validate(
+            {
+                "version": "test-v1",
+                "category": "seo",
+                "rules": [
+                    _merge_rule("seo.a", merged_into="seo.b"),
+                    _merge_rule("seo.b", merged_into="seo.c"),
+                    _merge_rule("seo.c"),
+                ],
+            }
+        )
 
 
 def test_v3_renamed_rules_skip_on_pre_v3_stored_facts() -> None:

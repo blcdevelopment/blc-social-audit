@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
-from urllib.parse import urlsplit
 from uuid import UUID
 
 from celery.exceptions import SoftTimeLimitExceeded
@@ -22,6 +21,11 @@ from apps.worker.stages.docx_renderer import DocxRenderResult, render_audit_docx
 from apps.worker.stages.external_seo import collect_external_seo_facts, empty_external_seo_facts
 from apps.worker.stages.extractor_seo import extract_seo_facts
 from apps.worker.stages.extractor_uxui import extract_uxui_facts
+from apps.worker.stages.google_search_console import (
+    YOUTUBE_ANALYTICS_SCOPES,
+    ensure_google_access_token,
+    latest_google_connection,
+)
 from apps.worker.stages.grounding_validator import validate_commentary_grounding
 from apps.worker.stages.pdf_renderer import PdfRenderResult, render_audit_pdf, render_social_pdf
 from apps.worker.stages.psi_client import collect_pagespeed_facts
@@ -30,12 +34,22 @@ from apps.worker.stages.scoring import (
     score_audit,
     score_social_audit,
 )
-from apps.worker.stages.social.categories import category_relevance
 from apps.worker.stages.social.collector import collect_social_facts
 from apps.worker.stages.social.discovery import discover_social_links
+from apps.worker.stages.social.extractor import (
+    _phone_tail,
+    inject_category_relevance,
+    inject_google_business,
+    inject_nap_consistency,
+)
 from apps.worker.stages.social.places_provider import collect_google_business_facts
 from apps.worker.stages.social.providers import get_provider
 from apps.worker.stages.social.report import compose_social_report_payload
+from apps.worker.stages.social.youtube_analytics_provider import (
+    fetch_channel_analytics,
+    normalize_youtube_analytics,
+)
+from apps.worker.stages.technical_crawl_common import registrable_brand_label
 
 JsonDict = dict[str, Any]
 CrawlerFunc = Callable[[str, Settings, str | None], CrawlResult]
@@ -296,6 +310,55 @@ def _upsert_social_result(
     return result
 
 
+def _augment_with_connected_youtube(
+    social_facts: JsonDict,
+    settings: Settings,
+    db: Session,
+    handles: dict[str, str] | None,
+) -> None:
+    """SAE-15 connected-mode YouTube (owner consent): attach the connected channel's Analytics
+    metrics to the social facts — SMWA-140's pipeline wiring over the already-built OAuth-scope
+    seam (``oauth_scopes`` adds the YT scopes to the Google consent when the flag is on).
+
+    Every gate must pass: the ``youtube_analytics_connect_enabled`` flag (default OFF — prod
+    unchanged), a YouTube handle on the audit, a Google connection whose GRANT actually includes
+    the YouTube Analytics scopes (a pre-flag consent doesn't), and a working token. Presentation
+    only — nothing here is scored — and best-effort like Places/PSI: any miss or failure leaves
+    the facts untouched. Only SoftTimeLimitExceeded propagates."""
+    if not getattr(settings, "youtube_analytics_connect_enabled", False):
+        return
+    if not (handles or {}).get("youtube"):
+        return
+    try:
+        connection = latest_google_connection(db)
+        if connection is None:
+            return
+        granted = set((connection.scopes or {}).get("values") or [])
+        if not all(scope in granted for scope in YOUTUBE_ANALYTICS_SCOPES):
+            return
+        access_token = ensure_google_access_token(connection, settings, db)
+        # Analytics data lags ~48-72h (same allowance as the GSC window); 90 days of it.
+        end_date = date.today() - timedelta(days=3)
+        start_date = end_date - timedelta(days=89)
+        reports = fetch_channel_analytics(
+            access_token,
+            start_date=start_date.isoformat(),
+            end_date=end_date.isoformat(),
+            settings=settings,
+        )
+    except SoftTimeLimitExceeded:
+        raise
+    except Exception:
+        return
+    if reports is None:
+        return
+    social_facts["youtube_analytics"] = {
+        "status": "complete",
+        "window": {"start_date": start_date.isoformat(), "end_date": end_date.isoformat()},
+        **normalize_youtube_analytics(reports),
+    }
+
+
 def _run_social_pipeline(
     db: Session,
     job: AuditJob,
@@ -304,6 +367,8 @@ def _run_social_pipeline(
 ) -> None:
     _mark_job(db, job, AuditStatus.CRAWLING, "Collecting social profiles", 40)
     social_facts = social_collector(settings, job.social_handles)
+    if social_facts.get("status") in {"complete", "partial"}:
+        _augment_with_connected_youtube(social_facts, settings, db, job.social_handles)
 
     _mark_job(db, job, AuditStatus.SCORING, "Scoring social profiles", 80)
     social_result = score_social_audit(social_facts, settings)
@@ -405,12 +470,6 @@ def _resolve_social_handles_safely(
         return _explicit_social_handles(job)
 
 
-def _phone_tail(value: Any) -> str:
-    """Last 10 digits of a phone string (US-style comparison key); "" if fewer than 10 digits."""
-    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
-    return digits[-10:] if len(digits) >= 10 else ""
-
-
 def _website_phone_keys(result: AuditResult) -> set[str]:
     """Comparable phone keys extracted from the website's UX/UI contact facts (extractor_uxui)."""
     keys: set[str] = set()
@@ -426,74 +485,37 @@ def _website_phone_keys(result: AuditResult) -> set[str]:
 
 
 def _inject_nap_consistency(social_facts: JsonDict, result: AuditResult) -> None:
-    """Combined-audit only (SAE-10/13): set ``summary.nap_phone_consistent`` by comparing the
-    website's phone number(s) with the business's number(s) from the social profiles AND (when
-    available) the Google Business Profile. Left as ``None`` (so the NAP rule ``skip_if_missing``-
-    rescales) whenever either side has no comparable phone — which is why a standalone social audit,
-    or a page/profile that hides its number, never false-fails. Forgiving by design: consistent
-    when the website shares a number with any business source (avoids flagging a site that also
-    lists a fax/second line)."""
-    summary = social_facts.get("summary")
-    if not isinstance(summary, dict):
-        return
-    website = _website_phone_keys(result)
-    business = {
-        key
-        for p in social_facts.get("platforms") or []
-        if isinstance(p, dict) and (key := _phone_tail(p.get("phone")))
-    }
-    gbp = social_facts.get("google_business")
-    if isinstance(gbp, dict) and (key := _phone_tail(gbp.get("phone"))):
-        business.add(key)
-    if not website or not business:
-        return
-    summary["nap_phone_consistent"] = bool(website & business)
+    """Combined-audit only (SAE-10/13): thin worker seam — reads the website's phone keys off
+    the stored result, then delegates to the pure, schema-validated
+    ``social.extractor.inject_nap_consistency`` (see its docstring for the semantics)."""
+    inject_nap_consistency(social_facts, website_phone_keys=_website_phone_keys(result))
 
 
 def _business_query(job: AuditJob) -> str:
-    """A Google Places text query for the audited business, derived from its domain label
-    (e.g. ``https://www.builderleadconverter.com`` -> ``builderleadconverter``)."""
-    host = urlsplit(str(job.url or "")).hostname or ""
-    host = host[4:] if host.startswith("www.") else host
-    return host.split(".")[0] if host else ""
-
-
-def _inject_category_relevance(social_facts: JsonDict, job: AuditJob) -> None:
-    """SAE-9-full: set ``summary.category_matches_niche`` from the audit's niche and the declared
-    categories (feed profiles + the Google listing). ``None`` (rule skips) when the niche can't be
-    classified or no category is set, so a vague niche never yields a false 'wrong category'
-    finding."""
-    summary = social_facts.get("summary")
-    if not isinstance(summary, dict):
-        return
-    categories = [
-        p.get("category")
-        for p in social_facts.get("platforms") or []
-        if isinstance(p, dict) and p.get("platform") != "youtube"
-    ]
-    gbp = social_facts.get("google_business")
-    if isinstance(gbp, dict) and gbp.get("category"):
-        categories.append(gbp.get("category"))
-    summary["category_matches_niche"] = category_relevance(job.niche, categories)
+    """A Google Places text query for the audited business — the shared registrable brand
+    label (``www.builderleadconverter.com`` -> ``builderleadconverter``, ``shop.acme.com`` ->
+    ``acme``, ``smith.co.uk`` -> ``smith``, ``smithbuilders.wixsite.com`` ->
+    ``smithbuilders``), the same deriver the GSC branded split uses. The Places match is then
+    verified against the listing's website (``website_mismatch``), so a weak query yields no
+    Google data rather than a stranger's listing."""
+    return registrable_brand_label(str(job.url or ""))
 
 
 def _augment_with_google_business(
-    social_facts: JsonDict, settings: Settings, *, query: str
+    social_facts: JsonDict, settings: Settings, *, query: str, expected_url: str
 ) -> None:
     """Combined-audit only (SAE-13): enrich the social facts with the business's PUBLIC Google
     listing (Places API) — stashed under ``google_business`` for the report, plus the scored
     ``google_rating`` / ``google_review_count`` summary signals and a phone for the NAP check.
-    Graceful: no key / no match / any failure leaves the social facts untouched (the reviews rule
-    then ``skip_if_missing``-rescales and the report shows no Google block)."""
-    gbp = collect_google_business_facts(settings, query=query)
+    The listing is accepted only when its website belongs to the audited site (see
+    ``collect_google_business_facts``), so a fuzzy Text Search can't attribute a stranger's
+    reviews/phone to the client. Graceful: no key / no match / any failure leaves the social
+    facts untouched (the reviews rule then ``skip_if_missing``-rescales and the report shows no
+    Google block)."""
+    gbp = collect_google_business_facts(settings, query=query, expected_url=expected_url)
     if gbp.get("status") != "complete":
         return
-    business = gbp.get("business") if isinstance(gbp.get("business"), dict) else {}
-    social_facts["google_business"] = business
-    summary = social_facts.get("summary")
-    if isinstance(summary, dict):
-        summary["google_rating"] = business.get("rating")
-        summary["google_review_count"] = business.get("review_count")
+    inject_google_business(social_facts, gbp.get("business") or {})
 
 
 def _augment_with_social(
@@ -533,17 +555,30 @@ def _augment_with_social(
     # the next _mark_job commit. Only SoftTimeLimitExceeded propagates (the task is out of time).
     try:
         social_facts = social_collector(settings, handles)
-        # Combined-only enrichment: the business's public Google listing (reviews/rating + an
-        # authoritative phone), then the website<->business phone (NAP) cross-check. Both are
-        # graceful no-ops without their inputs, so a standalone social audit is unaffected.
-        _augment_with_google_business(social_facts, settings, query=_business_query(job))
-        _inject_category_relevance(social_facts, job)
-        _inject_nap_consistency(social_facts, result)
+        collection_usable = social_facts.get("status") in {"complete", "partial"}
+        if promote and not collection_usable:
+            # Auto-discovery path with nothing usable: skip the billed Places enrichment +
+            # scoring — the website audit stays byte-identical. Under today's scorer this gate
+            # is equivalent to the `usable` check below (score is None exactly when status
+            # isn't complete/partial); that later check stays as the invariant's backstop —
+            # a job must never be promoted to combined without an actual Social Score, even
+            # if a future scorer change makes score None on a complete collection.
+            return
+        if collection_usable:
+            # Combined-only enrichment: the business's public Google listing (reviews/rating +
+            # an authoritative phone), then the website<->business phone (NAP) cross-check.
+            # Gated on a usable collection for BOTH paths: an explicitly-combined audit whose
+            # collection FAILED merges the honest failure note alone — no billed Places lookup,
+            # and no google_business block sitting in failed-status facts for a render surface
+            # to leak while the PDF/DOCX suppress the social body.
+            _augment_with_google_business(
+                social_facts, settings, query=_business_query(job), expected_url=str(job.url or "")
+            )
+            inject_category_relevance(social_facts, niche=job.niche)
+            _inject_nap_consistency(social_facts, result)
+            _augment_with_connected_youtube(social_facts, settings, db, handles)
         social_result = score_social_audit(social_facts, settings)
-        usable = (
-            social_facts.get("status") in {"complete", "partial"}
-            and social_result.get("score") is not None
-        )
+        usable = collection_usable and social_result.get("score") is not None
         if promote and not usable:
             return
         overall = compose_overall_readiness_score(

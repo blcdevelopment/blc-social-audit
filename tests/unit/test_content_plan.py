@@ -26,6 +26,7 @@ def _rule(
     label: str | None = None,
     fact_path: str = "seo.summary.value",
     value: object = None,
+    merged_into: str | None = None,
 ) -> dict:
     return {
         "rule_id": rule_id,
@@ -38,6 +39,7 @@ def _rule(
         "finding_label": label or f"Problem {rule_id}",
         "remediation": f"Fix {rule_id}.",
         "surface_as_finding": surface,
+        "merged_into": merged_into,
         "result": result,
         "points_awarded": 0.0,
         "points_possible": weight,
@@ -138,7 +140,6 @@ def test_top_n_truncation_is_deterministic() -> None:
     plan = _plan(
         _breakdown(rules),
         commentary_max_findings_per_section=3,
-        commentary_max_recommendations_per_section=2,
     )
     assert len(plan.seo.findings) == 3
     # Recommendations pair 1:1 with the rendered findings — a finding without its fix
@@ -511,6 +512,7 @@ def test_overlapping_rules_merge_into_one_card() -> None:
             impact="low",
             tier="quick_win",
             label="Heading outline is broken",
+            merged_into="seo.h1.present_once",
         ),
         _rule(
             "seo.images.alt_coverage",
@@ -527,6 +529,7 @@ def test_overlapping_rules_merge_into_one_card() -> None:
             impact="medium",
             tier="quick_win",
             label="Images missing alt text",
+            merged_into="seo.images.alt_coverage",
         ),
     ]
     plan = _plan(_breakdown(rules))
@@ -536,6 +539,25 @@ def test_overlapping_rules_merge_into_one_card() -> None:
     assert "Heading outline is broken" in h1_card.why
     alt_card = next(f for f in plan.seo.findings if "alt-text" in f.title)
     assert "Images missing alt text" in alt_card.why
+
+
+def test_malformed_stored_merge_metadata_never_drops_a_finding() -> None:
+    # Rubric load now rejects self-merges/chains, but OLD stored breakdowns could still carry
+    # malformed merge metadata — a diverted rule whose primary never renders must be re-kept,
+    # not silently dropped from the client report.
+    rules = [
+        _rule(
+            "seo.a",
+            "fail",
+            weight=5,
+            impact="high",
+            tier="quick_win",
+            label="Self-merged rule",
+            merged_into="seo.a",
+        )
+    ]
+    plan = _plan(_breakdown(rules))
+    assert [f.title for f in plan.seo.findings] == ["Self-merged rule"]
 
 
 def test_secondary_rule_alone_still_surfaces() -> None:
@@ -549,6 +571,7 @@ def test_secondary_rule_alone_still_surfaces() -> None:
                     impact="low",
                     tier="quick_win",
                     label="Heading outline is broken",
+                    merged_into="seo.h1.present_once",
                 )
             ]
         )
@@ -580,6 +603,7 @@ def _alt_pair_with_crowd() -> list[dict]:
             impact="medium",
             tier="quick_win",
             label="Images missing alt text",
+            merged_into="seo.images.alt_coverage",
         ),
     ]
 
@@ -618,6 +642,7 @@ def test_top_priority_label_names_a_rendered_card() -> None:
             impact="medium",
             tier="quick_win",
             label="Images missing alt text",
+            merged_into="seo.images.alt_coverage",
         ),
     ]
     plan = _plan(_breakdown(rules))

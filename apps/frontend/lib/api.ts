@@ -13,6 +13,9 @@ interface ApiRequestInit extends RequestInit {
 export interface BrandOverrides {
   name?: string | null;
   short_name?: string | null;
+  // Replaces the audit product's name on the report cover/title (default "Gooch").
+  // Like every brand override, applies to the PDF only (the DOCX uses default branding).
+  product_name?: string | null;
   primary_color?: string | null;
   accent_color?: string | null;
   logo_url?: string | null;
@@ -85,6 +88,29 @@ export interface SocialContentInsights {
   avg_follower_following_ratio: number | null;
 }
 
+// The public Google Business Profile listing the reviews/NAP checks were scored against
+// (combined audits only; null/absent when the Places lookup was skipped or failed).
+export interface SocialGoogleBusiness {
+  name: string | null;
+  address: string | null;
+  phone: string | null;
+  category: string | null;
+  types?: string[];
+  rating: number | null;
+  review_count: number | null;
+  // Precomposed by the shared report builder so PDF/DOCX prose never drifts.
+  rating_line?: string | null;
+  website: string | null;
+  business_status?: string | null;
+}
+
+// Owner-consent connected YouTube Analytics (flag-gated; absent unless connected mode ran).
+// The display lines are precomposed by the shared report builder so UI/PDF/DOCX can't drift.
+export interface SocialConnectedYouTube {
+  meta: string;
+  lines: string[];
+}
+
 export interface SocialReport {
   version: string;
   score: number | null;
@@ -99,6 +125,8 @@ export interface SocialReport {
   findings: SocialReportFinding[];
   strengths?: SocialStrength[];
   content_insights?: SocialContentInsights | null;
+  google_business?: SocialGoogleBusiness | null;
+  connected_youtube?: SocialConnectedYouTube | null;
   top_posts?: SocialTopPost[];
   per_platform?: SocialPlatformScore[];
   roadmap: Record<string, SocialReportFinding[]>;
@@ -184,6 +212,9 @@ export interface ReportSection {
   score: number | null;
   findings: ReportFinding[];
   recommendations: ReportRecommendation[];
+  // Legacy-payload fallback flag, computed once server-side (findings without action_items
+  // keep their fixes in `recommendations`) so PDF/DOCX/UI agree on when to render the list.
+  show_recommendations?: boolean;
   opportunities: RuleSummary[];
 }
 
@@ -356,6 +387,9 @@ export interface ReportPayload {
   // Combined-audit only: the social section + overall readiness appended to the website report.
   social_audit?: SocialReport | null;
   overall_readiness?: OverallReadiness | null;
+  // The one shared combined-cover predicate (overall complete AND scored), computed
+  // server-side so the PDF cover, DOCX title, and score-card intro can never disagree.
+  combined_complete?: boolean;
 }
 
 export interface AuditDetail {

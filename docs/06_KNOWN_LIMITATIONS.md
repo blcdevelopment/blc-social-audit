@@ -66,9 +66,26 @@ one report (PDF and DOCX). Known limits of that flow:
   `YOUTUBE_API_KEY` for YouTube) is configured — a keyless platform is never persisted onto the
   job, so it cannot pin the social section at a permanent `partial` status. Explicit operator
   handles are kept regardless.
+- **Auto-discovery's credit-line veto is deliberately conservative.** A profile link sitting in
+  an attribution context ("Site by <agency>", "Photo credit …") is skipped unless its handle IS
+  one of the audited domain's labels exactly (`_exact_brand_match`) — a looser substring rescue
+  would let a credited photographer's `@martinez` on `martinezconstruction.com` be scored as the
+  client's profile. Accepted false negative: a site whose handle doesn't contain a domain label
+  (e.g. `@buildwithus` on `acmebuilders.com`) is still skipped when its icon shares a compact
+  footer/parent with a third-party credit line — the operator can always type the handle
+  explicitly. The design bias is to never attribute a stranger's profile to the audited business.
 - **Combined social findings are deterministic (no LLM).** The appended Social Media Audit section
   is rule-derived from `social.yaml`, like the standalone social report — there is no LLM-polish
   pass in the combined flow.
+- **Connected-mode YouTube (SMWA-140) is wired but dark by default.** With
+  `YOUTUBE_ANALYTICS_CONNECT_ENABLED=true`, the existing Google connect consent also requests the
+  YouTube Analytics scopes, and audits that include a YouTube handle attach the CONNECTED
+  account's channel metrics as a "Connected YouTube analytics" block (presentation-only — nothing
+  is scored). The metrics are `channel==MINE` for the connected Google account, so they are
+  meaningful only when the CLIENT's account is the one connected (the owner-consent model). A
+  dedicated per-platform OAuth token store (SMWA-139) is deliberately deferred — YouTube reuses
+  the GSC token store, and a separate table only becomes necessary when a Meta Graph provider
+  (SMWA-141, blocked on Meta App Review + Business Verification) lands.
 - **No new DB column for the headline score.** Overall Lead-Gen Readiness lives in the
   `score_breakdown` JSON (`overall_readiness`), and `audit_type` is a free `String(20)` column —
   there is **no new Alembic migration** (head is still `20260625_0005`).
@@ -134,6 +151,14 @@ one report (PDF and DOCX). Known limits of that flow:
   passes); an embed that loads on one run and not another can flip the form-detection facts
   between live runs. Same class as the live-site/PSI variance in §7 — the QA harness is
   unaffected (fixtures have no iframes).
+- **Frame-scan precheck (accepted tradeoff, 2026-07-08).** The per-page frame pass runs only
+  when the page shows an embed signal: an already-mounted child frame, an `iframe` token
+  anywhere in the static HTML, or a known form-provider loader signature. A custom
+  scroll-injected iframe from an *unknown* vendor whose external bundle leaves none of those
+  traces is skipped — accepted to save the ~1–3 s per-page scroll nudge on iframe-less sites
+  (~8–30 s per audit). Known providers stay covered by the shared signature list
+  (`extractor_uxui._EMBED_PROVIDER_SIGNATURES`); add a signature there to extend both
+  detection and the precheck at once.
 
 ---
 

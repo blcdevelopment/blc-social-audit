@@ -282,3 +282,74 @@ def _combined_result() -> SimpleNamespace:
         },
     }
     return result
+
+
+def test_render_report_docx_falls_back_to_recommendations_for_legacy_commentary(
+    tmp_path,
+) -> None:
+    # Audits stored BEFORE the finding-card rework carry findings without action_items; their
+    # fixes live only in the per-section recommendations, which the DOCX must then render
+    # (mirrors the web UI's fallback) — otherwise an on-demand DOCX of an old audit prints
+    # problems with no "do this" anywhere.
+    result = _result()
+    result.commentary = {
+        "content": {
+            "executive_summary": "Legacy summary.",
+            "seo": {
+                "summary": "Legacy SEO summary.",
+                "findings": [
+                    {
+                        "severity": "high",
+                        "title": "Missing titles",
+                        "explanation": "Several pages lack title tags.",
+                    }
+                ],
+                "recommendations": [
+                    {
+                        "tier": "quick_win",
+                        "title": "Write unique title tags",
+                        "rationale": "Titles drive rankings and clicks.",
+                        "action_items": ["Add a unique title to every page."],
+                    }
+                ],
+            },
+        }
+    }
+    payload = compose_report_payload(_job(), result)
+    output_path = tmp_path / "legacy.docx"
+
+    render_report_docx(payload, output_path=output_path)
+
+    with ZipFile(output_path) as archive:
+        document = archive.read("word/document.xml").decode("utf-8")
+    assert ">Recommendations<" in document
+    assert "Titles drive rankings and clicks." in document
+    assert "Add a unique title to every page." in document
+
+
+def test_docx_overall_weights_round_half_up_like_the_ui(tmp_path) -> None:
+    # Python round() is banker's (round(70.5) -> 70) while the UI uses Math.round (-> 71): a
+    # 0.705/0.295 rubric must print the SAME percentages on both surfaces (half-up convention).
+    result = _result()
+    result.social_score = 55
+    result.score_breakdown = {
+        **result.score_breakdown,
+        "overall_readiness": {
+            "status": "complete",
+            "rubric_version": "phase2-overall-v1",
+            "score": 67,
+            "band": "fair",
+            "max_score": 100,
+            "weights": {"website": 0.705, "social": 0.295},
+            "inputs": {"website_lead_gen": 72, "social": 55},
+        },
+    }
+    payload = compose_report_payload(_job(), result)
+    output_path = tmp_path / "audit.docx"
+
+    render_report_docx(payload, output_path=output_path)
+
+    with ZipFile(output_path) as archive:
+        document = archive.read("word/document.xml").decode("utf-8")
+    assert "(weight 71%)" in document  # banker's round() would print 70%
+    assert "(weight 30%)" in document

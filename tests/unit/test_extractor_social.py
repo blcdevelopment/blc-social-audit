@@ -2,7 +2,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-from apps.worker.stages.social.extractor import extract_social_facts
+from apps.worker.stages.social.extractor import _handle_key, extract_social_facts
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 NOW = datetime(2026, 6, 23, tzinfo=UTC)
@@ -23,7 +23,7 @@ def test_strong_profile_summary() -> None:
     assert s["platforms_audited"] == 1
     assert s["total_followers"] == 5000
     assert s["profiles_complete_pct"] == 100
-    assert s["avg_posts_per_month"] == 10.0  # 6 posts over an 18-day span
+    assert s["avg_posts_per_month"] == 10.1  # 6 posts over an 18-day span (30.44-day month)
     assert s["days_since_last_post"] == 2
     assert s["avg_engagement_rate_pct"] == 5.33
     assert s["profiles_with_link_in_bio"] == 1
@@ -37,7 +37,7 @@ def test_weak_profile_summary() -> None:
     assert facts["status"] == "complete"
     s = facts["summary"]
     assert s["profiles_complete_pct"] == 0
-    assert s["avg_posts_per_month"] == 5.0
+    assert s["avg_posts_per_month"] == 5.1
     assert s["days_since_last_post"] == 83
     assert s["avg_engagement_rate_pct"] == 3.75
     assert s["profiles_with_link_in_bio"] == 0
@@ -57,7 +57,7 @@ def test_combined_aggregation() -> None:
     s = facts["summary"]
     assert s["platforms_audited"] == 2
     assert s["profiles_complete_pct"] == 50
-    assert s["avg_posts_per_month"] == 7.5
+    assert s["avg_posts_per_month"] == 7.6
     assert s["days_since_last_post"] == 2
     assert s["avg_engagement_rate_pct"] == 4.54
     assert s["profiles_with_link_in_bio"] == 1
@@ -196,7 +196,7 @@ def test_instagram_plus_facebook_aggregates_both() -> None:
     assert summary["platforms_audited"] == 2
     assert summary["profiles_with_link_in_bio"] == 2
     # Cadence/engagement come from the IG profile only (FB has no posts).
-    assert summary["avg_posts_per_month"] == 10.0
+    assert summary["avg_posts_per_month"] == 10.1
     assert summary["days_since_last_post"] == 2
 
 
@@ -220,7 +220,7 @@ def test_youtube_channel_normalizes() -> None:
     assert p["link_in_bio"] == "https://acmebuilders.example"  # parsed from description
     assert p["has_cta"] is True
     assert p["has_video"] is True
-    assert p["posts_per_month"] == 10.0  # 6 uploads over an 18-day span
+    assert p["posts_per_month"] == 10.1  # 6 uploads over an 18-day span (30.44-day month)
     assert p["days_since_last_post"] == 2
     assert p["avg_engagement_rate_pct"] == 5.0  # (220 likes + 30 comments) / 5000 followers
 
@@ -578,3 +578,89 @@ def test_youtube_only_video_share_is_unscored() -> None:
         now=NOW,
     )
     assert facts["summary"]["video_share_pct"] is None
+
+
+def test_handle_key_url_forms_collapse_to_the_vanity_handle() -> None:
+    # Auto-discovery (and the operator form) store full canonical profile URLs — every vanity
+    # form of one brand must produce the same key, or handles_consistent false-fails on the
+    # pipeline's most common input shape.
+    urls = [
+        "AcmeStudio",
+        "@acmestudio",
+        "https://www.instagram.com/acme.studio/",
+        "https://www.facebook.com/AcmeStudio/",
+        "https://www.youtube.com/@AcmeStudio",
+        "https://www.youtube.com/c/AcmeStudio",
+        "https://www.facebook.com/pages/Acme-Studio/123456",
+        # Modern FB business-page forms: /people/<Name>/<id>, legacy /pg/<name>, and the
+        # directory form /pages/category/<Category>/<Name-ID>/ (long numeric id stripped).
+        "https://www.facebook.com/people/Acme-Studio/61550001112223/",
+        "https://www.facebook.com/pg/AcmeStudio",
+        "https://www.facebook.com/pages/category/General-Contractor/Acme-Studio-104502341234567/",
+    ]
+    assert {_handle_key(url) for url in urls} == {"acmestudio"}
+
+
+def test_handle_key_opaque_ids_drop_out_of_the_comparison() -> None:
+    # profile.php ids and raw channel ids aren't brand-chosen handles; they must return ""
+    # (excluded) rather than a junk key that fails — or accidentally passes — consistency.
+    assert _handle_key("https://www.facebook.com/profile.php?id=1234567") == ""
+    assert _handle_key("https://www.youtube.com/channel/UCabc123") == ""
+    assert _handle_key("") == ""
+    assert _handle_key(None) == ""
+
+
+def test_url_handle_fallback_passes_full_url_through() -> None:
+    # Auto-discovery (and a pasted link) supplies the handle AS a full profile URL. When the
+    # provider payload carries no url of its own, the fallback must keep that URL verbatim —
+    # not nest it under the platform host into a doubled-domain URL.
+    from apps.worker.stages.social.extractor import (
+        normalize_facebook_profile,
+        normalize_instagram_profile,
+        normalize_youtube_channel,
+    )
+
+    ig = normalize_instagram_profile({}, "https://www.instagram.com/acmestudio/", now=NOW)
+    assert ig["url"] == "https://www.instagram.com/acmestudio/"
+
+    fb = normalize_facebook_profile({}, "https://www.facebook.com/acmestudio/", now=NOW)
+    assert fb["url"] == "https://www.facebook.com/acmestudio/"
+
+    yt_url = "https://www.youtube.com/channel/UC" + "x" * 22
+    yt = normalize_youtube_channel({}, yt_url, now=NOW)
+    assert yt["url"] == yt_url
+
+    # Bare handles keep the canonical platform-host form they always had.
+    assert (
+        normalize_instagram_profile({}, "@acmestudio", now=NOW)["url"]
+        == "https://www.instagram.com/acmestudio/"
+    )
+    assert (
+        normalize_youtube_channel({}, "@acmestudio", now=NOW)["url"]
+        == "https://www.youtube.com/@acmestudio"
+    )
+
+
+def test_handle_key_normalizes_modern_facebook_p_form() -> None:
+    # facebook.com/p/<Name>-<id> is the URL Facebook serves for pages without a vanity
+    # username; it must key to the brand, not the junk marker "p".
+    assert _handle_key("https://www.facebook.com/p/Acme-Studio-61550001112223/") == "acmestudio"
+
+
+def test_profile_link_from_handle_detects_scheme_less_links() -> None:
+    # THE one URL-shaped-handle detector: scheme'd, protocol-relative, and scheme-less dotted
+    # hosts are links; a dotted bare HANDLE (dots are legal in IG usernames) is not.
+    from apps.worker.stages.social.extractor import profile_link_from_handle
+
+    assert profile_link_from_handle("www.instagram.com/acme") == "https://www.instagram.com/acme"
+    assert profile_link_from_handle("//instagram.com/acme") == "https://instagram.com/acme"
+    assert profile_link_from_handle("https://instagram.com/acme") == "https://instagram.com/acme"
+    assert profile_link_from_handle("acme.studio") is None
+    assert profile_link_from_handle("@acme") is None
+
+
+def test_youtube_channel_url_keeps_scheme_less_link_handles() -> None:
+    from apps.worker.stages.social.extractor import normalize_youtube_channel
+
+    yt = normalize_youtube_channel({}, "www.youtube.com/c/AcmeStudio", now=NOW)
+    assert yt["url"] == "https://www.youtube.com/c/AcmeStudio"

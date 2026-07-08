@@ -35,6 +35,16 @@ class RubricRule(BaseModel):
     finding_label: str | None = None
     remediation: str | None = None
     surface_as_finding: bool = True
+    # Display-only measurement unit for the scored fact ("%", " days", "/month"), consumed by
+    # the social report's quantified metric lines. Never affects scoring. Optional — when
+    # absent the report falls back to its fact-path heuristic (which also covers breakdowns
+    # stored before units were declared).
+    unit: str | None = None
+    # Presentation-level merge: when BOTH this rule and the `merged_into` rule surface as
+    # findings, this one folds into that primary as a covered-by note (content_plan). Scores
+    # are untouched. It lives in the rubric — next to the rule ids it names — so a rule
+    # rename/split updates the pair in the same file; a dangling target fails rubric load.
+    merged_into: str | None = None
 
 
 class Rubric(BaseModel):
@@ -56,6 +66,30 @@ class Rubric(BaseModel):
         if not cleaned:
             raise ValueError("must not be empty")
         return cleaned
+
+    @model_validator(mode="after")
+    def _merged_into_targets_exist(self) -> Rubric:
+        # A bad merge target silently DROPS a finding from every client report (the rule is
+        # diverted into a covered-by group that is never rendered), so merge metadata is
+        # validated hard at load time: targets must exist, no self-merges, and targets must
+        # be terminal (no chains) — content_plan folds exactly one level.
+        rules_by_id = {rule.id: rule for rule in self.rules}
+        for rule in self.rules:
+            if not rule.merged_into:
+                continue
+            if rule.merged_into == rule.id:
+                raise ValueError(f"rule {rule.id!r} cannot merge into itself")
+            target = rules_by_id.get(rule.merged_into)
+            if target is None:
+                raise ValueError(
+                    f"rule {rule.id!r} merges into unknown rule id {rule.merged_into!r}"
+                )
+            if target.merged_into:
+                raise ValueError(
+                    f"rule {rule.id!r} merges into {rule.merged_into!r}, which itself merges "
+                    f"into {target.merged_into!r} — merge targets must be terminal (no chains)"
+                )
+        return self
 
 
 class CompositeRubric(BaseModel):
@@ -351,6 +385,8 @@ def _score_rule(facts: JsonDict, rule: RubricRule) -> JsonDict:
         "finding_label": rule.finding_label,
         "remediation": rule.remediation,
         "surface_as_finding": rule.surface_as_finding,
+        "unit": rule.unit,
+        "merged_into": rule.merged_into,
         "result": evaluation.result,
         "points_awarded": points,
         "points_possible": 0.0 if evaluation.result == "skipped" else rule.weight,

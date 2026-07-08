@@ -285,6 +285,11 @@ SKIP_REASON_LABELS: dict[str, str] = {
         "could finish, so link checks are incomplete and were not scored. Spot-check "
         "important pages manually."
     ),
+    "rate_limited": (
+        "The site's server rate-limited our automated link checker on many pages, so link "
+        "checks are incomplete and were not scored. The affected URLs are reported as "
+        "unchecked, not broken — spot-check important pages manually."
+    ),
 }
 TECHNICAL_CRAWL_TOOL_LABELS: dict[str, str] = {
     "screaming_frog_csv": "Screaming Frog SEO Spider",
@@ -397,6 +402,12 @@ class ReportSection(BaseModel):
     score: int | None = Field(default=None, ge=0, le=100)
     findings: list[ReportFinding] = Field(default_factory=list)
     recommendations: list[ReportRecommendation] = Field(default_factory=list)
+    # True only for LEGACY stored audits (pre finding-card commentary): their findings carry
+    # no action_items, so the fixes live in `recommendations` and the surfaces must render
+    # that list. Computed HERE — the one place — so the PDF/DOCX/UI can never disagree about
+    # when the fallback applies. New payloads keep recommendations for the roadmap but leave
+    # this False (the finding cards already carry every fix).
+    show_recommendations: bool = False
     opportunities: list[RuleSummary] = Field(default_factory=list)
 
 
@@ -608,6 +619,11 @@ class ReportPayload(BaseModel):
     # score. Both append at the END of the report and never alter the website sections above.
     social_audit: JsonDict | None = None
     overall_readiness: JsonDict | None = None
+    # The ONE combined-cover predicate (overall status complete AND a real score), computed
+    # once in compose_report_payload and read by the PDF cover, the DOCX title, and the
+    # lead-gen score card — the three can never disagree about whether this report is a
+    # combined one. False for website-only and "website_only"-overall payloads.
+    combined_complete: bool = False
     # Enrichment: Competitor Benchmarking (P2-26 / SMWA-79 — deferred v3, default None => not
     # rendered; a report without benchmark data is byte-identical). Presentation only — appended at
     # the END and never alters the sections above.
@@ -652,6 +668,14 @@ def compose_report_payload(job: Any, result: Any) -> ReportPayload:
     social_facts = _dict(getattr(result, "social_facts", None))
     overall_readiness = score_breakdown.get("overall_readiness")
     overall_readiness = overall_readiness if isinstance(overall_readiness, dict) else None
+    # The ONE combined-cover predicate every surface shares (PDF cover, DOCX title, the
+    # lead-gen card intro): a "website_only" overall (failed social collection) carries a
+    # real score but no social section, so it must NOT read as combined anywhere.
+    combined_complete = bool(
+        overall_readiness
+        and overall_readiness.get("status") == "complete"
+        and overall_readiness.get("score") is not None
+    )
     social_audit = None
     if social_facts:
         social_audit = build_social_report_data(
@@ -680,7 +704,7 @@ def compose_report_payload(job: Any, result: Any) -> ReportPayload:
 
     return ReportPayload(
         metadata=metadata,
-        scores=_score_cards(result, score_breakdown),
+        scores=_score_cards(result, score_breakdown, combined_complete=combined_complete),
         executive_summary=_executive_summary(commentary),
         sections=sections,
         roadmap=_roadmap(sections),
@@ -698,6 +722,7 @@ def compose_report_payload(job: Any, result: Any) -> ReportPayload:
         appendix=_appendix(score_breakdown),
         social_audit=social_audit,
         overall_readiness=overall_readiness,
+        combined_complete=combined_complete,
         benchmark=benchmark,
     )
 
@@ -719,6 +744,7 @@ def _compose_section(
     # them in that order (stable sort keeps the within-severity authoring order).
     severity_rank = {"high": 0, "medium": 1, "low": 2, "info": 3}
     findings = sorted(findings, key=lambda finding: severity_rank[finding.severity])
+    recommendations = _commentary_recommendations(section_id, section_content)
 
     return ReportSection(
         id=section_id,
@@ -726,12 +752,16 @@ def _compose_section(
         headline=headline,
         score=score,
         findings=findings,
-        recommendations=_commentary_recommendations(section_id, section_content),
+        recommendations=recommendations,
+        show_recommendations=bool(recommendations)
+        and all(not finding.action_items for finding in findings),
         opportunities=opportunities,
     )
 
 
-def _score_cards(result: Any, score_breakdown: JsonDict) -> list[ScoreCard]:
+def _score_cards(
+    result: Any, score_breakdown: JsonDict, *, combined_complete: bool
+) -> list[ScoreCard]:
     scores = _dict(score_breakdown.get("scores"))
     composite = _dict(score_breakdown.get("composite"))
     weights = _dict(composite.get("weights"))
@@ -754,10 +784,11 @@ def _score_cards(result: Any, score_breakdown: JsonDict) -> list[ScoreCard]:
     )
     # On a combined audit the headline score is the Overall Lead-Gen Readiness, so the
     # website composite is renamed to say exactly what it covers — two similarly-named
-    # "combined" scores with different formulas read as a contradiction. Requires status
-    # "complete": a website_only overall (failed social collection) has no social section,
-    # so the intro must not point the reader at one.
-    is_combined = _dict(score_breakdown.get("overall_readiness")).get("status") == "complete"
+    # "combined" scores with different formulas read as a contradiction. `combined_complete`
+    # is computed ONCE in compose_report_payload and shared with the PDF cover and DOCX
+    # title, so this intro can never point the reader at a social/overall section those
+    # surfaces decided not to render.
+    is_combined = combined_complete
     lead_gen_label = "Website Lead-Gen Score" if is_combined else "Lead Generation Readiness"
     lead_gen_intro = (
         "This is the combined business-readiness score for the website (the social audit "

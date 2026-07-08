@@ -96,7 +96,7 @@ P1-E5 internal operator UI, and the Epic P1-E6 QA, packaging, and handoff work:
   API v3, each behind a uniform `SocialProvider` adapter + registry (`social/providers.py`) the
   collector dispatches over, normalizes the payload into a typed common fact schema
   (`social/schema.py`) of `social.*` facts, and scores it against `rubrics/social.yaml`
-  (`phase2-social-v3`) into a 0–100 Social Score via `scoring.score_social_audit()`. Findings and
+  (`phase2-social-v6`) into a 0–100 Social Score via `scoring.score_social_audit()`. Findings and
   recommendations are derived deterministically from the rubric rule metadata (in the standalone
   social path, optionally polished into client-ready prose by GPT-4o when `OPENAI_API_KEY` is set
   — grounded, with the deterministic version as the no-key fallback; the combined report's social
@@ -346,6 +346,8 @@ python scripts/check_apify_social.py [handle_or_url]        # live Apify social 
 | [docs/13_AI_INSIGHTS_INTEGRATION_PLAN.md](docs/13_AI_INSIGHTS_INTEGRATION_PLAN.md) | AI-visibility insights integration plan (parked) |
 | [docs/14_AI_VISIBILITY_VENDOR_SELECTION.md](docs/14_AI_VISIBILITY_VENDOR_SELECTION.md) | AI-visibility vendor selection (parked) |
 | [docs/15_FUTURE_ARCHITECTURE_OPTIONS.md](docs/15_FUTURE_ARCHITECTURE_OPTIONS.md) | Future design reference: combine social into the website Lead-Gen score; Apify→Bright Data swap; S3 |
+| [docs/16_PRODUCTION_RUNBOOK.md](docs/16_PRODUCTION_RUNBOOK.md) | Production operations runbook (day-2 ops for the live stack) |
 | [docs/17_REPORT_QUALITY_PLAN.md](docs/17_REPORT_QUALITY_PLAN.md) | Report credibility & accuracy plan (expert-review hardening; root causes + research) |
 | [docs/18_REPORT_QUALITY_JIRA_PLAN.md](docs/18_REPORT_QUALITY_JIRA_PLAN.md) | Report-quality Jira epic & tasks (RQ-1..RQ-19, copy-paste ready) |
+| [docs/19_SOCIAL_AUDIT_ENHANCEMENT_JIRA_PLAN.md](docs/19_SOCIAL_AUDIT_ENHANCEMENT_JIRA_PLAN.md) | Social-audit enhancement Jira epic & tasks (SAE-1..SAE-19, expert-review scope) |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Authoritative production deployment reference (live stack, CI/CD) |

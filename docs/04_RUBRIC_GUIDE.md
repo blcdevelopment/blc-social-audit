@@ -16,14 +16,16 @@ _Last reconciled: 2026-07-02._
 
 | File | `version` | Category | Rules | Used by |
 |---|---|---|---|---|
-| `rubrics/seo.yaml` | `phase2-seo-v11` | `seo` | 48 | website + combined |
+| `rubrics/seo.yaml` | `phase2-seo-v12` | `seo` | 48 | website + combined |
 | `rubrics/uxui.yaml` | `phase2-uxui-v3` | `uxui` | 14 | website + combined |
 | `rubrics/composite.yaml` | `phase1-composite-v1` | (weights) | — | website + combined |
-| `rubrics/social.yaml` | `phase2-social-v3` | `social` | 14 | social + combined |
+| `rubrics/social.yaml` | `phase2-social-v6` | `social` | 20 | social + combined |
 | `rubrics/overall.yaml` | `phase2-overall-v1` | (weights) | — | combined only |
 
 The first three are the **website** rubrics; their combined `rubric_version` stored on a
-website result is `phase2-seo-v11+phase2-uxui-v3+phase1-composite-v1`. `social.yaml` scores the
+website result is `phase2-seo-v12+phase2-uxui-v3+phase1-composite-v1`. (seo v12 is a
+presentation-metadata-only bump: the finding-merge pairs moved into per-rule `merged_into`
+keys; scoring is unchanged from v11.) `social.yaml` scores the
 standalone **Social Score** (§5a). `overall.yaml` blends the website Lead-Gen composite with the
 Social Score for a **combined** audit only (§5b). **Bump a version whenever you change a rubric**
 so historical results remain interpretable.
@@ -188,14 +190,18 @@ to the Overall Readiness score (§5b).
 ### 5a. Social Score (`rubrics/social.yaml`)
 
 The standalone **Social audit** is scored by the same rubric engine against
-`rubrics/social.yaml` (`version: phase2-social-v3`, `category: social`, 14 rules,
+`rubrics/social.yaml` (`version: phase2-social-v6`, `category: social`, 20 rules,
 `normalization: rescale_to_max`, `max_score: 100`). v2 added four content-depth rules
 (business/creator account, video share, posting consistency, hashtag usage); v3 is a
 fact-semantics calibration in the extractor with no rule changes — video share aggregates
 over non-YouTube profiles only (a channel is definitionally 100% video), Facebook post
 typing no longer counts a generic reach field as video, hashtag counting requires at least
 one letter ("#1" is not a hashtag), and the Instagram business-account flag is tri-state
-(missing ⇒ unknown ⇒ the rule rescales instead of failing). Facts come from
+(missing ⇒ unknown ⇒ the rule rescales instead of failing); v4 added the SAE expert-review
+profile-quality/consistency/NAP/Google-reviews rules (20 rules total); v5 renormalized
+posts-per-month onto the shared 30.44-day month; v6 declares a display `unit` on the numeric
+rules ("%", " days", "/month" — presentation metadata consumed by the report's quantified
+metric lines; scores unchanged). Facts come from
 `apps/worker/stages/social/extractor.py` and use `social.*` `fact_paths` (e.g.
 `social.status`, `social.summary.avg_posts_per_month`). It is scored by
 `scoring.score_social_audit()` into a **standalone Social Score (0–100)** and is **not** folded

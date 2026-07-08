@@ -124,6 +124,16 @@
   </div>
   {% endif %}
 
+  {% set cyt = payload.connected_youtube %}
+  {% if cyt %}
+  <h2>Connected YouTube analytics</h2>
+  {# Lines are precomposed by the shared builder so PDF/DOCX/UI prose can't drift. #}
+  <p class="muted" style="font-size:10px;">{{ cyt.meta }}</p>
+  <ul>
+    {% for line in cyt.lines %}<li>{{ line }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+
   {% if payload.top_posts %}
   <h2>Top performing posts</h2>
   <table>

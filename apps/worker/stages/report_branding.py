@@ -69,6 +69,10 @@ class BrandConfig(BaseModel):
 
     name: str = "Builder Lead Converter"
     short_name: str = "BLC"
+    # The audit product's name on the report cover/title ("Gooch · Comprehensive Website
+    # Audit"). Config-driven (not a template literal) so a white-label run can replace it
+    # via brand_overrides instead of shipping a client a PDF branded with our tool name.
+    product_name: str = "Gooch"
     logo_path: Path | None = None
     primary_color: str = "#1a3a5c"
     accent_color: str = "#f5a623"
@@ -76,7 +80,9 @@ class BrandConfig(BaseModel):
     font_body: str = "Inter"
     placeholder_fallback: str = "BLC"
 
-    @field_validator("name", "short_name", "font_heading", "font_body", "placeholder_fallback")
+    @field_validator(
+        "name", "short_name", "product_name", "font_heading", "font_body", "placeholder_fallback"
+    )
     @classmethod
     def non_empty_text(cls, value: str) -> str:
         cleaned = " ".join(value.split())
@@ -97,6 +103,7 @@ class BrandConfig(BaseModel):
         return {
             "name": self.name,
             "short_name": self.short_name,
+            "product_name": self.product_name,
             "primary_color": self.primary_color,
             "accent_color": self.accent_color,
             "font_heading": self.font_heading,
@@ -147,7 +154,7 @@ def apply_brand_overrides(context: JsonDict, overrides: JsonDict | None) -> Json
         return context
 
     merged = dict(context)
-    for key in ("name", "short_name"):
+    for key in ("name", "short_name", "product_name"):
         value = overrides.get(key)
         if isinstance(value, str) and value.strip():
             merged[key] = " ".join(value.split())

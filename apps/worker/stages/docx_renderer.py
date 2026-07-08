@@ -67,12 +67,10 @@ def render_report_docx(payload: ReportPayload, *, output_path: Path) -> DocxRend
 def _document_xml(payload: ReportPayload) -> str:
     parts: list[str] = []
     metadata = payload.metadata
-    overall = payload.overall_readiness if isinstance(payload.overall_readiness, dict) else None
-    # "website_only" (failed social collection) still carries a score; the title must not
-    # promise a social section the document doesn't have.
-    is_combined = bool(
-        overall and overall.get("status") == "complete" and overall.get("score") is not None
-    )
+    # The one shared combined predicate (computed in compose_report_payload): "website_only"
+    # (failed social collection) still carries a score; the title must not promise a social
+    # section the document doesn't have.
+    is_combined = bool(payload.combined_complete)
     parts.append(
         _paragraph(
             "Website & Social Media Audit Report" if is_combined else "Website Audit Report",
@@ -105,7 +103,7 @@ def _document_xml(payload: ReportPayload) -> str:
         )
         for label, key in (
             ("Pages discovered", "pages_discovered"),
-            ("Pages analyzed", "pages_analyzed"),
+            ("Pages analyzed in depth", "pages_analyzed"),
             ("Blog / article posts", "blog_posts"),
             ("Sitemap entries", "sitemap_entries"),
             ("Outbound links", "outbound_links"),
@@ -160,6 +158,18 @@ def _document_xml(payload: ReportPayload) -> str:
                 parts.append(_paragraph(finding.explanation))
                 for item in finding.action_items:
                     parts.append(_paragraph(f"Do this: {item}"))
+        if section.show_recommendations:
+            # Legacy stored audits (pre finding-card commentary) have no action_items on
+            # their findings — their fixes live only in the per-section recommendations.
+            # compose_report_payload computes the one shared show_recommendations flag so
+            # this DOCX, the PDF, and the web UI can never disagree about the fallback.
+            parts.append(_heading("Recommendations", 2))
+            for recommendation in section.recommendations:
+                tier_label = recommendation.tier.replace("_", " ").title()
+                parts.append(_paragraph(f"{tier_label}: {recommendation.title}", "Strong"))
+                parts.append(_paragraph(recommendation.rationale))
+                for item in recommendation.action_items:
+                    parts.append(_paragraph(item))
 
     parts.extend(_external_seo_xml(payload))
 
@@ -459,7 +469,12 @@ def _combined_xml(payload: ReportPayload) -> list[str]:
                 )
             )
         else:
-            platforms = [p for p in (social.get("platforms") or []) if isinstance(p, dict)]
+            # Prefer the curated per_platform scorecard projection (the same source the PDF
+            # table and the web UI consume). The raw-platforms fallback is purely defensive:
+            # payloads are composed live by build_social_report_data (never stored), so
+            # per_platform is always present today.
+            platform_rows = social.get("per_platform") or social.get("platforms")
+            platforms = [p for p in (platform_rows or []) if isinstance(p, dict)]
             if platforms:
                 parts.append(_heading("Profiles audited", 2))
                 for p in platforms:
@@ -493,6 +508,39 @@ def _combined_xml(payload: ReportPayload) -> list[str]:
                 parts.append(_heading("Content insights", 2))
                 for line in insight_lines:
                     parts.append(_bullet(line))
+            google_business = social.get("google_business")
+            if isinstance(google_business, dict) and any(
+                value is not None for value in google_business.values()
+            ):
+                # The listing the Google-reviews and phone (NAP) checks were scored against —
+                # shown so the reader can verify the right business was matched.
+                parts.append(_heading("Google Business Profile", 2))
+                name = google_business.get("name")
+                if name:
+                    category = google_business.get("category")
+                    parts.append(_bullet(f"{name} ({category})" if category else str(name)))
+                rating_line = google_business.get("rating_line")
+                if rating_line:
+                    # Precomposed by build_social_report_data — the one source the PDF uses too.
+                    parts.append(_bullet(str(rating_line)))
+                for key, label in (
+                    ("address", "Address"),
+                    ("phone", "Phone"),
+                    ("website", "Website"),
+                ):
+                    value = google_business.get(key)
+                    if value:
+                        parts.append(_bullet(f"{label}: {value}"))
+            connected_youtube = social.get("connected_youtube")
+            if isinstance(connected_youtube, dict) and connected_youtube.get("lines"):
+                # Lines are precomposed by build_social_report_data — the one source the PDF
+                # and the web UI use too, so the three surfaces can't drift.
+                parts.append(_heading("Connected YouTube analytics", 2))
+                meta = connected_youtube.get("meta")
+                if meta:
+                    parts.append(_paragraph(str(meta), "Meta"))
+                for line in connected_youtube["lines"]:
+                    parts.append(_bullet(str(line)))
             top_posts = [tp for tp in (social.get("top_posts") or []) if isinstance(tp, dict)]
             if top_posts:
                 parts.append(_heading("Top performing posts", 2))
@@ -522,17 +570,20 @@ def _combined_xml(payload: ReportPayload) -> list[str]:
                 "media audit, weighted toward the website because that is where leads are captured."
             )
         )
+        # Half-up like the UI's Math.round (project convention int(x+0.5)) — Python's round()
+        # is banker's rounding, and a 0.705/0.295 rubric would print 70% here vs 71% in the UI.
+        website_weight_pct = int(float(weights.get("website", 0)) * 100 + 0.5)
+        social_weight_pct = int(float(weights.get("social", 0)) * 100 + 0.5)
         parts.append(
             _paragraph(
                 f"Website Lead-Gen (SEO + UX/UI): {web if web is not None else '-'} "
-                f"(weight {round(weights.get('website', 0) * 100)}%).",
+                f"(weight {website_weight_pct}%).",
                 "Meta",
             )
         )
         parts.append(
             _paragraph(
-                f"Social Media: {soc if soc is not None else '-'} "
-                f"(weight {round(weights.get('social', 0) * 100)}%).",
+                f"Social Media: {soc if soc is not None else '-'} (weight {social_weight_pct}%).",
                 "Meta",
             )
         )

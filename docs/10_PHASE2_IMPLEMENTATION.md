@@ -112,7 +112,7 @@ Jira epics/tasks + tracking board → [`docs/09_PHASE2_JIRA_PLAN.md`](09_PHASE2_
 > - **Stage package** `apps/worker/stages/social/`: `extractor.py` (pure IG+FB → `social.*`
 >   facts), `collector.py` (orchestrate + graceful skip), `apify_provider.py` (network),
 >   `report.py` (`compose_social_report_payload`), `__init__.py`.
-> - **Scoring.** `rubrics/social.yaml` (**version `phase2-social-v1`** — now `phase2-social-v3`, `category: social`) is
+> - **Scoring.** `rubrics/social.yaml` (**version `phase2-social-v1`** — now `phase2-social-v6`, `category: social`) is
 >   scored by `scoring.score_social_audit()` (`apps/worker/stages/scoring.py:143`) → a
 >   **standalone** Social Score (0–100). `Rubric.category` Literal now includes `"social"`
 >   (`scoring.py:47`); the website `CompositeRubric.weights` stays exactly `{seo, uxui}`
@@ -524,7 +524,7 @@ social report section.
 > ## ✅ DONE (2026-06-23) — all of §6 (P2-E4) is built.
 > The plan text in §6.1–§6.7 below is retained for rationale/history; the per-subsection DONE
 > notes give the as-built code paths. Summary: provider package `apps/worker/stages/social/`
-> (Apify IG+FB), `rubrics/social.yaml` (`phase2-social-v1`, now `phase2-social-v3`) scored by `score_social_audit`,
+> (Apify IG+FB), `rubrics/social.yaml` (`phase2-social-v1`, now `phase2-social-v6`) scored by `score_social_audit`,
 > deterministic rule-derived findings (no LLM, no social commentary prompt), a separate
 > `templates/social_report.html` + `render_social_pdf`, a `_run_social_pipeline` branch in
 > `run_collection_audit`, API `audit_type`/`social_handles`/`social_report`, and a `/social` UI tab.
@@ -900,7 +900,7 @@ report**, validated on real builder social accounts **(Instagram + Facebook via 
 
 > **DONE (2026-06-23) — social acceptance met.** The standalone Social audit is **built and
 > runnable from the browser** end-to-end: deterministic standalone Social Score
-> (`scoring.score_social_audit`, `rubrics/social.yaml` `phase2-social-v1`, now `phase2-social-v3`) with its **own** PDF
+> (`scoring.score_social_audit`, `rubrics/social.yaml` `phase2-social-v1`, now `phase2-social-v6`) with its **own** PDF
 > (`render_social_pdf` + `templates/social_report.html`), Apify-backed IG + FB collection, a
 > `/social` UI tab, and deterministic rule-derived findings (no LLM). ~119 unit tests pass (incl.
 > `test_extractor_social.py` / `test_social_scoring.py` / `test_worker_social.py`), ruff clean, and

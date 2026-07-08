@@ -62,20 +62,31 @@ def test_business_query_from_domain() -> None:
         == "builderleadconverter"
     )
     assert _business_query(SimpleNamespace(url="https://acme-builders.example")) == "acme-builders"
+    # The registrable label, not the first hostname label: a subdomain site must not query
+    # Places for "shop", and a generic second-level ccTLD label must not query for "co".
+    assert _business_query(SimpleNamespace(url="https://shop.acme.com/")) == "acme"
+    assert _business_query(SimpleNamespace(url="https://smith.co.uk/")) == "smith"
+    # Multi-tenant platform hosts carry the brand in the SUBDOMAIN, not the registrable label.
+    assert (
+        _business_query(SimpleNamespace(url="https://smithbuilders.wixsite.com/home"))
+        == "smithbuilders"
+    )
 
 
 def test_augment_google_business_injects_signals(monkeypatch) -> None:
     monkeypatch.setattr(
         tasks_mod,
         "collect_google_business_facts",
-        lambda settings, *, query: {
+        lambda settings, *, query, expected_url=None: {
             "status": "complete",
             "source": "google_business",
             "business": {"phone": "555-100-2000", "rating": 4.7, "review_count": 128},
         },
     )
     facts = {"summary": {}, "platforms": []}
-    _augment_with_google_business(facts, Settings(), query="acme")
+    _augment_with_google_business(
+        facts, Settings(), query="acme", expected_url="https://www.acme.com/"
+    )
     assert facts["google_business"]["rating"] == 4.7
     assert facts["summary"]["google_review_count"] == 128
     assert facts["summary"]["google_rating"] == 4.7
@@ -85,6 +96,8 @@ def test_augment_google_business_skips_without_key() -> None:
     # Real collector, no key -> skipped -> no mutation (report stays byte-identical).
     # _env_file=None isolates from the local .env (which now carries a real Places key).
     facts = {"summary": {}, "platforms": []}
-    _augment_with_google_business(facts, Settings(_env_file=None), query="acme")
+    _augment_with_google_business(
+        facts, Settings(_env_file=None), query="acme", expected_url="https://www.acme.com/"
+    )
     assert "google_business" not in facts
     assert facts["summary"].get("google_review_count") is None

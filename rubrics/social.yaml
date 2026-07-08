@@ -24,7 +24,16 @@
 # skip_if_missing where the signal is inapplicable (a single profile, a YouTube-only audit, a
 # standalone social audit with no website phone, or no Google listing) so they rescale, never
 # false-fail — so a keyless/standalone audit scores exactly as it did under v3.
-version: "phase2-social-v4"
+#
+# v5 (2026): fact-semantics recalibration only — posts_per_month/avg_posts_per_month now
+# normalize on the shared 30.44-day average month (was 30), matching the GSC monthly figures
+# in the same report; cadence facts shift ~+1.5%. No rule or threshold changes.
+#
+# v6 (2026): presentation metadata only — numeric rules now declare their display `unit`
+# ("%", " days", "/month", ...), consumed by the report's quantified metric lines instead of a
+# fact-path heuristic (the heuristic remains the fallback for stored pre-v6 breakdowns). No
+# rule, threshold, or weight change; scores are identical to v5.
+version: "phase2-social-v6"
 category: social
 max_score: 100
 normalization: rescale_to_max
@@ -47,6 +56,7 @@ rules:
     description: Profiles have a complete bio, website link, and name.
     weight: 10
     fact_path: social.summary.profiles_complete_pct
+    unit: "%"
     evaluator: threshold
     params:
       min: 100
@@ -60,6 +70,7 @@ rules:
     description: Accounts post consistently (posts per month).
     weight: 9
     fact_path: social.summary.avg_posts_per_month
+    unit: "/month"
     evaluator: threshold
     params:
       min: 8
@@ -74,6 +85,7 @@ rules:
     description: Accounts posted recently (days since the last post; lower is better).
     weight: 8
     fact_path: social.summary.days_since_last_post
+    unit: " days"
     evaluator: threshold
     params:
       max: 14
@@ -88,6 +100,7 @@ rules:
     description: Posts earn meaningful engagement relative to follower count (%).
     weight: 9
     fact_path: social.summary.avg_engagement_rate_pct
+    unit: "%"
     evaluator: threshold
     params:
       min: 2
@@ -176,6 +189,7 @@ rules:
     description: A healthy share of posts are video/Reels (video drives the most reach).
     weight: 6
     fact_path: social.summary.video_share_pct
+    unit: "%"
     evaluator: threshold
     params:
       min: 25
@@ -190,6 +204,7 @@ rules:
     description: Posting is regular, without long gaps (longest gap between posts, in days).
     weight: 6
     fact_path: social.summary.max_posting_gap_days
+    unit: " days"
     evaluator: threshold
     params:
       max: 45
@@ -204,6 +219,7 @@ rules:
     description: Posts use hashtags to extend reach to non-followers (avg hashtags per post).
     weight: 4
     fact_path: social.summary.avg_hashtags_per_post
+    unit: "/post"
     evaluator: threshold
     params:
       min: 3
@@ -243,6 +259,7 @@ rules:
     description: Profiles declare a business category so they surface in the right searches.
     weight: 5
     fact_path: social.summary.category_coverage_pct
+    unit: "%"
     evaluator: threshold
     params:
       min: 100
@@ -282,6 +299,7 @@ rules:
     description: The business has a healthy volume of Google reviews (a top local-ranking/trust signal).
     weight: 5
     fact_path: social.summary.google_review_count
+    unit: " reviews"
     evaluator: threshold
     params:
       min: 10

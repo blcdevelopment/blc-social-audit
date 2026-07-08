@@ -10,7 +10,9 @@ from __future__ import annotations
 import re
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlsplit
 
+from apps.worker.stages.social.categories import category_relevance
 from apps.worker.stages.social.schema import SocialProfileFacts, SocialSummary
 
 JsonDict = dict[str, Any]
@@ -65,14 +67,34 @@ _SUBSTANTIVE_BIO_MIN_CHARS = 20
 
 
 def _handle_key(value: Any) -> str:
-    """Normalize a handle (or full profile URL) to a comparable brand key: last path segment,
-    lowercased, non-alphanumerics stripped. So ``@Acme_Studio`` / ``acmestudio`` /
-    ``https://facebook.com/AcmeStudio/`` all collapse to ``acmestudio`` for the consistency check.
-    Returns "" when nothing usable remains."""
+    """Normalize a handle (or full profile URL) to a comparable brand key: the vanity handle
+    segment, lowercased, non-alphanumerics stripped. So ``@Acme_Studio`` / ``acmestudio`` /
+    ``https://facebook.com/AcmeStudio/`` / ``https://youtube.com/@AcmeStudio`` all collapse to
+    ``acmestudio`` for the consistency check. Opaque non-vanity forms (``profile.php?id=<n>``,
+    ``/channel/UC…`` ids) return "" — they aren't brand-chosen handles, so they drop out of the
+    comparison instead of false-failing it. Returns "" when nothing usable remains."""
     text = str(value or "").strip()
     if "://" in text:
-        segments = [seg for seg in text.split("/") if seg and "." not in seg and "@" not in seg]
-        text = segments[-1] if segments else text
+        segments = [seg for seg in urlsplit(text).path.split("/") if seg]
+        if not segments:
+            return ""
+        lowered = [seg.lower() for seg in segments]
+        if lowered[-1] == "profile.php" or "channel" in lowered:
+            return ""
+        # Name-after-marker forms: facebook.com/pages/<slug>/<id>, /people/<Name>/<id>,
+        # legacy /pg/<name>, modern /p/<Name-ID>, youtube.com/c/<name>, /user/<name>. The
+        # directory form facebook.com/pages/category/<Category>/<Name-ID>/ nests the name
+        # last, and FB appends a long numeric id ("Smith-Builders-104502341234567") — strip
+        # it so the key matches the brand's plain handle on other platforms.
+        for marker in ("pages", "people", "pg", "p", "c", "user"):
+            if marker in lowered and lowered.index(marker) + 1 < len(segments):
+                index = lowered.index(marker) + 1
+                if lowered[index] == "category" and index + 1 < len(segments):
+                    index = len(segments) - 1
+                text = re.sub(r"-\d{5,}$", "", segments[index])
+                break
+        else:
+            text = next((seg for seg in segments if seg.startswith("@")), segments[0])
     text = text.lstrip("@")
     return "".join(ch for ch in text.lower() if ch.isalnum())
 
@@ -81,6 +103,44 @@ def _round_half_up(value: float, digits: int = 1) -> float:
     """Half-up rounding for non-negative values (project convention: int(x + 0.5), not round())."""
     factor = 10**digits
     return int(value * factor + 0.5) / factor
+
+
+def profile_link_from_handle(handle: Any) -> str | None:
+    """The handle AS a profile URL when it is one, else None — THE one URL-shaped-handle
+    detector (extractor fallbacks, the YouTube channel URL, and the API's social job URL all
+    route through it, so no surface can re-grow the doubled-domain bug independently).
+
+    A URL-shaped handle is scheme'd (``https://…``), protocol-relative (``//host/…``), or
+    scheme-less with a dotted host before the first slash (``www.instagram.com/acme``). A bare
+    dotted HANDLE (``acme.studio`` — dots are legal in IG usernames) has no slash and is NOT a
+    link."""
+    cleaned = str(handle or "").strip()
+    lowered = cleaned.lower()
+    if lowered.startswith(("http://", "https://")):
+        return cleaned
+    bare = cleaned.lstrip("/")
+    head = bare.split("/", 1)[0]
+    if "/" in bare and "." in head:
+        return f"https://{bare}"
+    return None
+
+
+def _fallback_profile_url(handle: str, platform_base: str) -> str:
+    """Canonical profile URL derived from the audited handle, for providers that returned no URL.
+
+    Auto-discovery (and an operator pasting a link) supplies the handle AS a full profile URL —
+    pass that through verbatim instead of nesting it under the platform host, which would mint
+    a doubled-domain URL like ``https://www.instagram.com/https://www.instagram.com/acme//``."""
+    link = profile_link_from_handle(handle)
+    if link is not None:
+        return link
+    return f"{platform_base}/{handle.strip().lstrip('@').strip('/')}/"
+
+
+# The one canonical average-month length (365.25/12). google_search_console imports this for
+# its monthly normalizer, so "per month" means the same thing for social cadence and search
+# figures inside one report.
+AVG_DAYS_PER_MONTH = 30.44
 
 
 def _parse_ts(value: Any) -> datetime | None:
@@ -99,7 +159,7 @@ def _posts_per_month(times: list[datetime]) -> float | None:
     span_days = (times[-1] - times[0]).total_seconds() / 86400
     if span_days < 1:
         return float(len(times))
-    return _round_half_up(len(times) / span_days * 30)
+    return _round_half_up(len(times) / span_days * AVG_DAYS_PER_MONTH)
 
 
 def _avg_engagement(posts: list[JsonDict], followers: int) -> float | None:
@@ -117,9 +177,7 @@ def _avg_engagement(posts: list[JsonDict], followers: int) -> float | None:
         likes = max(_int(likes_raw), 0)
         comments = max(_int(comments_raw), 0)
         rates.append((likes + comments) / followers * 100)
-    if not rates:
-        return None
-    return _round_half_up(sum(rates) / len(rates), 2)
+    return _mean(rates, 2)
 
 
 def _has_video(raw: JsonDict, posts: list[JsonDict]) -> bool:
@@ -204,7 +262,7 @@ def _like_to_comment_ratio(posts: list[JsonDict]) -> float | None:
 def _avg_views_per_post(posts: list[JsonDict]) -> float | None:
     """Average views per video post (views-tracked posts only); a real 0-view video counts."""
     views = [_int(p.get("videoViewCount")) for p in posts if p.get("videoViewCount") is not None]
-    return _round_half_up(sum(views) / len(views)) if views else None
+    return _mean(views)
 
 
 def _best_post_engagement(posts: list[JsonDict]) -> int | None:
@@ -226,7 +284,7 @@ def _avg_hashtags_per_post(posts: list[JsonDict]) -> float | None:
             counts.append(len([t for t in tags if t]))
         elif isinstance(post.get("caption"), str):
             counts.append(len(_HASHTAG_RE.findall(post["caption"])))
-    return _round_half_up(sum(counts) / len(counts)) if counts else None
+    return _mean(counts)
 
 
 def _caption_cta_pct(posts: list[JsonDict]) -> float | None:
@@ -306,7 +364,8 @@ def normalize_instagram_profile(raw: JsonDict, handle: str, *, now: datetime) ->
         {
             "platform": "instagram",
             "handle": handle,
-            "url": _clean(raw.get("url")) or f"https://www.instagram.com/{handle.lstrip('@')}/",
+            "url": _clean(raw.get("url"))
+            or _fallback_profile_url(handle, "https://www.instagram.com"),
             "status": "complete",
             "followers": followers,
             "posts_count": _int(raw.get("postsCount")),
@@ -380,12 +439,16 @@ def normalize_facebook_profile(raw: JsonDict, handle: str, *, now: datetime) -> 
             "handle": handle,
             "url": _clean(raw.get("facebookUrl"))
             or _clean(raw.get("pageUrl"))
-            or f"https://www.facebook.com/{handle.lstrip('@')}/",
+            or _fallback_profile_url(handle, "https://www.facebook.com"),
             "status": "complete",
             "followers": followers,
             "posts_count": len(raw_posts),
             "verified": bool(raw.get("verified")),
             "private": False,
+            # A Facebook *Page* — the unit the Pages actor scrapes — is a business presence by
+            # definition (personal profiles aren't Pages), so True is a fact of the fetched
+            # object, not a guess. IG reads the account's own flag; YouTube has no such concept
+            # (None). Deliberate: don't "fix" this to a raw-payload lookup that doesn't exist.
             "is_business": True,
             "category": _clean(raw.get("category")) or None,
             "bio_present": bool(intro),
@@ -444,14 +507,20 @@ def normalize_youtube_channel(raw: JsonDict, handle: str, *, now: datetime) -> J
     ]
     times = sorted(t for t in (_parse_ts(p.get("timestamp")) for p in posts) if t)
 
-    bare_handle = handle.strip().lstrip("@").strip("/")
+    handle_link = profile_link_from_handle(handle)
     if custom_url:
         channel_url = f"https://www.youtube.com/@{custom_url}"
-    elif bare_handle.startswith("UC") and len(bare_handle) == 24:
-        # Channel IDs use the /channel/UC… form, not /@…
-        channel_url = f"https://www.youtube.com/channel/{bare_handle}"
+    elif handle_link is not None:
+        # Auto-discovery (or a pasted link) supplies the handle AS a full channel URL — keep it
+        # verbatim rather than nesting it under /@… (which would mint a doubled-domain URL).
+        channel_url = handle_link
     else:
-        channel_url = f"https://www.youtube.com/@{bare_handle}"
+        bare_handle = handle.strip().lstrip("@").strip("/")
+        if bare_handle.startswith("UC") and len(bare_handle) == 24:
+            # Channel IDs use the /channel/UC… form, not /@…
+            channel_url = f"https://www.youtube.com/channel/{bare_handle}"
+        else:
+            channel_url = f"https://www.youtube.com/@{bare_handle}"
 
     return _profile_facts(
         {
@@ -537,9 +606,9 @@ def summarize_profiles(profiles: list[JsonDict]) -> JsonDict:
             # None (not 0) when no profile has post data, so the cadence/recency/engagement
             # rules skip_if_missing and rescale out instead of unfairly failing (e.g. the
             # Facebook pages actor returns no posts).
-            "avg_posts_per_month": _round_half_up(sum(ppm) / len(ppm)) if ppm else None,
+            "avg_posts_per_month": _mean(ppm),
             "days_since_last_post": min(dsp) if dsp else None,
-            "avg_engagement_rate_pct": _round_half_up(sum(eng) / len(eng), 2) if eng else None,
+            "avg_engagement_rate_pct": _mean(eng, 2),
             "profiles_with_link_in_bio": sum(1 for p in profiles if p.get("link_in_bio")),
             "profiles_with_cta": sum(1 for p in profiles if p.get("has_cta")),
             "has_video_content": any(p.get("has_video") for p in profiles),
@@ -613,3 +682,79 @@ def extract_social_facts(fetched: list[JsonDict], *, now: datetime | None = None
 
     summary = summarize_profiles(complete) if complete else _empty_summary()
     return {"status": status, "source": "social", "summary": summary, "platforms": platforms}
+
+
+# --- Combined-audit business-identity context (SAE-9/10/12/13) ------------------------------
+# These run AFTER collection, from the worker: they need website-side context (the audited
+# site's phones, the operator's niche, the verified Google listing) that the collector never
+# sees. They live here — not in tasks.py — so fact production stays in the pure extractor and
+# every write is re-validated through the SocialSummary schema (``extra="forbid"``): a drifted
+# or typo'd fact key is a hard error, never a silently-skipped rule.
+
+
+def _phone_tail(value: Any) -> str:
+    """Last 10 digits of a phone string (US-style comparison key); "" if fewer than 10 digits."""
+    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
+    return digits[-10:] if len(digits) >= 10 else ""
+
+
+def _revalidate_summary(social_facts: JsonDict) -> None:
+    summary = social_facts.get("summary")
+    if isinstance(summary, dict):
+        social_facts["summary"] = _summary_facts(summary)
+
+
+def inject_google_business(social_facts: JsonDict, google_business: JsonDict | None) -> None:
+    """Attach the VERIFIED Google listing (see places_provider's website gate) plus its scored
+    summary signals. ``None``/non-dict listing => no mutation (rules skip-rescale)."""
+    summary = social_facts.get("summary")
+    if not isinstance(summary, dict) or not isinstance(google_business, dict):
+        return
+    social_facts["google_business"] = google_business
+    summary["google_rating"] = google_business.get("rating")
+    summary["google_review_count"] = google_business.get("review_count")
+    _revalidate_summary(social_facts)
+
+
+def inject_category_relevance(social_facts: JsonDict, *, niche: str | None) -> None:
+    """SAE-9-full: ``summary.category_matches_niche`` from the audit's niche and the declared
+    categories (feed profiles + the Google listing). ``None`` (rule skips) when the niche can't
+    be classified or no category is set, so a vague niche never yields a false 'wrong category'
+    finding."""
+    summary = social_facts.get("summary")
+    if not isinstance(summary, dict):
+        return
+    categories = [
+        p.get("category")
+        for p in social_facts.get("platforms") or []
+        if isinstance(p, dict) and p.get("platform") != "youtube"
+    ]
+    gbp = social_facts.get("google_business")
+    if isinstance(gbp, dict) and gbp.get("category"):
+        categories.append(gbp.get("category"))
+    summary["category_matches_niche"] = category_relevance(niche, categories)
+    _revalidate_summary(social_facts)
+
+
+def inject_nap_consistency(social_facts: JsonDict, *, website_phone_keys: set[str]) -> None:
+    """SAE-10/13 tri-way NAP: ``summary.nap_phone_consistent`` compares the website's phone
+    key(s) with the business's (social profiles + Google listing). Left ``None`` (rule
+    ``skip_if_missing``-rescales) whenever either side has no comparable phone — why a
+    standalone social audit, or a profile that hides its number, never false-fails. Forgiving
+    by design: consistent when the website shares ANY number with a business source (a site
+    that also lists a fax/second line never false-fails)."""
+    summary = social_facts.get("summary")
+    if not isinstance(summary, dict):
+        return
+    business = {
+        key
+        for p in social_facts.get("platforms") or []
+        if isinstance(p, dict) and (key := _phone_tail(p.get("phone")))
+    }
+    gbp = social_facts.get("google_business")
+    if isinstance(gbp, dict) and (key := _phone_tail(gbp.get("phone"))):
+        business.add(key)
+    if not website_phone_keys or not business:
+        return
+    summary["nap_phone_consistent"] = bool(website_phone_keys & business)
+    _revalidate_summary(social_facts)

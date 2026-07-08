@@ -12,10 +12,17 @@ and never logged. ``normalize_google_business`` is pure and unit-testable from a
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
 from apps.shared.config import Settings
+from apps.worker.stages.social.extractor import _clean
+from apps.worker.stages.technical_crawl_common import (
+    GENERIC_SECOND_LEVELS,
+    MULTI_TENANT_PLATFORMS,
+    registrable_brand_label,
+)
 
 JsonDict = dict[str, Any]
 
@@ -47,7 +54,55 @@ def _text(value: Any) -> str:
     """A Places display field is often ``{"text": "...", "languageCode": "en"}`` — flatten it."""
     if isinstance(value, dict):
         value = value.get("text")
-    return " ".join(str(value).split()) if isinstance(value, str) else ""
+    return _clean(value)
+
+
+# Shared hosts where the TENANT is a path, not a subdomain: same host is NOT the same
+# business there, so the listing's website must point into the audited site's path.
+_PATH_TENANT_HOSTS = frozenset({"sites.google.com"})
+
+
+def _clean_host(url_parts: Any) -> str:
+    return (url_parts.hostname or "").lower().rstrip(".").removeprefix("www.")
+
+
+def _website_matches(business_website: Any, expected_url: str) -> bool:
+    """True when the listing's website is the audited business's site.
+
+    Accepted: the same host (minus ``www.``), or a subdomain-vs-apex relationship
+    (``shop.acme.com`` <-> ``acme.com``) — EXCEPT when the shared apex is a known
+    multi-tenant platform (``foo.wixsite.com`` vs ``wixsite.com``), where a suffix rule
+    would attribute a stranger's, or the platform's own, listing to the client. On
+    path-tenant hosts (``sites.google.com/view/<tenant>``) the listing must additionally
+    point into the audited site's path. A listing with no website never matches:
+    better no Google data (the rules skip-rescale) than a stranger's reviews/phone in a
+    client-facing report."""
+    listing = urlsplit(str(business_website or ""))
+    audited = urlsplit(expected_url)
+    listing_host = _clean_host(listing)
+    audited_host = _clean_host(audited)
+    if not listing_host or not audited_host:
+        return False
+    if listing_host == audited_host or listing_host.endswith("." + audited_host):
+        shared_apex = audited_host
+    elif audited_host.endswith("." + listing_host):
+        shared_apex = listing_host
+    else:
+        return False
+    if listing_host != audited_host:
+        # The shared apex must carry a real BRAND label. A single-label apex ("com"), a bare
+        # public-suffix family ("co.uk"), or a multi-tenant platform apex ("wixsite.com") can
+        # never establish that the listing and the audited site are the same business — while
+        # a genuine ccTLD apex like acme.co.uk still passes (its brand label is "acme").
+        apex_brand = registrable_brand_label(shared_apex)
+        if not apex_brand or apex_brand in (MULTI_TENANT_PLATFORMS | GENERIC_SECOND_LEVELS):
+            return False
+    if audited_host in _PATH_TENANT_HOSTS:
+        audited_path = audited.path.strip("/")
+        listing_path = listing.path.strip("/")
+        if audited_path:
+            return listing_path == audited_path or listing_path.startswith(audited_path + "/")
+    return True
 
 
 def fetch_place_id(query: str, settings: Settings) -> str | None:
@@ -113,11 +168,18 @@ def normalize_google_business(raw: JsonDict) -> JsonDict:
     }
 
 
-def collect_google_business_facts(settings: Settings, *, query: str) -> JsonDict:
+def collect_google_business_facts(
+    settings: Settings, *, query: str, expected_url: str | None = None
+) -> JsonDict:
     """Resolve + fetch + normalize a business's public Google listing.
 
     Graceful at every not-ready state (mirrors the social/benchmark collectors): no key or no
     query => ``skipped``; a failed lookup => ``failed``; success => ``complete`` with ``business``.
+    When ``expected_url`` is given, the matched listing's website must belong to that site —
+    Text Search is a fuzzy name lookup, and without this gate the first hit for a generic domain
+    label can be a different business entirely, whose reviews/phone would then be scored and
+    NAP-checked as the client's. A mismatch (or a listing with no website) => ``failed`` with
+    reason ``website_mismatch``, which the caller treats like any other miss (skip + rescale).
     Never raises; a missing/failed Google listing leaves the combined report unchanged.
     """
     if not _api_key(settings):
@@ -134,8 +196,11 @@ def collect_google_business_facts(settings: Settings, *, query: str) -> JsonDict
     raw = fetch_place_details(place_id, settings)
     if raw is None:
         return {"status": "failed", "reason": "details_unavailable", "source": "google_business"}
+    business = normalize_google_business(raw)
+    if expected_url is not None and not _website_matches(business.get("website"), expected_url):
+        return {"status": "failed", "reason": "website_mismatch", "source": "google_business"}
     return {
         "status": "complete",
         "source": "google_business",
-        "business": normalize_google_business(raw),
+        "business": business,
     }

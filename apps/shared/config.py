@@ -76,9 +76,10 @@ class Settings(BaseSettings):
     openai_temperature: float = Field(default=0.2, ge=0, le=1)
     openai_timeout_seconds: int = Field(default=60, ge=1)
 
-    # Caps on the deterministic content plan (see content_plan.build_content_plan).
+    # Cap on the deterministic content plan's findings. Recommendations pair 1:1 with the
+    # rendered findings (a finding without its fix reads as unanswered), so this is the only
+    # truncation knob — see content_plan._build_section.
     commentary_max_findings_per_section: int = Field(default=5, ge=1, le=20)
-    commentary_max_recommendations_per_section: int = Field(default=5, ge=1, le=20)
 
     google_psi_api_key: SecretStr | None = None
     psi_scope: Literal["homepage", "all_crawled_pages"] = "all_crawled_pages"
@@ -131,6 +132,12 @@ class Settings(BaseSettings):
     google_oauth_success_redirect_url: str = "http://localhost:3000/audits"
     gsc_default_date_range_days: int = Field(default=90, ge=7, le=540)
     gsc_row_limit: int = Field(default=25000, ge=1, le=25000)
+    # GSC "ranking opportunity" forecast knobs (google_search_console._opportunity_estimate).
+    # Both applied values are recorded in the stored estimate (aio_prevalence_pct /
+    # cap_multiple), so env tuning stays self-describing; the CTR curve and the 50/70/100%
+    # capture ladder remain versioned constants (the model's identity, cited in prose).
+    gsc_opportunity_aio_prevalence: float = Field(default=0.40, ge=0, le=1)
+    gsc_opportunity_cap_multiple: float = Field(default=3.0, ge=1)
     url_inspection_max_urls: int = Field(default=20, ge=0, le=200)
 
     # Social data provider (Apify) — powers the standalone social audit (free-tier credits)

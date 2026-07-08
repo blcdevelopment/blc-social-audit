@@ -63,3 +63,89 @@ def test_oauth_scopes_gate_youtube_analytics() -> None:
     enabled = oauth_scopes(Settings(_env_file=None, youtube_analytics_connect_enabled=True))
     assert enabled == GSC_SCOPES + YOUTUBE_ANALYTICS_SCOPES
     assert "https://www.googleapis.com/auth/yt-analytics.readonly" in enabled
+
+
+def test_connected_youtube_injector_gates_then_injects(monkeypatch) -> None:
+    # SMWA-140 pipeline wiring: every gate must hold — flag, a YouTube handle on the audit,
+    # a Google connection whose GRANT includes the YT scopes — then the normalized facts land
+    # under social_facts["youtube_analytics"]. Any miss leaves the facts untouched.
+    from types import SimpleNamespace
+
+    from apps.worker import tasks
+    from apps.worker.stages.google_search_console import YOUTUBE_ANALYTICS_SCOPES
+
+    raw = json.loads((FIXTURES / "youtube_analytics_reports.json").read_text())
+    handles = {"youtube": "@acmestudio"}
+
+    # Gate 1: flag off (the default) -> untouched.
+    facts: dict = {"status": "complete"}
+    tasks._augment_with_connected_youtube(
+        facts, SimpleNamespace(youtube_analytics_connect_enabled=False), db=None, handles=handles
+    )
+    assert "youtube_analytics" not in facts
+
+    # Gate 2: flag on but no YouTube handle on the audit -> untouched.
+    flag_on = SimpleNamespace(youtube_analytics_connect_enabled=True)
+    tasks._augment_with_connected_youtube(facts, flag_on, db=None, handles={"instagram": "acme"})
+    assert "youtube_analytics" not in facts
+
+    # Gate 3: connection granted only the GSC scopes (pre-flag consent) -> untouched.
+    gsc_only = SimpleNamespace(
+        scopes={"values": ["https://www.googleapis.com/auth/webmasters.readonly"]}
+    )
+    monkeypatch.setattr(tasks, "latest_google_connection", lambda db: gsc_only)
+    tasks._augment_with_connected_youtube(facts, flag_on, db=None, handles=handles)
+    assert "youtube_analytics" not in facts
+
+    # Happy path: granted scopes + token + reports -> normalized facts injected with a window.
+    granted = SimpleNamespace(scopes={"values": list(YOUTUBE_ANALYTICS_SCOPES)})
+    monkeypatch.setattr(tasks, "latest_google_connection", lambda db: granted)
+    monkeypatch.setattr(tasks, "ensure_google_access_token", lambda connection, settings, db: "tok")
+    monkeypatch.setattr(
+        tasks,
+        "fetch_channel_analytics",
+        lambda token, *, start_date, end_date, settings: raw,
+    )
+    tasks._augment_with_connected_youtube(facts, flag_on, db=None, handles=handles)
+    injected = facts["youtube_analytics"]
+    assert injected["status"] == "complete"
+    assert injected["views"] == 15234
+    assert injected["window"]["start_date"] < injected["window"]["end_date"]
+
+
+def test_report_builder_precomposes_connected_youtube_lines() -> None:
+    # SMWA-142 (minimal): the shared builder emits ONE precomposed block (meta + lines) that
+    # the PDF, DOCX, and web UI all render verbatim — and None when nothing was collected,
+    # so no surface shows a dangling heading.
+    from apps.worker.stages.social.report import build_social_report_data
+
+    raw = json.loads((FIXTURES / "youtube_analytics_reports.json").read_text())
+    from apps.worker.stages.social.youtube_analytics_provider import normalize_youtube_analytics
+
+    facts = {
+        "status": "complete",
+        "platforms": [],
+        "summary": {},
+        "youtube_analytics": {
+            "status": "complete",
+            "window": {"start_date": "2026-03-01", "end_date": "2026-05-29"},
+            **normalize_youtube_analytics(raw),
+        },
+    }
+    report = build_social_report_data(
+        social_facts=facts, social_breakdown={}, social_score=None, handles={}
+    )
+    block = report["connected_youtube"]
+    assert block["meta"].startswith("Owner-consent YouTube Analytics")
+    assert "2026-03-01 to 2026-05-29" in block["meta"]
+    assert any(line.startswith("Views: 15234") for line in block["lines"])
+    assert any("Subscribers: +320 / -45" in line for line in block["lines"])
+    assert any("YT_SEARCH" in line for line in block["lines"])
+
+    bare = build_social_report_data(
+        social_facts={"status": "complete", "platforms": [], "summary": {}},
+        social_breakdown={},
+        social_score=None,
+        handles={},
+    )
+    assert bare["connected_youtube"] is None
