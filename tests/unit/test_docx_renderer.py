@@ -79,8 +79,9 @@ def test_render_report_docx_appends_social_depth_sections(tmp_path) -> None:
         document = archive.read("word/document.xml").decode("utf-8")
 
     assert "Social Media Audit" in document
-    # Quantified finding: label plus the measured-vs-target metric line.
-    assert "Infrequent posting (1.3 (target ≥ 8))" in document
+    # Quantified finding: label plus the measured-vs-target metric line (em-dash, not nested
+    # parens — the metric itself already contains a parenthesised target).
+    assert "Infrequent posting — 1.3 (target ≥ 8)" in document
     assert "Post at least twice a week." in document
     # Strengths.
     assert "What's working" in document

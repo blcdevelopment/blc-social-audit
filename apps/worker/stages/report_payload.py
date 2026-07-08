@@ -308,6 +308,33 @@ def _reason_label(reason: Any) -> str | None:
     return SKIP_REASON_LABELS.get(str(reason), str(reason))
 
 
+# Fields in GSC table rows that are counts: the Search Console API returns them as floats, and
+# rendering them raw prints "1065.0 clicks" in the client-facing tables. Coerced to int at the
+# ONE payload seam so the PDF, DOCX, and web UI all show integers; CTR/position stay floats.
+_GSC_COUNT_KEYS = (
+    "clicks",
+    "impressions",
+    "current_clicks",
+    "previous_clicks",
+    "click_delta",
+    "current_impressions",
+    "previous_impressions",
+)
+
+
+def _int_counts(row: JsonDict) -> JsonDict:
+    out = dict(row)
+    for key in _GSC_COUNT_KEYS:
+        value = out.get(key)
+        if (
+            isinstance(value, int | float)
+            and not isinstance(value, bool)
+            and float(value).is_integer()
+        ):
+            out[key] = int(value)
+    return out
+
+
 class ReportMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1481,18 +1508,26 @@ def _search_performance_section(external_seo_facts: JsonDict) -> SearchPerforman
     # are real Google answers and are still worth showing (scoring stays
     # complete-only, so partial data never affects the score).
     url_inspection_complete = url_inspection.get("status") in {"complete", "partial"}
-    top_queries = [_dict(row) for row in _list(gsc.get("top_queries"))] if gsc_complete else []
-    top_pages = [_dict(row) for row in _list(gsc.get("top_pages"))] if gsc_complete else []
+    top_queries = (
+        [_int_counts(_dict(row)) for row in _list(gsc.get("top_queries"))] if gsc_complete else []
+    )
+    top_pages = (
+        [_int_counts(_dict(row)) for row in _list(gsc.get("top_pages"))] if gsc_complete else []
+    )
     low_ctr_pages = (
-        [_dict(row) for row in _list(gsc.get("high_impression_low_ctr_pages"))]
+        [_int_counts(_dict(row)) for row in _list(gsc.get("high_impression_low_ctr_pages"))]
         if gsc_complete
         else []
     )
     ranking_opportunities = (
-        [_dict(row) for row in _list(gsc.get("ranking_opportunities"))] if gsc_complete else []
+        [_int_counts(_dict(row)) for row in _list(gsc.get("ranking_opportunities"))]
+        if gsc_complete
+        else []
     )
     declining_pages = (
-        [_dict(row) for row in _list(gsc.get("declining_pages"))] if gsc_complete else []
+        [_int_counts(_dict(row)) for row in _list(gsc.get("declining_pages"))]
+        if gsc_complete
+        else []
     )
     inspection_items = (
         [_inspection_item(_dict(item)) for item in _list(url_inspection.get("items"))]

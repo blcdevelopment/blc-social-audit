@@ -601,7 +601,7 @@ function SocialReportView({ report }: { report: SocialReport }) {
               )}
               {ci.total_views != null && (
                 <tr>
-                  <td>Total views</td>
+                  <td>Lifetime YouTube views</td>
                   <td>{ci.total_views.toLocaleString()}</td>
                 </tr>
               )}

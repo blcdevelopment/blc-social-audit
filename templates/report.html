@@ -516,8 +516,12 @@
         <h3>Branded vs non-branded demand</h3>
         <p class="helper-copy">
           Branded searches (people already looking for you by name) signal demand and trust;
-          non-branded searches are new prospects discovering you for the first time. About
-          {{ branded.branded_impression_share_pct }}% of your impressions are branded.
+          non-branded searches are new prospects discovering you for the first time.
+          {%- if branded.branded_impression_share_pct == 0 and branded.get("branded_impressions") %}
+          Under 1% of your impressions are branded.
+          {%- else %}
+          About {{ branded.branded_impression_share_pct }}% of your impressions are branded.
+          {%- endif %}
         </p>
         <dl class="metric-list inline">
           <div><dt>Branded impressions</dt><dd>{{ branded.branded_impressions }}</dd></div>
@@ -1287,7 +1291,9 @@
         <h3 style="margin-top:8px;">What to improve</h3>
         <ul>
           {% for f in social.findings %}
-          <li style="margin-bottom:6px;"><strong>{{ f.label }}</strong>{% if f.metric %} <span class="muted">({{ f.metric }})</span>{% endif %}{% if f.remediation %} &mdash; {{ f.remediation }}{% endif %} <span class="muted">({{ f.impact }} impact)</span></li>
+          {# Metric rendered with an em-dash, not wrapped in parens — the metric string already
+             contains a parenthesised target ("0.0% (target ≥ 2%)"), so wrapping would nest. #}
+          <li style="margin-bottom:6px;"><strong>{{ f.label }}</strong>{% if f.metric %} <span class="muted">&mdash; {{ f.metric }}</span>{% endif %}{% if f.remediation %} &mdash; {{ f.remediation }}{% endif %} <span class="muted">({{ f.impact }} impact)</span></li>
           {% endfor %}
         </ul>
         {% else %}
@@ -1306,7 +1312,7 @@
           {% if cm.image is not none %}{% set _ = mix_parts.append("Image " ~ cm.image ~ "%") %}{% endif %}
           {% if cm.carousel is not none %}{% set _ = mix_parts.append("Carousel " ~ cm.carousel ~ "%") %}{% endif %}
           {% if mix_parts %}{{ mix_parts | join(" · ") }}.{% endif %}
-          {% if sci.total_views is not none %} {{ sci.total_views }} total views.{% endif %}
+          {% if sci.total_views is not none %} {{ sci.total_views }} lifetime YouTube views.{% endif %}
           {% if sci.avg_views_per_post is not none %} {{ sci.avg_views_per_post }} avg views per video.{% endif %}
           {% if sci.avg_engagement_rate_pct is not none %} Average engagement rate {{ sci.avg_engagement_rate_pct }}%.{% endif %}
           {% if sci.avg_like_to_comment_ratio is not none %} ~{{ sci.avg_like_to_comment_ratio }} likes per comment.{% endif %}

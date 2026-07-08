@@ -485,7 +485,9 @@ def _combined_xml(payload: ReportPayload) -> list[str]:
                 for f in findings:
                     label = f.get("label", "")
                     if f.get("metric"):
-                        label = f"{label} ({f.get('metric')})"
+                        # Em-dash, not parens: the metric already contains a parenthesised
+                        # target ("0.0% (target ≥ 2%)") — wrapping would nest parentheses.
+                        label = f"{label} — {f.get('metric')}"
                     parts.append(
                         _paragraph(f"{str(f.get('impact', 'medium')).upper()}: {label}", "Strong")
                     )
@@ -666,7 +668,7 @@ def _social_insight_lines(insights: Any) -> list[str]:
     if mix_parts:
         lines.append("Content mix: " + ", ".join(mix_parts))
     for label, key, suffix in (
-        ("Total views", "total_views", ""),
+        ("Lifetime YouTube views", "total_views", ""),
         ("Avg views per video", "avg_views_per_post", ""),
         ("Avg engagement rate", "avg_engagement_rate_pct", "%"),
         ("Likes per comment", "avg_like_to_comment_ratio", ""),

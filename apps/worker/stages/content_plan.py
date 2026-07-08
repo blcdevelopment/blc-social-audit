@@ -788,6 +788,7 @@ _RULE_CONTEXT: dict[str, JsonDict] = {
         "meaning": "A lead capture form - on the page or as an embedded/popup form - gives visitors a direct way to request contact or start a conversation.",
         "why": "Without any form, some visitors will not take the next step even if the offer is relevant.",
         "noun": "page with a lead form",
+        "noun_plural": "pages with a lead form",
     },
     "uxui.homepage_form.field_count": {
         "meaning": "The homepage form should be short enough that a serious buyer can complete it without friction.",
