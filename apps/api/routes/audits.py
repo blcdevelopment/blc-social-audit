@@ -27,6 +27,7 @@ from apps.shared.config import get_settings
 from apps.shared.models import AuditJob
 from apps.worker.stages.docx_renderer import render_audit_docx
 from apps.worker.stages.report_payload import compose_report_payload
+from apps.worker.stages.social.extractor import profile_link_from_handle
 from apps.worker.stages.social.report import compose_social_report_payload
 
 # Every audit endpoint requires a valid Clerk session (no-op when CLERK_ISSUER is unset).
@@ -37,17 +38,28 @@ AuditOffset = Annotated[int, Query(ge=0)]
 
 
 def _social_primary_url(handles: dict[str, str]) -> str:
-    """A real, displayable profile URL stored as the social job's `url` (kept NOT NULL)."""
+    """A real, displayable profile URL stored as the social job's `url` (kept NOT NULL).
+
+    A handle supplied AS a profile link (the new-audit form accepts links — scheme'd,
+    protocol-relative, or scheme-less) is kept verbatim via the extractor's single
+    URL-shaped-handle detector; nesting it under the platform host would mint a
+    doubled-domain URL."""
     for platform in ("instagram", "facebook", "youtube"):
         handle = handles.get(platform)
         if handle:
+            link = profile_link_from_handle(handle)
+            if link is not None:
+                return link
             cleaned = handle.lstrip("@").strip("/")
             if platform == "youtube":
                 return f"https://www.youtube.com/@{cleaned}"
             host = "instagram.com" if platform == "instagram" else "facebook.com"
             return f"https://www.{host}/{cleaned}/"
     platform, handle = next(iter(handles.items()))
-    return f"https://{platform}.com/{handle.lstrip('@').strip('/')}"
+    return (
+        profile_link_from_handle(handle)
+        or f"https://{platform}.com/{handle.strip().lstrip('@').strip('/')}"
+    )
 
 
 def _report_available(job: AuditJob) -> bool:

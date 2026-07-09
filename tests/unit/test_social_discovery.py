@@ -355,3 +355,100 @@ def test_resolve_returns_empty_when_no_social_and_no_explicit() -> None:
         job, _crawl("<footer><a href='/contact'>Contact</a></footer>"), Settings(_env_file=None)
     )
     assert out == {}
+
+
+def test_brand_matching_link_in_credit_context_is_rescued() -> None:
+    # A self-descriptive "<service> by" line on the brand's OWN site ("Marketing by the pros" on
+    # a marketing firm's homepage) — or a compact credit line whose parent also holds the site's
+    # own social icon — must not discard the brand's real profile. The credit phrase belongs to
+    # the third party; a handle matching the audited brand is the site's own.
+    own_services_copy = (
+        "<footer><p>Marketing by the pros "
+        '<a href="https://instagram.com/acmemktg">IG</a></p></footer>'
+    )
+    assert discover_social_links([_page(own_services_copy)], site_url="https://acmemktg.com/") == {
+        "instagram": "https://www.instagram.com/acmemktg/"
+    }
+
+    shared_credit_parent = (
+        "<footer>Built by Acme Agency "
+        '<a href="https://www.instagram.com/clientco/">Follow us</a></footer>'
+    )
+    assert discover_social_links(
+        [_page(shared_credit_parent)], site_url="https://clientco.com/"
+    ) == {"instagram": "https://www.instagram.com/clientco/"}
+
+
+def test_rejects_facebook_pg_reserved_name() -> None:
+    # /pg/<reserved> must not canonicalize a share/app endpoint into a "profile" — the reserved
+    # set applies in the /pg name position exactly as it does for the plain vanity form.
+    for href in (
+        "https://www.facebook.com/pg/sharer/posts",
+        "https://www.facebook.com/pg/watch",
+    ):
+        assert discover_social_links([_footer(href)]) == {}
+
+
+def test_credited_third_party_with_brand_overlap_does_not_displace_own_profile() -> None:
+    # A credited photographer whose handle merely OVERLAPS the brand ("@martinez" on
+    # martinezconstruction.com) stays vetoed — only an EXACT brand-label handle is rescued from
+    # a credit line, so the third party can't win the platform slot over the site's own profile
+    # via the first-seen tie-break.
+    html = (
+        '<footer><small>Photo credit <a href="https://instagram.com/martinez">M</a></small>'
+        '<a href="https://www.instagram.com/martinezconstruction/">Follow us</a></footer>'
+    )
+    assert discover_social_links([_page(html)], site_url="https://martinezconstruction.com/") == {
+        "instagram": "https://www.instagram.com/martinezconstruction/"
+    }
+
+
+def test_rejects_facebook_pg_structural_routes() -> None:
+    # The structural routes the plain-vanity branch handles positionally (pages/pg/profile.php)
+    # are rejected in the /pg name position too.
+    for href in (
+        "https://www.facebook.com/pg/pages/x",
+        "https://www.facebook.com/pg/pg",
+    ):
+        assert discover_social_links([_footer(href)]) == {}
+
+
+def test_soft_wrapped_href_still_discovered() -> None:
+    # urlsplit strips tab/CR/LF anywhere in a URL (WHATWG), so a soft-wrapped host in
+    # hand-edited/CMS HTML still canonicalizes — the fast-path prefilter must not skip it.
+    html = '<footer><a href="https://www.instagram\n.com/acmebuilders/">IG</a></footer>'
+    assert discover_social_links([_page(html)]) == {
+        "instagram": "https://www.instagram.com/acmebuilders/"
+    }
+
+
+def test_platform_label_is_not_a_brand_token_on_tenant_hosted_sites() -> None:
+    # smith.wordpress.com: "wordpress" is the PLATFORM's brand, not the audited site's. A
+    # "powered by" credit beside the platform's own profile must stay vetoed — the exact-brand
+    # rescue must not fire for the hosting platform's account.
+    html = (
+        "<footer>Proudly powered by WordPress "
+        '<a href="https://www.instagram.com/wordpress/">IG</a></footer>'
+    )
+    assert discover_social_links([_page(html)], site_url="https://smith.wordpress.com/") == {}
+
+
+def test_modern_facebook_page_forms_discovered_in_full_form() -> None:
+    # /people/<Name>/<id> and /p/<Name>-<id> are the URL shapes Facebook assigns pages without
+    # a vanity username. The FULL form is kept (the slug alone is not a working profile path);
+    # previously the vanity fallthrough canonicalized these to the /people/ directory root.
+    people = _footer("https://www.facebook.com/people/Smith-Builders/61550001112223/")
+    assert discover_social_links([people]) == {
+        "facebook": "https://www.facebook.com/people/Smith-Builders/61550001112223"
+    }
+    modern = _footer("https://www.facebook.com/p/Acme-Studio-61550001112223/")
+    assert discover_social_links([modern]) == {
+        "facebook": "https://www.facebook.com/p/Acme-Studio-61550001112223"
+    }
+    # Invalid/bare forms are NOT profiles — and never the directory root.
+    for href in (
+        "https://www.facebook.com/people/",
+        "https://www.facebook.com/people/Smith-Builders/",
+        "https://www.facebook.com/p/watch",
+    ):
+        assert discover_social_links([_footer(href)]) == {}

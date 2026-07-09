@@ -552,3 +552,42 @@ def test_core_web_vitals_absent_when_psi_skipped() -> None:
     assert not cwv.available
     assert not cwv.field_available
     assert cwv.lab_rows == []
+
+
+def test_rate_limited_reason_has_client_facing_label() -> None:
+    # site_health emits reason="rate_limited" on widespread throttling; the client-facing
+    # report must render a human sentence, never the raw machine token.
+    from apps.worker.stages.report_payload import SKIP_REASON_LABELS, _reason_label
+
+    assert "rate_limited" in SKIP_REASON_LABELS
+    assert _reason_label("rate_limited") != "rate_limited"
+
+
+def test_fallback_findings_never_surface_skipped_rules() -> None:
+    # A skipped rule was never measured: its positively-phrased description must not appear
+    # as a "finding" (it reads as an asserted result), and no debug-speak explanation may
+    # reach the client. An all-pass section gets an honest all-clear card instead.
+    from apps.worker.stages.report_payload import RuleSummary, _fallback_findings
+
+    skipped_only = [
+        RuleSummary(
+            rule_id="uxui.homepage_form.field_count",
+            description="Homepage form length is practical for lead capture.",
+            result="skipped",
+        )
+    ]
+    findings = _fallback_findings("uxui", 100, skipped_only)
+    assert len(findings) == 1
+    assert findings[0].title == "No high-priority UX/UI issues were found"
+    assert "skipped result" not in findings[0].explanation
+    assert "practical for lead capture" not in findings[0].title
+
+    # A genuinely evaluated fail/partial opportunity still surfaces as before.
+    failed = [
+        RuleSummary(
+            rule_id="uxui.forms.present",
+            description="Pages offer a lead capture form.",
+            result="fail",
+        )
+    ]
+    assert _fallback_findings("uxui", 60, failed)[0].title == "Pages offer a lead capture form."

@@ -2,16 +2,22 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import AnyHttpUrl, BaseModel, Field, model_validator
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, model_validator
 
 from apps.worker.stages.report_payload import ReportPayload
 
 
 class BrandOverrides(BaseModel):
     # Per-client white-label overrides applied to the rendered report. All optional;
-    # blanks fall back to the default BLC brand (brand/blc.yaml).
+    # blanks fall back to the default BLC brand (brand/blc.yaml). extra="forbid" per the
+    # project convention: a typo'd override key is a hard 422, not silently ignored branding.
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = Field(default=None, max_length=120)
     short_name: str | None = Field(default=None, max_length=40)
+    # Replaces the audit product's name on the report cover/title (default "Gooch").
+    # Like every brand override, this applies to the PDF only — the DOCX uses default branding.
+    product_name: str | None = Field(default=None, max_length=60)
     primary_color: str | None = Field(default=None, max_length=7)
     accent_color: str | None = Field(default=None, max_length=7)
     logo_url: str | None = Field(default=None, max_length=1000)

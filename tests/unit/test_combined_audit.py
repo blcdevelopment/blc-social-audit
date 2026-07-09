@@ -541,6 +541,14 @@ def test_website_audit_not_promoted_when_social_collection_returns_nothing(
             [{"platform": "instagram", "handle": "acmebuilders", "raw": None}], now=NOW
         )
 
+    def boom_places(settings, *, query, expected_url=None):
+        raise AssertionError(
+            "Places enrichment must not run when an auto-discovered collection failed — "
+            "the result is discarded one step later, so the billed call is pure waste"
+        )
+
+    monkeypatch.setattr(tasks, "collect_google_business_facts", boom_places)
+
     with TestingSession() as db:
         job = AuditJob(
             url="https://example.com/",
@@ -749,3 +757,52 @@ def test_resolve_social_handles_safely_tolerates_malformed_stored_value() -> Non
     job = SimpleNamespace(social_handles=["instagram"], url="https://example.com/")
     crawl_result = _fake_crawler("https://example.com/", settings, None)
     assert tasks._resolve_social_handles_safely(job, crawl_result, settings) == {}
+
+
+def test_explicit_combined_failed_collection_skips_places_lookup(tmp_path, monkeypatch) -> None:
+    # The billed Places enrichment is gated on a USABLE collection for BOTH paths: an
+    # explicitly combined audit whose social collection FAILED merges the honest failure note
+    # alone — no billed lookup, and no google_business block sitting in failed-status facts
+    # for a render surface to leak while the PDF/DOCX suppress the social body.
+    TestingSession = _session(tmp_path)
+    _patch_settings(monkeypatch, TestingSession, tmp_path)
+
+    def failed_collector(settings, handles):
+        return extract_social_facts(
+            [{"platform": "instagram", "handle": "acmebuilders", "raw": None}], now=NOW
+        )
+
+    def boom_places(settings, *, query, expected_url=None):
+        raise AssertionError("Places must not run over a failed social collection")
+
+    monkeypatch.setattr(tasks, "collect_google_business_facts", boom_places)
+
+    with TestingSession() as db:
+        job = AuditJob(
+            url="https://example.com/",
+            audit_type="combined",
+            social_handles={"instagram": "acmebuilders"},
+            status="queued",
+            current_stage="Queued",
+            progress_pct=0,
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        job_id = str(job.id)
+
+    tasks.run_collection_audit(
+        job_id,
+        crawler=_fake_crawler,
+        psi_collector=_fake_psi,
+        social_collector=failed_collector,
+    )
+
+    with TestingSession() as db:
+        job = db.get(AuditJob, UUID(job_id))
+        assert job.status == "complete"
+        result = job.result
+        assert result.social_score is None
+        social_facts = result.social_facts or {}
+        assert social_facts.get("status") == "failed"
+        assert "google_business" not in social_facts

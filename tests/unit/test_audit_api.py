@@ -359,3 +359,22 @@ def test_docx_endpoint_generates_editable_report(tmp_path, monkeypatch) -> None:
         document = archive.read("word/document.xml").decode("utf-8")
     assert "Website Audit Report" in document
     assert "Editable report ready." in document
+
+
+def test_social_primary_url_keeps_full_url_handles_verbatim() -> None:
+    # The new-audit form accepts profile links as handles; a URL-shaped handle must be stored
+    # verbatim as the job's url, not nested under the platform host into a doubled-domain URL.
+    assert (
+        audit_routes._social_primary_url({"instagram": "https://www.instagram.com/acme/"})
+        == "https://www.instagram.com/acme/"
+    )
+    assert (
+        audit_routes._social_primary_url({"tiktok": "https://www.tiktok.com/@acme"})
+        == "https://www.tiktok.com/@acme"
+    )
+    # Bare handles keep the canonical platform-host form they always had.
+    assert (
+        audit_routes._social_primary_url({"instagram": "@acme"})
+        == "https://www.instagram.com/acme/"
+    )
+    assert audit_routes._social_primary_url({"youtube": "acme"}) == "https://www.youtube.com/@acme"

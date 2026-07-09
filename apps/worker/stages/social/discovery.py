@@ -7,7 +7,9 @@ already downloaded (no new network request), so audits stay reproducible.
 
 Two guards keep it from attributing a *stranger's* profile to the audited business:
   * links that sit in a credit/attribution line ("Site by <agency>", "as seen in <press>") are
-    ignored, so an agency/partner/press profile is never scored as the client's; and
+    ignored — unless the handle IS one of the audited domain's own labels (a marketing firm whose
+    footer reads "Marketing by the pros" beside its own icon) — so an agency/partner/press
+    profile is not scored as the client's; and
   * a discovered profile is only trusted when it looks like the site's own — a real placement-backed
     link (footer/header/nav) or a handle that resembles the site's brand — so a single passing body
     mention can't promote a website audit to combined.
@@ -27,6 +29,7 @@ from urllib.parse import parse_qs, urlparse
 from bs4 import BeautifulSoup, Tag
 
 from apps.worker.stages.crawler import _site_host, normalize_url
+from apps.worker.stages.technical_crawl_common import MULTI_TENANT_PLATFORMS
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -147,6 +150,11 @@ _ATTRIBUTION_CONTEXT_MAX_CHARS = 120
 # Domain labels that are public-suffix noise, never a brand token.
 _NON_BRAND_LABELS = {"www", "com", "net", "org", "biz", "gov", "edu", "co"}
 
+# urlsplit strips tab/CR/LF anywhere in a URL (WHATWG), so the fast-path prefilter must strip
+# them too — a soft-wrapped href ("instagram\n.com") still canonicalizes and must not be skipped
+# before the canonicaliser gets to accept it.
+_HREF_WS_TABLE = str.maketrans("", "", "\t\r\n")
+
 
 def _host_platform(host: str | None) -> str | None:
     if not host:
@@ -192,9 +200,42 @@ def _profile_url(platform: str, parsed) -> str | None:
                 return f"https://www.facebook.com/pages/{segments[1]}/{segments[2]}"
             return None
         # /pg/<PageName>(/...) — the old page-prefix form; the page name is the second segment.
+        # Reserved words are rejected in the name position too (like the YouTube /c//user/
+        # branch) — including the structural routes (pages/pg/profile.php) the plain-vanity
+        # branch handles before its own reserved check — so neither /pg/sharer/... nor
+        # /pg/pages/... can smuggle an app route past the vanity check.
         if low == "pg":
-            if len(segments) >= 2 and _FB_VANITY.match(segments[1]):
-                return f"https://www.facebook.com/{segments[1].lower()}/"
+            name = segments[1].lower() if len(segments) >= 2 else ""
+            if (
+                name
+                and name not in reserved
+                and name not in ("pages", "pg", "profile.php")
+                and _FB_VANITY.match(segments[1])
+            ):
+                return f"https://www.facebook.com/{name}/"
+            return None
+        # /people/<Name>/<id> and /p/<Name>-<id> — the modern page forms Facebook assigns
+        # pages without a vanity username (the default for recently created business pages).
+        # Kept in their FULL form: the name slug alone is not a working profile path, and the
+        # plain-vanity fallthrough below would otherwise canonicalize these to the directory
+        # root (facebook.com/people/) — a non-profile URL scored as the client's page.
+        if low == "people":
+            if (
+                len(segments) >= 3
+                and segments[1].lower() not in reserved
+                and _FB_VANITY.match(segments[1])
+                and segments[2].isdigit()
+            ):
+                return f"https://www.facebook.com/people/{segments[1]}/{segments[2]}"
+            return None
+        if low == "p":
+            if (
+                len(segments) >= 2
+                and segments[1].lower() not in reserved
+                and _FB_VANITY.match(segments[1])
+                and re.search(r"-\d{5,}$", segments[1])
+            ):
+                return f"https://www.facebook.com/p/{segments[1]}"
             return None
         if low in reserved or not _FB_VANITY.match(first):
             return None
@@ -294,7 +335,10 @@ def _brand_tokens(site_url: str | None) -> set[str]:
     tokens: set[str] = set()
     for label in labels:
         norm = re.sub(r"[^a-z0-9]", "", label.lower())
-        if len(norm) >= 3 and norm not in _NON_BRAND_LABELS:
+        # A multi-tenant hosting label is the PLATFORM's brand, not the audited site's: on
+        # smith.wordpress.com only "smith" may match, or the exact-brand credit rescue (and
+        # the brand score bonus) would attribute the platform's own profile to the client.
+        if len(norm) >= 3 and norm not in _NON_BRAND_LABELS and norm not in MULTI_TENANT_PLATFORMS:
             tokens.add(norm)
     return tokens
 
@@ -322,6 +366,18 @@ def _matches_brand(profile_url: str, brand_tokens: set[str]) -> bool:
     return any(token in handle or handle in token for token in brand_tokens)
 
 
+def _exact_brand_match(profile_url: str, brand_tokens: set[str]) -> bool:
+    """The handle IS one of the audited domain's labels — not merely overlapping one.
+
+    Only this stronger form may override an explicit third-party credit marker: the bidirectional
+    substring test behind the score bonus would rescue a credited photographer's ``@martinez`` on
+    ``martinezconstruction.com`` (handle ⊂ token) and let it displace the site's own profile."""
+    if not brand_tokens:
+        return False
+    handle = re.sub(r"[^a-z0-9]", "", _profile_handle(profile_url).lower())
+    return len(handle) >= 3 and handle in brand_tokens
+
+
 def discover_social_links(pages: Iterable[CrawledPage], site_url: str | None = None) -> JsonDict:
     """Find the site's own Instagram/Facebook/YouTube profile links across the crawled pages.
 
@@ -344,6 +400,15 @@ def discover_social_links(pages: Iterable[CrawledPage], site_url: str | None = N
             raw_href = str(anchor.get("href", "")).strip()
             if not raw_href or raw_href.startswith("#"):
                 continue
+            # Fast path: a social profile link must carry one of the platform hosts as a
+            # substring, so skip the full canonicalisation for the overwhelmingly non-social
+            # majority of a page's anchors. Tab/CR/LF are stripped first, mirroring urlsplit.
+            # Purely an optimisation — a false positive ("clubfb.com") still fails the host
+            # check below, exactly as it did without the prefilter. (A relative href resolves
+            # to a platform host only when the audited site IS one — pathological here.)
+            lowered_href = raw_href.translate(_HREF_WS_TABLE).lower()
+            if not any(host in lowered_href for host in _PLATFORM_HOSTS):
+                continue
             # Reuse the crawler's URL canonicaliser: resolves protocol-relative (//host) and
             # relative hrefs against the page, strips credentials/fragments, rejects non-http(s).
             normalized = normalize_url(raw_href, base_url=base_url)
@@ -356,8 +421,15 @@ def discover_social_links(pages: Iterable[CrawledPage], site_url: str | None = N
             profile_url = _profile_url(platform, parsed)
             if profile_url is None:
                 continue
-            # Skip third-party credit links (agency/press/partner) — never score them as ours.
-            if _is_attribution_context(anchor):
+            # Skip third-party credit links (agency/press/partner) — don't score them as ours.
+            # Rescue requires an EXACT brand-label handle: a self-descriptive footer ("Marketing
+            # by the pros" beside @acmemktg on acmemktg.com) or a compact credit line sharing
+            # its parent with the site's own icon keeps the real profile. The looser substring
+            # match stays veto-able — it would rescue a credited photographer's @martinez on
+            # martinezconstruction.com and let it displace the client's real profile.
+            if _is_attribution_context(anchor) and not _exact_brand_match(
+                profile_url, brand_tokens
+            ):
                 continue
             score = 1.0 + _placement_bonus(anchor)
             if _matches_brand(profile_url, brand_tokens):

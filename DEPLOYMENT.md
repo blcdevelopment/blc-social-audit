@@ -242,6 +242,8 @@ OPENAI_API_KEY=          # Phase-1 commentary is fully deterministic; this is do
 GOOGLE_PSI_API_KEY=
 APIFY_API_TOKEN=         # REQUIRED for social audits (Apify IG + FB-pages actors); blank ⇒ social collection is skipped
 # APIFY_TIMEOUT_SECONDS=120  # per-actor sync-run timeout (default 120, min 10)
+YOUTUBE_API_KEY=         # YouTube Data API v3 (public channel data for social audits); blank ⇒ YouTube backend skips
+GOOGLE_PLACES_API_KEY=   # Google Places API (New) — public GBP enrichment on combined audits; blank ⇒ skipped
 SENTRY_DSN=              # optional error reporting; blank ⇒ disabled (mirrors the Clerk opt-in)
 SENTRY_TRACES_SAMPLE_RATE=0.0
 
@@ -493,7 +495,7 @@ add `postgresql-client` to the image.
 | **Public share links** | ℹ️ **By design.** `GET /shared/{token}` and `GET /shared/{token}/report` are **unauthenticated** (mounted outside the `require_user` router) so clients can view/download a report without an account; they are reachable through Caddy's `/api/*` route (i.e. `/api/shared/{token}`). Access needs a 32-byte URL-safe token that is **time-limited** (`SHARE_LINK_TTL_DAYS`, default 7) and **operator-revocable** (`DELETE /audits/{id}/share` nulls the token). Expired → 410, missing/revoked → 404. |
 | **Secrets in images** | ✅ `.dockerignore` keeps `.env` out of all images; frontend never sees the DB/OpenAI secrets. |
 | **TLS** | ✅ Caddy auto-issues + auto-renews Let's Encrypt; `caddy_data` volume persists certs. |
-| **SSRF** | Crawler blocks private/loopback/metadata IPs pre-navigation and re-validates the post-redirect host; the external-SEO site-health sweep re-validates **every** redirect hop. The page crawler's mid-crawl sub-resource interception is still **not** done (known limitation — see docs/06). |
+| **SSRF** | Crawler blocks private/loopback/metadata IPs pre-navigation and re-validates the post-redirect host; the external-SEO site-health sweep re-validates **every** redirect hop; and a request-level Playwright route guard aborts mid-render sub-resource/redirect fetches that resolve to private/metadata IPs (`CRAWLER_INTERCEPT_REQUESTS`, default on; auto-disabled when `CRAWLER_ALLOW_PRIVATE_HOSTS` is true). Residual known gap: DNS-rebinding TOCTOU between validation and fetch (see docs/06). |
 
 ---
 

@@ -16,9 +16,11 @@ from urllib.robotparser import RobotFileParser
 
 import httpx
 from bs4 import BeautifulSoup, Tag
+from celery.exceptions import SoftTimeLimitExceeded
 from playwright import async_api as playwright_api
 
 from apps.shared.config import Settings
+from apps.worker.stages.extractor_uxui import _EMBED_PROVIDER_SIGNATURES
 
 
 class CrawlerError(RuntimeError):
@@ -424,6 +426,8 @@ async def load_robots_policy(start_url: str, settings: Settings) -> RobotsPolicy
             timeout=timeout,
         ) as client:
             response = await client.get(robots_url)
+    except SoftTimeLimitExceeded:
+        raise
     except Exception as exc:
         return RobotsPolicy(status="unavailable", robots_url=robots_url, error=str(exc))
 
@@ -518,6 +522,8 @@ async def _capture_screenshot(
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         await page.screenshot(path=str(path), full_page=True)
+    except SoftTimeLimitExceeded:
+        raise
     except Exception as exc:
         return None, str(exc)
     return str(path), None
@@ -570,7 +576,7 @@ async def _render_page(
         final_url = page.url
         # Popup/lazy-iframe lead forms never appear in page.content(); a bounded frame
         # pass counts them so the UX extractor can credit "form present" honestly.
-        frame_form_count, frame_form_field_count = await _scan_frames_for_forms(page)
+        frame_form_count, frame_form_field_count = await _scan_frames_for_forms(page, html)
 
         return CrawledPage(
             url=url,
@@ -590,20 +596,49 @@ async def _render_page(
         )
     except playwright_api.TimeoutError as exc:
         raise CrawlerError(f"Timed out rendering {url}") from exc
+    except SoftTimeLimitExceeded:
+        # Celery's soft limit subclasses Exception: without this re-raise the broad handler
+        # below would wrap it into CrawlerError, the honest timed-out failure path in tasks.py
+        # would never run, and the worker would run on to the hard-limit SIGKILL.
+        raise
     except Exception as exc:
         raise CrawlerError(f"Could not render {url}: {exc}") from exc
     finally:
         await page.close()
 
 
-async def _scan_frames_for_forms(page: Any, timeout_seconds: float = 3.0) -> tuple[int, int]:
+# Flattened provider tokens for the frame-pass precheck — the popup/lazy embeds the scan
+# exists to count always leave either an <iframe> tag or their provider's loader script in
+# the static HTML (signature list owned by extractor_uxui; one object, so a new provider
+# signature extends detection and the precheck together).
+_EMBED_SIGNATURE_TOKENS: tuple[str, ...] = tuple(
+    token for _, tokens in _EMBED_PROVIDER_SIGNATURES for token in tokens
+)
+
+
+def _may_have_lazy_embed(html: str) -> bool:
+    """Static-HTML precheck for the frame pass: a lazy iframe carries an ``iframe`` token and
+    a popup/JS-mounted embed carries its provider's loader script — no signal at all means
+    there is nothing for the scroll nudge to wake up."""
+    lowered = (html or "").lower()
+    return "iframe" in lowered or any(token in lowered for token in _EMBED_SIGNATURE_TOKENS)
+
+
+async def _scan_frames_for_forms(
+    page: Any, html: str, timeout_seconds: float = 3.0
+) -> tuple[int, int]:
     """Count <form> elements (and their fields) inside child frames, nudging lazy iframes
     into loading with a quick scroll first. Runs AFTER the page HTML/screenshot are
-    captured, so it cannot change any other extracted fact. Best-effort with a hard time
-    cap: any failure returns (0, 0) and the audit continues (graceful, like PSI/axe)."""
+    captured, so it cannot change any other extracted fact. Skipped outright when the page
+    has no child frame and no embed signal in its static HTML — the scroll nudge costs
+    ~1-3s of browser time per page, which an iframe-less site should not pay. Best-effort
+    with a hard time cap: any failure returns (0, 0) and the audit continues (graceful,
+    like PSI/axe); only the worker's soft time limit propagates."""
+    if len(page.frames) <= 1 and not _may_have_lazy_embed(html):
+        return 0, 0
     try:
         async with asyncio.timeout(timeout_seconds):
-            with suppress(Exception):
+            with suppress(playwright_api.Error, asyncio.TimeoutError):
                 await page.evaluate(
                     "async () => {"
                     " const h = document.body ? document.body.scrollHeight : 0;"
@@ -634,10 +669,17 @@ async def _scan_frames_for_forms(page: Any, timeout_seconds: float = 3.0) -> tup
                     )
                     forms += int(counts[0] or 0)
                     fields += int(counts[1] or 0)
+                except SoftTimeLimitExceeded:
+                    raise
                 except Exception:
                     # Cross-origin/permission edge cases: skip the frame, keep the rest.
                     continue
             return forms, fields
+    except SoftTimeLimitExceeded:
+        # The worker is out of time: propagate so the task can mark the job failed
+        # honestly instead of the hard limit killing it mid-pipeline (site_health and
+        # google_search_console follow the same convention).
+        raise
     except Exception:
         return 0, 0
 
@@ -709,6 +751,8 @@ async def crawl_site(url: str, settings: Settings, audit_id: str | None = None) 
                             source_url=homepage.final_url,
                             link_score=candidate.score,
                         )
+                    except SoftTimeLimitExceeded:
+                        raise
                     except Exception as exc:
                         failed_pages.append(
                             {

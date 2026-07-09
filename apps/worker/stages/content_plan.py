@@ -68,7 +68,6 @@ def build_content_plan(
     rule ``evidence.value`` already embedded in ``score_breakdown``.
     """
     max_findings = settings.commentary_max_findings_per_section
-    max_recs = settings.commentary_max_recommendations_per_section
     facts = {
         "seo": seo_facts,
         "uxui": uxui_facts,
@@ -76,8 +75,8 @@ def build_content_plan(
         "external_seo": external_seo_facts or {},
     }
 
-    seo_section = _build_section("seo", score_breakdown, facts, max_findings, max_recs)
-    uxui_section = _build_section("uxui", score_breakdown, facts, max_findings, max_recs)
+    seo_section = _build_section("seo", score_breakdown, facts, max_findings)
+    uxui_section = _build_section("uxui", score_breakdown, facts, max_findings)
 
     scores = _dict(score_breakdown.get("scores"))
     top_label = _top_priority_label(score_breakdown)
@@ -99,7 +98,6 @@ def _build_section(
     score_breakdown: JsonDict,
     facts: JsonDict,
     max_findings: int,
-    max_recs: int,
 ) -> CommentarySection:
     surfaced = _merge_overlapping_rules(_surfaced_rules(section_id, score_breakdown))
     score = _int(_dict(score_breakdown.get("scores")).get(section_id))
@@ -110,9 +108,8 @@ def _build_section(
 
     # A rendered finding without its fix reads as an unanswered problem (a tier-first
     # sort used to push long_term fixes like PageSpeed past the cap), so recommendations
-    # are the SAME selected rules, ordered for display by tier. ``max_recs`` therefore
-    # no longer truncates below the findings cap.
-    del max_recs
+    # are the SAME selected rules, ordered for display by tier — the findings cap is the
+    # only truncation knob.
     rec_order = sorted(selected, key=_recommendation_sort_key)
     recommendations = [_recommendation(rule, facts) for rule in rec_order]
 
@@ -124,18 +121,14 @@ def _build_section(
     )
 
 
-# Rule pairs that ask for the same site change from two different checks. When both
-# surface, the report reads as repeating itself, so the secondary (key) is folded into
-# the primary (value) as a covered-by note. Presentation-level only — scores untouched.
-_OVERLAPPING_RULE_MERGES: dict[str, str] = {
-    "seo.aeo.heading_hierarchy": "seo.h1.present_once",
-    "seo.technical_crawl.missing_h1": "seo.h1.present_once",
-    "seo.technical_crawl.missing_image_alt": "seo.images.alt_coverage",
-}
-
-
 def _merge_overlapping_rules(surfaced: list[JsonDict]) -> list[JsonDict]:
     """Fold secondary rules into their surfaced primary; each alone still surfaces.
+
+    Which rule folds into which is the rubric's ``merged_into`` metadata (carried per rule
+    in the score breakdown) — the relation lives in rubrics/*.yaml next to the rule ids it
+    names, and a dangling target fails rubric load. Presentation-level only; scores
+    untouched. Pre-v12 stored breakdowns simply have no ``merged_into`` keys, so their
+    stored commentary renders exactly as it was authored.
 
     The merged card adopts the strongest severity and weight in its group: a ``fail``
     secondary folded into a ``partial`` primary must not sink the combined card below
@@ -147,7 +140,7 @@ def _merge_overlapping_rules(surfaced: list[JsonDict]) -> list[JsonDict]:
     kept: list[JsonDict] = []
     for rule in surfaced:
         rule_id = str(rule.get("rule_id") or "")
-        primary_id = _OVERLAPPING_RULE_MERGES.get(rule_id)
+        primary_id = str(rule.get("merged_into") or "")
         if primary_id and primary_id in surfaced_ids:
             covered.setdefault(primary_id, []).append(rule)
             continue
@@ -171,6 +164,14 @@ def _merge_overlapping_rules(surfaced: list[JsonDict]) -> list[JsonDict]:
             )
             rule["weight"] = max(_float(member.get("weight")) for member in group)
         merged.append(rule)
+    # Defensive: a covered group whose primary never made it into `kept` (malformed merge
+    # metadata in a stored breakdown — a self-merge or a chain, which rubric load now
+    # rejects but old stored data could still carry) must not vanish from the report;
+    # re-keep those rules unmerged.
+    kept_ids = {str(rule.get("rule_id") or "") for rule in kept}
+    for primary_id, secondaries in covered.items():
+        if primary_id not in kept_ids:
+            merged.extend(secondaries)
     return merged
 
 
@@ -787,6 +788,7 @@ _RULE_CONTEXT: dict[str, JsonDict] = {
         "meaning": "A lead capture form - on the page or as an embedded/popup form - gives visitors a direct way to request contact or start a conversation.",
         "why": "Without any form, some visitors will not take the next step even if the offer is relevant.",
         "noun": "page with a lead form",
+        "noun_plural": "pages with a lead form",
     },
     "uxui.homepage_form.field_count": {
         "meaning": "The homepage form should be short enough that a serious buyer can complete it without friction.",

@@ -351,3 +351,46 @@ def test_topic_clusters_query_stays_in_its_own_token_theme() -> None:
     covered = sum(c["impressions"] for c in clusters)
     assert covered == sum(r["impressions"] for r in rows)  # no impressions lost
     assert clusters == _topic_clusters(rows, "")  # deterministic
+
+
+def test_registrable_brand_label_handles_cctld_and_platform_hosts() -> None:
+    # ONE brand deriver serves the GSC branded split and the Places business query; ccTLD
+    # generics and multi-tenant platform hosts must both step past the non-brand label —
+    # _brand_token("acme.com.au") used to return "com" and mark generic queries branded.
+    from apps.worker.stages.google_search_console import _brand_token, registrable_brand_label
+
+    assert registrable_brand_label("https://www.builderleadconverter.com/") == (
+        "builderleadconverter"
+    )
+    assert registrable_brand_label("https://www.acme.com.au/") == "acme"
+    assert registrable_brand_label("https://smithbuilders.wixsite.com/home") == "smithbuilders"
+    assert registrable_brand_label("https://shop.acme.com/") == "acme"
+    assert _brand_token("https://www.acme.com.au/") == "acme"
+    assert _brand_token("https://acme-builders.example/") == "acmebuilders"
+
+
+def test_granted_scopes_stored_from_token_payload() -> None:
+    # The connection row must record the REAL grant: with connected-YouTube enabled the
+    # consent may include the Analytics scope (or a user may untick one) — hardcoding
+    # GSC_SCOPES would misstate what the stored token can actually do.
+    from apps.worker.stages.google_search_console import GSC_SCOPES, _granted_scopes
+
+    assert _granted_scopes(
+        {"scope": "https://www.googleapis.com/auth/webmasters.readonly extra.scope"}
+    ) == ["https://www.googleapis.com/auth/webmasters.readonly", "extra.scope"]
+    assert _granted_scopes({}) == list(GSC_SCOPES)
+    assert _granted_scopes({"scope": "   "}) == list(GSC_SCOPES)
+
+
+def test_registrable_brand_label_walks_past_stacked_generic_labels() -> None:
+    # smith.blogspot.co.uk stacks a platform label on a ccTLD family: a single step left would
+    # stop at "blogspot" and bill a Places query for the PLATFORM's name. The walk must continue
+    # until a real brand label is found.
+    from apps.worker.stages.technical_crawl_common import registrable_brand_label
+
+    assert registrable_brand_label("https://smith.blogspot.co.uk/") == "smith"
+    assert registrable_brand_label("smith.co.uk") == "smith"
+    assert registrable_brand_label("smithbuilders.wixsite.com") == "smithbuilders"
+    assert registrable_brand_label("www.acme.com") == "acme"
+    # The platform's own apex IS the platform brand — no over-walking.
+    assert registrable_brand_label("blogspot.com") == "blogspot"

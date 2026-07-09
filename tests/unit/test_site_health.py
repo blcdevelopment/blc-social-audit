@@ -6,6 +6,7 @@ import http.server
 import ipaddress
 import socketserver
 import threading
+import time
 from collections import defaultdict
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -83,8 +84,10 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
 
 @contextmanager
-def _serve() -> Iterator[str]:
-    handler = functools.partial(_Handler)
+def _serve(
+    handler_cls: type[http.server.BaseHTTPRequestHandler] = _Handler,
+) -> Iterator[str]:
+    handler = functools.partial(handler_cls)
     httpd = socketserver.TCPServer(("127.0.0.1", 0), handler)
     port = int(httpd.server_address[1])
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
@@ -647,3 +650,144 @@ def test_rate_limited_url_is_retried_after_retry_after(monkeypatch) -> None:
     assert facts["summary"]["client_error_internal_urls"] == 0
     assert facts["summary"]["unreachable_internal_urls"] == 0
     assert facts["summary"]["internal_urls_checked"] == 1
+
+
+class _HeadOnly429(_Handler):
+    # A CDN profile that rate-limits HEAD specifically while serving GET fine.
+    routes = {**_Handler.routes, "/head-limited": (200, b"fine over GET")}
+
+    def _respond(self, include_body: bool) -> None:
+        if self.path == "/head-limited" and self.command == "HEAD":
+            self.send_response(429)
+            self.send_header("Retry-After", "0")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        super()._respond(include_body)
+
+
+class _Always429(_Handler):
+    # A host throttling EVERY method: the checker must report "rate limited", not "broken".
+    def _respond(self, include_body: bool) -> None:
+        if self.path == "/throttled":
+            self.send_response(429)
+            self.send_header("Retry-After", "0")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        super()._respond(include_body)
+
+
+def test_persistent_head_429_falls_back_to_get() -> None:
+    # A CDN/WAF that rate-limits HEAD specifically while serving GET fine: after the polite
+    # Retry-After retries are exhausted, one GET must recover the URL — otherwise dozens of
+    # healthy pages land in client_error_internal_urls and get scored as broken.
+    with _serve(_HeadOnly429) as base:
+        facts = collect_site_health_facts(
+            url=f"{base}/",
+            seo_facts={"status": "complete", "pages": []},
+            crawled_pages={
+                "final_url": f"{base}/",
+                "pages": [{"url": f"{base}/", "final_url": f"{base}/"}],
+                "discovered_links": [{"url": f"{base}/head-limited"}],
+            },
+            rendered_pages=None,
+            settings=_settings(site_health_sitemap_max_urls=0),
+        )
+
+    assert facts["status"] == "complete"
+    assert facts["summary"]["client_error_internal_urls"] == 0
+    assert facts["summary"]["unreachable_internal_urls"] == 0
+    assert facts["summary"]["internal_urls_checked"] == 1
+
+
+def test_final_429_is_inconclusive_and_widespread_throttling_goes_partial() -> None:
+    # A URL still 429ing after every polite retry must NOT be scored as a broken client
+    # error, and when throttling is widespread the whole source downgrades to `partial`
+    # (reason rate_limited) so the trust gate strips the summary instead of scoring it.
+    with _serve(_Always429) as base:
+        facts = collect_site_health_facts(
+            url=f"{base}/",
+            seo_facts={"status": "complete", "pages": []},
+            crawled_pages={
+                "final_url": f"{base}/",
+                "pages": [{"url": f"{base}/", "final_url": f"{base}/"}],
+                "discovered_links": [{"url": f"{base}/throttled"}],
+            },
+            rendered_pages=None,
+            settings=_settings(site_health_sitemap_max_urls=0, site_health_breaker_threshold=1),
+        )
+
+    assert facts["summary"]["client_error_internal_urls"] == 0
+    assert facts["checks"]["rate_limited_internal_urls"] == 1
+    assert facts["status"] == "partial"
+    assert facts["reason"] == "rate_limited"
+    # The client-facing note says throttled URLs are "reported as unchecked" — the rendered
+    # "Links checked" total must agree (the throttled URL is NOT counted as checked).
+    assert facts["summary"]["internal_urls_checked"] == 0
+    assert facts["summary"]["urls_checked"] == 0
+
+
+def test_scope_counts_one_page_per_redirected_render() -> None:
+    # The client-facing "Pages discovered" must count a redirected page ONCE (its final URL),
+    # not once per pre/post-redirect form — a one-page http->https+www site is 1 page, not 2.
+    facts = collect_site_health_facts(
+        url="http://example.com/",
+        seo_facts={"status": "complete", "pages": []},
+        crawled_pages={
+            "final_url": "https://www.example.com/",
+            "pages": [{"url": "http://example.com/", "final_url": "https://www.example.com/"}],
+            "discovered_links": [],
+        },
+        rendered_pages=None,
+        settings=_settings(site_health_sitemap_max_urls=0),
+    )
+    assert facts["summary"]["discovered_internal_urls"] == 1
+
+
+def test_first_request_per_host_skips_politeness_delay() -> None:
+    # Politeness spacing is per HOST: the first request to a host (every outbound link's only
+    # request) goes straight out. With a 10s delay and a single sweep URL, the old
+    # unconditional per-request sleep would blow this assertion.
+    with _serve() as base:
+        started = time.monotonic()
+        facts = collect_site_health_facts(
+            url=f"{base}/",
+            seo_facts={"status": "complete", "pages": []},
+            crawled_pages={
+                "final_url": f"{base}/",
+                "pages": [{"url": f"{base}/", "final_url": f"{base}/"}],
+                "discovered_links": [{"url": f"{base}/ok"}],
+            },
+            rendered_pages=None,
+            settings=_settings(site_health_sitemap_max_urls=0, site_health_request_delay_ms=10_000),
+        )
+        elapsed = time.monotonic() - started
+    assert facts["summary"]["internal_urls_checked"] == 1
+    assert elapsed < 5
+
+
+def test_same_host_requests_keep_politeness_spacing() -> None:
+    # Repeat requests to the SAME host still pace: 3 same-host URLs with a 600ms delay must
+    # sleep for at least one jittered gap (>= 0.75 * 600ms), so the sweep cannot finish
+    # near-instantly the way distinct-host checks do.
+    with _serve() as base:
+        started = time.monotonic()
+        facts = collect_site_health_facts(
+            url=f"{base}/",
+            seo_facts={"status": "complete", "pages": []},
+            crawled_pages={
+                "final_url": f"{base}/",
+                "pages": [{"url": f"{base}/", "final_url": f"{base}/"}],
+                "discovered_links": [
+                    {"url": f"{base}/ok"},
+                    {"url": f"{base}/missing"},
+                    {"url": f"{base}/noindexed"},
+                ],
+            },
+            rendered_pages=None,
+            settings=_settings(site_health_sitemap_max_urls=0, site_health_request_delay_ms=600),
+        )
+        elapsed = time.monotonic() - started
+    assert facts["summary"]["internal_urls_checked"] == 3
+    assert elapsed >= 0.4

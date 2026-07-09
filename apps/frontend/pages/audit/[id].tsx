@@ -61,7 +61,7 @@ function WebsiteScopeBlock({ report }: { report: ReportPayload }) {
   if (!scope) return null;
   const rows: [string, number | null][] = [
     ["Pages discovered", scope.pages_discovered],
-    ["Pages analyzed", scope.pages_analyzed],
+    ["Pages analyzed in depth", scope.pages_analyzed],
     ["Blog / article posts", scope.blog_posts],
     ["Sitemap entries", scope.sitemap_entries],
     ["Outbound links", scope.outbound_links],
@@ -106,7 +106,8 @@ function SectionBlock({ section }: { section: ReportSection }) {
           {/* One card per issue: the fix ("Do this") travels with its finding; the
               roadmap groups the same fixes by timeline, so a separate Recommendations
               list would repeat every sentence. Older stored results without
-              action_items fall back to the recommendations list below. */}
+              action_items fall back to the recommendations list below —
+              show_recommendations is computed once server-side so PDF/DOCX/UI agree. */}
           <ul className="finding-list">
             {section.findings.map((finding, index) => (
               <li key={index}>
@@ -128,8 +129,7 @@ function SectionBlock({ section }: { section: ReportSection }) {
         </div>
       )}
 
-      {section.findings.every((finding) => (finding.action_items ?? []).length === 0) &&
-        section.recommendations.length > 0 && (
+      {(section.show_recommendations ?? false) && (
           <div className="section-sub">
             <h4>Recommendations</h4>
             <ul className="rec-list">
@@ -488,8 +488,14 @@ function OverallReadinessBlock({ overall }: { overall: OverallReadiness }) {
 
 function SocialReportView({ report }: { report: SocialReport }) {
   // The server nulls content_insights when every field is missing, so plain truthiness is the
-  // whole "anything to show" check.
+  // whole "anything to show" check. Same for google_business (combined audits only) — the
+  // listing the Google-reviews and phone (NAP) checks were scored against.
   const ci = report.content_insights;
+  const gb = report.google_business;
+  // Same complete/partial gate the PDF and DOCX enforce: on a failed/skipped collection the
+  // report must say the profiles could not be collected — never "no major issues" — and must
+  // not render body sections (GBP card) the other surfaces suppress.
+  const collected = report.status === "complete" || report.status === "partial";
   return (
     <>
       <div className="score-grid">
@@ -516,7 +522,15 @@ function SocialReportView({ report }: { report: SocialReport }) {
         </section>
       )}
 
-      {report.findings.length > 0 ? (
+      {!collected ? (
+        <section className="card">
+          <p className="muted">
+            The social profiles could not be collected for this audit, so no Social Score or
+            findings are available. Check that the handles are public and spelled correctly,
+            then re-run the audit.
+          </p>
+        </section>
+      ) : report.findings.length > 0 ? (
         <section className="card section-block">
           <div className="section-head">
             <h3>What to improve</h3>
@@ -587,7 +601,7 @@ function SocialReportView({ report }: { report: SocialReport }) {
               )}
               {ci.total_views != null && (
                 <tr>
-                  <td>Total views</td>
+                  <td>Lifetime YouTube views</td>
                   <td>{ci.total_views.toLocaleString()}</td>
                 </tr>
               )}
@@ -638,6 +652,68 @@ function SocialReportView({ report }: { report: SocialReport }) {
         </section>
       )}
 
+      {collected && report.connected_youtube && (
+        <section className="card">
+          <h3>Connected YouTube analytics</h3>
+          {/* Lines are precomposed by the shared builder so UI/PDF/DOCX prose can't drift. */}
+          <p className="muted">{report.connected_youtube.meta}</p>
+          <ul className="finding-list">
+            {report.connected_youtube.lines.map((line, index) => (
+              <li key={index}>{line}</li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {collected && gb && (
+        <section className="card">
+          <h3>Google Business Profile</h3>
+          <table className="audit-table">
+            <tbody>
+              {gb.name && (
+                <tr>
+                  <td>Listing</td>
+                  <td>
+                    {gb.name}
+                    {gb.category ? ` (${gb.category})` : ""}
+                  </td>
+                </tr>
+              )}
+              {gb.rating != null && (
+                <tr>
+                  <td>Rating</td>
+                  <td>{gb.rating} / 5</td>
+                </tr>
+              )}
+              {gb.review_count != null && (
+                <tr>
+                  <td>Google reviews</td>
+                  <td>{gb.review_count.toLocaleString()}</td>
+                </tr>
+              )}
+              {gb.address && (
+                <tr>
+                  <td>Address</td>
+                  <td>{gb.address}</td>
+                </tr>
+              )}
+              {gb.phone && (
+                <tr>
+                  <td>Phone</td>
+                  <td>{gb.phone}</td>
+                </tr>
+              )}
+              {gb.website && (
+                <tr>
+                  <td>Website</td>
+                  <td>{gb.website}</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </section>
+      )}
+
       {report.top_posts && report.top_posts.length > 0 && (
         <section className="card">
           <h3>Top performing posts</h3>
@@ -668,7 +744,9 @@ function SocialReportView({ report }: { report: SocialReport }) {
         </section>
       )}
 
-      {report.platforms.length > 0 && (
+      {/* Bound to the same curated per_platform projection the PDF/DOCX scorecards consume
+          (build_social_report_data), so the three surfaces can't silently drift apart. */}
+      {(report.per_platform ?? []).length > 0 && (
         <section className="card">
           <h3>Per-platform scorecard</h3>
           <table className="audit-table">
@@ -684,19 +762,15 @@ function SocialReportView({ report }: { report: SocialReport }) {
               </tr>
             </thead>
             <tbody>
-              {report.platforms.map((platform, index) => (
+              {(report.per_platform ?? []).map((platform, index) => (
                 <tr key={index}>
-                  <td>{recordText(platform, "platform")}</td>
-                  <td>@{recordText(platform, "handle", "")}</td>
-                  <td>{recordNumberText(platform, "followers")}</td>
-                  <td>{recordText(platform, "posts_per_month", "—")}</td>
-                  <td>{recordText(platform, "avg_engagement_rate_pct", "—")}</td>
-                  <td>
-                    {typeof platform.video_share_pct === "number"
-                      ? `${platform.video_share_pct}%`
-                      : "—"}
-                  </td>
-                  <td>{recordText(platform, "days_since_last_post", "—")}</td>
+                  <td>{platform.platform || "N/A"}</td>
+                  <td>@{platform.handle ?? ""}</td>
+                  <td>{platform.followers != null ? String(platform.followers) : "N/A"}</td>
+                  <td>{platform.posts_per_month ?? "—"}</td>
+                  <td>{platform.avg_engagement_rate_pct ?? "—"}</td>
+                  <td>{platform.video_share_pct != null ? `${platform.video_share_pct}%` : "—"}</td>
+                  <td>{platform.days_since_last_post ?? "—"}</td>
                 </tr>
               ))}
             </tbody>

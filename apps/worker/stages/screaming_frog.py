@@ -6,12 +6,17 @@ import subprocess
 import time
 from collections import Counter, defaultdict
 from datetime import UTC, datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 from apps.shared.config import Settings
-from apps.worker.stages.technical_crawl_common import empty_summary, issues_from_summary
+from apps.worker.stages.technical_crawl_common import (
+    empty_summary,
+    issues_from_summary,
+    looks_like_post,
+)
 
 JsonDict = dict[str, Any]
 
@@ -170,12 +175,29 @@ def _summarize_pages(
     summary = empty_summary()
     summary["urls_crawled"] = len(pages)
     summary["images_missing_alt"] = images_missing_alt
+    discovered_internal = 0
+    discovered_posts = 0
 
     for page in pages:
         address = str(page.get("address") or "")
         status_code = _int(_first_text(page, "status_code", "status"))
         is_html = _is_html_page(page)
         is_indexable_html_page = is_html and (status_code is None or 200 <= status_code < 300)
+        if (
+            is_html
+            and _is_internal_url(address, site_url)
+            and not (status_code is not None and 300 <= status_code < 400)
+        ):
+            # Website-scope counts, parity with the sweep's discovered_* fields: every internal
+            # HTML URL the crawl saw feeds the report's "what your website consists of" panel.
+            # 3xx rows are excluded — Screaming Frog lists a redirect source AND its target as
+            # separate rows, and counting both would double-count every redirected page (the
+            # exact inflation the sweep's final-URL counting avoids). Outbound/sitemap totals
+            # aren't in the configured exports, so those rows stay absent and the panel simply
+            # omits them for a Screaming Frog run.
+            discovered_internal += 1
+            if looks_like_post(address):
+                discovered_posts += 1
         if status_code is not None:
             if 400 <= status_code <= 499:
                 issue_key = (
@@ -259,6 +281,9 @@ def _summarize_pages(
         if meta and meta.strip().lower() in duplicate_meta:
             summary["duplicate_meta_descriptions"] += 1
             _append_example(issue_examples, "duplicate_meta_descriptions", address)
+
+    summary["discovered_internal_urls"] = discovered_internal
+    summary["discovered_blog_posts"] = discovered_posts
 
     return summary
 
@@ -373,10 +398,17 @@ def _is_http_url(url: str) -> bool:
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
+@lru_cache(maxsize=8)
+def _audited_site_host(site_url: str) -> str:
+    """The audited site's comparison host, derived once per export instead of once per CSV row
+    (the Internal:All export can carry thousands of rows, each calling _is_internal_url)."""
+    return (urlparse(site_url).hostname or "").lower().removeprefix("www.")
+
+
 def _is_internal_url(url: str, site_url: str | None) -> bool:
     if not site_url:
         return True
-    site_host = (urlparse(site_url).hostname or "").lower().removeprefix("www.")
+    site_host = _audited_site_host(site_url)
     url_host = (urlparse(url).hostname or "").lower().removeprefix("www.")
     return bool(site_host and (url_host == site_host or url_host.endswith(f".{site_host}")))
 

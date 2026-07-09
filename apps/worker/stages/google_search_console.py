@@ -13,6 +13,11 @@ from sqlalchemy.orm import Session
 from apps.shared.config import Settings
 from apps.shared.models import GoogleSearchConsoleConnection
 
+# Shared with the social extractor so "per month" means the same thing for search figures
+# and social cadence inside one report.
+from apps.worker.stages.social.extractor import AVG_DAYS_PER_MONTH as _AVG_DAYS_PER_MONTH
+from apps.worker.stages.technical_crawl_common import registrable_brand_label
+
 JsonDict = dict[str, Any]
 
 AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -149,6 +154,15 @@ def list_search_console_sites(access_token: str) -> list[JsonDict]:
     ]
 
 
+def _granted_scopes(token_payload: JsonDict) -> list[str]:
+    """The scopes Google actually granted (space-delimited ``scope`` in the token response) —
+    stored so the connection metadata reflects the real grant, not just the GSC baseline.
+    With connected-YouTube enabled the consent may include the Analytics scope (or the user
+    may untick one); a payload without ``scope`` falls back to the GSC set."""
+    granted = str(token_payload.get("scope") or "").split()
+    return granted or list(GSC_SCOPES)
+
+
 def upsert_google_connection(
     db: Session,
     *,
@@ -164,7 +178,7 @@ def upsert_google_connection(
     if connection is None:
         connection = GoogleSearchConsoleConnection(
             account_email=account_email,
-            scopes={"values": list(GSC_SCOPES)},
+            scopes={"values": _granted_scopes(token_payload)},
             properties={"siteEntry": properties},
         )
         db.add(connection)
@@ -174,7 +188,7 @@ def upsert_google_connection(
     if refresh_token:
         connection.refresh_token = str(refresh_token)
     connection.token_expires_at = _expires_at(token_payload)
-    connection.scopes = {"values": list(GSC_SCOPES)}
+    connection.scopes = {"values": _granted_scopes(token_payload)}
     connection.properties = {"siteEntry": properties}
     db.commit()
     db.refresh(connection)
@@ -326,7 +340,11 @@ def collect_search_analytics(
         # Business-opportunity framing (P1-P4); see helpers above. Stored as facts so the grounding
         # validator keeps any executive-summary prose that cites these numbers.
         "opportunity": _opportunity_estimate(
-            opportunities, window_days=window_days, site_total_clicks=site_total_clicks
+            opportunities,
+            window_days=window_days,
+            site_total_clicks=site_total_clicks,
+            aio_prevalence=settings.gsc_opportunity_aio_prevalence,
+            cap_multiple=settings.gsc_opportunity_cap_multiple,
         ),
         "branded": _branded_split(top_queries, site_url),
         "topic_clusters": _topic_clusters(top_queries, brand_token)[:8],
@@ -556,15 +574,19 @@ _AIO_CTR_REDUCTION: dict[int, float] = {
 }
 # Share of the transactional/home-services queries this tool audits that surface an AI Overview.
 # AIOs grew from ~13% (mid-2024) toward ~40% of queries by late 2025; 0.40 is a conservative
-# blend for commercial SERPs. This is the one tunable here — raising it makes every forecast more
-# conservative (a larger upside haircut); it does not affect any score.
+# blend for commercial SERPs. Raising it makes every forecast more conservative (a larger upside
+# haircut); it does not affect any score. This is the DEFAULT — env-tunable per deployment via
+# GSC_OPPORTUNITY_AIO_PREVALENCE (the applied value is recorded in the stored estimate, so a
+# tuned forecast stays self-describing).
 _AIO_PREVALENCE = 0.40
 # Even correct fixes rarely capture 100% of modeled upside; the headline is conservative.
+# The capture ladder is part of the model's identity (versioned prose cites 50/70/100%), so it
+# stays a constant rather than a per-deployment knob.
 _SCENARIO_CAPTURE = {"conservative": 0.5, "expected": 0.7, "optimistic": 1.0}
 # No scenario may exceed this multiple of the site's CURRENT monthly clicks — a
-# step-function projection of many times current traffic is not defensible.
-_OPPORTUNITY_CAP_MULTIPLE = 3
-_AVG_DAYS_PER_MONTH = 30.44
+# step-function projection of many times current traffic is not defensible. DEFAULT only;
+# env-tunable via GSC_OPPORTUNITY_CAP_MULTIPLE (recorded in the estimate as cap_multiple).
+_OPPORTUNITY_CAP_MULTIPLE = 3.0
 # Published home-services service-page contact (call/form) conversion benchmark RANGE — an industry
 # figure, NOT measured on the audited site; only ever applied as a labeled range, never x job value.
 _LEAD_RATE_LOW_PCT, _LEAD_RATE_HIGH_PCT = 5, 10
@@ -624,11 +646,11 @@ def _ctr_at(position: int) -> float:
     return _lookup_rank(_CTR_CURVE, position)
 
 
-def _aio_factor(position: int) -> float:
+def _aio_factor(position: int, prevalence: float = _AIO_PREVALENCE) -> float:
     """Position-aware AI-Overview upside multiplier: 1 - prevalence * CTR-reduction-at-rank.
     Higher ranks suffer more AIO suppression, so they keep a smaller share of the modeled
     upside. Always in (0, 1]; monotonically increasing in position (rank 1 keeps the least)."""
-    return 1.0 - _AIO_PREVALENCE * _lookup_rank(_AIO_CTR_REDUCTION, position)
+    return 1.0 - prevalence * _lookup_rank(_AIO_CTR_REDUCTION, position)
 
 
 def _opportunity_for_target(rows: list[JsonDict], target_position: int) -> float:
@@ -649,7 +671,12 @@ def _per_month(value: float, window_days: int) -> int:
 
 
 def _opportunity_estimate(
-    striking_rows: list[JsonDict], *, window_days: int, site_total_clicks: float
+    striking_rows: list[JsonDict],
+    *,
+    window_days: int,
+    site_total_clicks: float,
+    aio_prevalence: float = _AIO_PREVALENCE,
+    cap_multiple: float = _OPPORTUNITY_CAP_MULTIPLE,
 ) -> JsonDict:
     """Deterministic 'clicks/leads left on the table' from the striking-distance set.
 
@@ -657,7 +684,9 @@ def _opportunity_estimate(
     never 1; discount for AI Overviews; present conservative/expected/optimistic capture
     scenarios and lead with conservative; cap every scenario at a small multiple of the
     site's current monthly clicks; state true monthly rates with the window recorded.
-    Every figure is stored as a fact so grounded prose can cite it.
+    Every figure is stored as a fact so grounded prose can cite it. The AIO prevalence and
+    the cap multiple are env-tunable (Settings) and both are recorded in the output, so a
+    tuned deployment's stored estimates stay self-describing.
     """
     if not striking_rows:
         return {}
@@ -671,17 +700,18 @@ def _opportunity_estimate(
     # Position-aware AIO haircut: each target rank keeps its own share of the upside (the
     # optimistic target 3 is discounted more than the conservative target 5).
     upside_low = _opportunity_for_target(modeled, _OPPORTUNITY_TARGET_LOW) * _aio_factor(
-        _OPPORTUNITY_TARGET_LOW
+        _OPPORTUNITY_TARGET_LOW, aio_prevalence
     )
     upside_high = _opportunity_for_target(modeled, _OPPORTUNITY_TARGET_HIGH) * _aio_factor(
-        _OPPORTUNITY_TARGET_HIGH
+        _OPPORTUNITY_TARGET_HIGH, aio_prevalence
     )
 
     site_monthly_clicks = _per_month(site_total_clicks, window_days)
     # A zero-click site has no traffic baseline to cap against; the conservative capture
     # + AIO discount are the only brakes there (capping to max(0, ...) would pin every
     # scenario at a meaningless floor while the report claims "3x current clicks").
-    cap = _OPPORTUNITY_CAP_MULTIPLE * site_monthly_clicks if site_monthly_clicks > 0 else None
+    # Half-up to an int so capped scenario figures stay whole clicks like everything else.
+    cap = int(cap_multiple * site_monthly_clicks + 0.5) if site_monthly_clicks > 0 else None
     capped = False
     scenarios: JsonDict = {}
     for name, capture in _SCENARIO_CAPTURE.items():
@@ -729,22 +759,28 @@ def _opportunity_estimate(
         # figures (single source of truth, so the displayed and applied haircuts never drift and
         # the target-position clamp is inherited): smaller at the conservative target (position 5),
         # larger at the optimistic one (position 3), where AI Overviews suppress clicks most.
-        "aio_discount_min_pct": int((1 - _aio_factor(_OPPORTUNITY_TARGET_LOW)) * 100 + 0.5),
-        "aio_discount_max_pct": int((1 - _aio_factor(_OPPORTUNITY_TARGET_HIGH)) * 100 + 0.5),
+        "aio_discount_min_pct": int(
+            (1 - _aio_factor(_OPPORTUNITY_TARGET_LOW, aio_prevalence)) * 100 + 0.5
+        ),
+        "aio_discount_max_pct": int(
+            (1 - _aio_factor(_OPPORTUNITY_TARGET_HIGH, aio_prevalence)) * 100 + 0.5
+        ),
+        "aio_prevalence_pct": int(aio_prevalence * 100 + 0.5),
         "aio_model_version": _AIO_MODEL_VERSION,
         "capture_capped": capped,
         "cap_applied": cap is not None,
-        "cap_multiple": _OPPORTUNITY_CAP_MULTIPLE,
+        # Stored for prose/display: keep an integral multiple as an int so the client copy
+        # reads "3x", not "3.0x".
+        "cap_multiple": int(cap_multiple) if float(cap_multiple).is_integer() else cap_multiple,
         "ctr_curve_source": _CTR_CURVE_SOURCE,
         "ctr_curve_version": _CTR_CURVE_VERSION,
     }
 
 
+# The shared brand/identity vocabulary now lives in technical_crawl_common (one home for the
+# GSC branded split, the Places identity gate, and social discovery's brand tokens).
 def _brand_token(site_url: str) -> str:
-    host = (urlparse(site_url).hostname or "").lower().removeprefix("www.")
-    labels = [label for label in host.split(".") if label]
-    name = labels[-2] if len(labels) >= 2 else (labels[0] if labels else "")
-    return re.sub(r"[^a-z0-9]", "", name)
+    return re.sub(r"[^a-z0-9]", "", registrable_brand_label(site_url))
 
 
 def _branded_split(rows: list[JsonDict], site_url: str) -> JsonDict:

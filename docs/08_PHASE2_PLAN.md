@@ -5,7 +5,7 @@
 > Instagram, Facebook, and YouTube profiles; combined audits append a Social Media Audit and an
 > Overall Lead-Gen Readiness score; standalone social is still supported by the backend/report path
 > for old or direct API jobs but no longer has a separate UI tab; `rubrics/social.yaml` is
-> `phase2-social-v3`; Facebook uses both Pages and Posts scrapers; YouTube is supported via the
+> `phase2-social-v6`; Facebook uses both Pages and Posts scrapers; YouTube is supported via the
 > free Data API; and the competitor-benchmarking scaffold is shipped while live paid vendor clients
 > remain v3.
 
@@ -64,7 +64,7 @@
 >   `apify_provider.py` (network), `report.py` (`compose_social_report_payload`).
 > - **Scoring is standalone:** `scoring.score_social_audit()`
 >   ([`apps/worker/stages/scoring.py`](../apps/worker/stages/scoring.py):143) runs
->   **`rubrics/social.yaml`** (`version: phase2-social-v1` — now `phase2-social-v3`, `category: social`) for a 0–100 Social
+>   **`rubrics/social.yaml`** (`version: phase2-social-v1` — now `phase2-social-v6`, `category: social`) for a 0–100 Social
 >   Score. `Rubric.category` `Literal` now includes `"social"` (line 47), but the website
 >   `CompositeRubric.weights` stays exactly `{seo, uxui}` (line 66) — social is **not** folded into
 >   the website composite; website scoring is unchanged.
@@ -560,7 +560,7 @@ website audit.
 - P2-23 `rubrics/social.yaml` → **standalone Social Score** via the shared scoring engine. **NO
   website-composite change** — do not touch `scoring.py`'s composite `Literal`/weights or
   `composite.yaml`. *(Updated 2026-06-23; was: "extend `scoring.py` (composite Literal/weights) +
-  Lead-Gen update.")* — **✅ DONE:** `rubrics/social.yaml` (`phase2-social-v3`, `category:
+  Lead-Gen update.")* — **✅ DONE:** `rubrics/social.yaml` (`phase2-social-v6`, `category:
   social`) scored by `scoring.score_social_audit()`; website `CompositeRubric.weights` stays
   `{seo, uxui}` (untouched).
 - P2-24 Social commentary prompts + grounding-validator extension — **✅ DONE.** Findings/recommendations are deterministic from the rubric rule metadata (`finding_label`/`remediation`/`impact`/`tier`) by default. **Update 2026-06-24:** an optional LLM polish layer was added — `commentary.generate_social_commentary` (prompts in `prompts/commentary_social_*.md`) rephrases the rule-derived findings via GPT-4o when `OPENAI_API_KEY` is set, with a grounding backstop and the deterministic baseline as the no-key fallback. Polish only — scores/findings are unchanged.

@@ -45,6 +45,16 @@ def test_overrides_apply_name_colors_and_logo_url() -> None:
     assert ctx["name"] == BrandConfig().name
 
 
+def test_product_name_defaults_to_gooch_and_is_overridable() -> None:
+    # The audit product's cover/title branding is config-driven, not a template literal:
+    # a white-label run can replace "Gooch" so a client-facing PDF never carries our tool name.
+    ctx = _base_context()
+    assert ctx["product_name"] == "Gooch"
+    merged = apply_brand_overrides(ctx, {"product_name": "Acme Audit"})
+    assert merged["product_name"] == "Acme Audit"
+    assert apply_brand_overrides(ctx, {"product_name": "   "})["product_name"] == "Gooch"
+
+
 def test_overrides_ignore_blank_and_invalid_values() -> None:
     ctx = _base_context()
     merged = apply_brand_overrides(

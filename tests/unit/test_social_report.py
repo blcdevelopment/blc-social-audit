@@ -145,3 +145,25 @@ def test_handles_are_display_cleaned_without_mutating_facts() -> None:
     assert report["platforms"][0]["handle"] == "acme"
     # The stored facts keep the canonical URL (the payload works on copies).
     assert facts["platforms"][0]["handle"] == stored_url
+
+
+def test_display_handle_renders_modern_facebook_forms() -> None:
+    # The display parser must understand the same modern FB page-URL forms the consistency key
+    # does — not render "@people" / "@pg" / "@category" on every report surface.
+    from apps.worker.stages.social.report import _display_handle
+
+    assert (
+        _display_handle("https://www.facebook.com/people/Smith-Builders/61550001112223/")
+        == "Smith-Builders"
+    )
+    assert _display_handle("https://www.facebook.com/pg/AcmeStudio") == "AcmeStudio"
+    assert (
+        _display_handle("https://www.facebook.com/p/Acme-Studio-61550001112223/") == "Acme-Studio"
+    )
+    assert (
+        _display_handle(
+            "https://www.facebook.com/pages/category/"
+            "General-Contractor/Acme-Studio-104502341234567/"
+        )
+        == "Acme-Studio"
+    )

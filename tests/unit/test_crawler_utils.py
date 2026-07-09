@@ -252,3 +252,52 @@ def test_crawl_site_builds_every_context_through_the_guarded_helper(monkeypatch)
     # No context was created outside the helper.
     assert browser.new_context_calls == helper_calls["count"]
     assert len(result.pages) == 1
+
+
+class _StubFrameScanPage:
+    def __init__(self) -> None:
+        self.main_frame = object()
+        self.frames = [self.main_frame]
+        self.evaluate_calls = 0
+
+    async def evaluate(self, script):
+        self.evaluate_calls += 1
+        return None
+
+    async def wait_for_load_state(self, state, timeout=None):
+        return None
+
+
+def test_frame_scan_skips_pages_with_no_embed_signal() -> None:
+    # No child frame, no iframe markup, no provider loader in the static HTML: the scan must
+    # bail out BEFORE the ~1-3s scroll nudge — an iframe-less site should not pay it per page.
+    page = _StubFrameScanPage()
+    html = "<html><body><h1>Plain site</h1><form><input name='email'></form></body></html>"
+    forms, fields = asyncio.run(crawler._scan_frames_for_forms(page, html))
+    assert (forms, fields) == (0, 0)
+    assert page.evaluate_calls == 0
+
+
+def test_frame_scan_runs_when_provider_signature_present() -> None:
+    # A popup/JS-mounted embed leaves its loader script in the static HTML even though the
+    # <iframe> only mounts later — the signature must keep the scan alive.
+    page = _StubFrameScanPage()
+    html = "<script src='https://link.msgsndr.com/js/form_embed.js'></script>"
+    forms, fields = asyncio.run(crawler._scan_frames_for_forms(page, html))
+    assert (forms, fields) == (0, 0)  # no child frames mounted in this stub
+    assert page.evaluate_calls >= 1  # but the nudge ran
+
+
+def test_frame_scan_reraises_soft_time_limit() -> None:
+    # The worker's soft time limit must propagate (task marks the job failed honestly) —
+    # a bare except here would strand the job until the hard limit SIGKILLs the worker.
+    from celery.exceptions import SoftTimeLimitExceeded
+
+    class _TimedOutPage(_StubFrameScanPage):
+        async def evaluate(self, script):
+            raise SoftTimeLimitExceeded()
+
+    page = _TimedOutPage()
+    html = "<iframe src='https://form.jotform.com/x'></iframe>"
+    with pytest.raises(SoftTimeLimitExceeded):
+        asyncio.run(crawler._scan_frames_for_forms(page, html))

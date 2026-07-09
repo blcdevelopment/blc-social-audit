@@ -21,6 +21,7 @@ from typing import Any
 import httpx
 
 from apps.shared.config import Settings
+from apps.worker.stages.social.extractor import _round_half_up
 
 JsonDict = dict[str, Any]
 
@@ -92,7 +93,7 @@ def _headers(report: Any) -> list[str]:
 def _num(value: Any) -> float | int | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    return int(value) if float(value).is_integer() else round(float(value), 2)
+    return int(value) if float(value).is_integer() else _round_half_up(float(value), 2)
 
 
 def normalize_youtube_analytics(reports: JsonDict) -> JsonDict:

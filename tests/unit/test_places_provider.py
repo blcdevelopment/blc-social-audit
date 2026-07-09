@@ -82,3 +82,105 @@ def test_google_reviews_rule_skips_when_absent() -> None:
     result = score_social_audit(_ig_facts_with_reviews(None), Settings())
     by_id = {r["rule_id"]: r for r in result["category"]["rules"]}
     assert by_id["social.reputation.google_reviews"]["result"] == "skipped"
+
+
+def _collect_with_listing(monkeypatch, website, *, expected_url):
+    # Text Search is a fuzzy name lookup — these tests pin the identity gate that keeps a
+    # same-named stranger's listing (reviews/phone) out of a client-facing report.
+    from apps.worker.stages.social import places_provider
+
+    settings = Settings(_env_file=None, google_places_api_key=SecretStr("test-key"))
+    monkeypatch.setattr(places_provider, "fetch_place_id", lambda query, s: "place-1")
+    payload = {"displayName": {"text": "Acme"}, "userRatingCount": 3}
+    if website is not None:
+        payload["websiteUri"] = website
+    monkeypatch.setattr(places_provider, "fetch_place_details", lambda pid, s: payload)
+    return places_provider.collect_google_business_facts(
+        settings, query="acme", expected_url=expected_url
+    )
+
+
+def test_collector_rejects_listing_for_another_website(monkeypatch) -> None:
+    result = _collect_with_listing(
+        monkeypatch, "https://someoneelse.example/", expected_url="https://www.acme.com/"
+    )
+    assert result["status"] == "failed"
+    assert result["reason"] == "website_mismatch"
+
+
+def test_collector_rejects_listing_without_website(monkeypatch) -> None:
+    # No website on the listing = unverifiable = never attributed to the client.
+    result = _collect_with_listing(monkeypatch, None, expected_url="https://www.acme.com/")
+    assert result["status"] == "failed"
+    assert result["reason"] == "website_mismatch"
+
+
+def test_collector_accepts_listing_matching_the_audited_site(monkeypatch) -> None:
+    result = _collect_with_listing(
+        monkeypatch, "https://acme.com/contact", expected_url="https://www.acme.com/"
+    )
+    assert result["status"] == "complete"
+    assert result["business"]["review_count"] == 3
+
+
+def test_collector_accepts_subdomain_relationship(monkeypatch) -> None:
+    # Audited shop.acme.com <-> listing website acme.com: same business, different depth.
+    result = _collect_with_listing(
+        monkeypatch, "https://www.acme.com/", expected_url="https://shop.acme.com/page"
+    )
+    assert result["status"] == "complete"
+
+
+def test_collector_rejects_platform_apex_relationship(monkeypatch) -> None:
+    # foo.wixsite.com audited vs a listing whose website is wixsite.com (the platform — or a
+    # stranger tenant's apex): a suffix rule would attribute someone else's listing to the
+    # client, so the multi-tenant apex relationship must NOT match.
+    result = _collect_with_listing(
+        monkeypatch,
+        "https://www.wixsite.com/",
+        expected_url="https://smithbuilders.wixsite.com/home",
+    )
+    assert result["status"] == "failed"
+    assert result["reason"] == "website_mismatch"
+
+
+def test_collector_path_tenant_host_requires_matching_path(monkeypatch) -> None:
+    # sites.google.com hosts many businesses distinguished by PATH: same host is not enough.
+    stranger = _collect_with_listing(
+        monkeypatch,
+        "https://sites.google.com/view/stranger",
+        expected_url="https://sites.google.com/view/acme",
+    )
+    assert stranger["status"] == "failed"
+    assert stranger["reason"] == "website_mismatch"
+    own = _collect_with_listing(
+        monkeypatch,
+        "https://sites.google.com/view/acme",
+        expected_url="https://sites.google.com/view/acme",
+    )
+    assert own["status"] == "complete"
+
+
+def test_collector_accepts_root_listing_for_deep_audited_path(monkeypatch) -> None:
+    # A deep page pasted as the audit URL (acme.com/home) must still match the listing's
+    # root website on a normal (non-path-tenant) domain.
+    result = _collect_with_listing(
+        monkeypatch, "https://acme.com/", expected_url="https://www.acme.com/home"
+    )
+    assert result["status"] == "complete"
+
+
+def test_collector_without_expected_url_keeps_legacy_behavior(monkeypatch) -> None:
+    result = _collect_with_listing(monkeypatch, "https://someoneelse.example/", expected_url=None)
+    assert result["status"] == "complete"
+
+
+def test_website_match_rejects_bare_public_suffix_apex() -> None:
+    # A listing website that is a bare public suffix "shares an apex" with the audited site but
+    # carries no brand label — it can never establish that the two are the same business.
+    from apps.worker.stages.social.places_provider import _website_matches
+
+    assert _website_matches("https://co.uk/", "https://acme.co.uk/") is False
+    assert _website_matches("https://com/", "https://acme.com/") is False
+    # A genuine ccTLD apex relationship still matches (its brand label is "acme").
+    assert _website_matches("https://shop.acme.co.uk/", "https://acme.co.uk/") is True

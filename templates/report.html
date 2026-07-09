@@ -22,7 +22,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8">
-    <title>{{ payload.metadata.site_domain }} — Gooch Website Audit</title>
+    <title>{{ payload.metadata.site_domain }} — {{ brand.product_name }} Website Audit</title>
     <style>
       {{ report_css }}
     </style>
@@ -46,12 +46,13 @@
           </div>
         {% endif %}
       </div>
-      {# status "website_only" carries a real (100%-website) score after a failed social
-         collection — the cover must not promise social content the report doesn't have. #}
+      {# The one shared combined predicate — computed in compose_report_payload so the cover,
+         the DOCX title, and the lead-gen card intro can never disagree ("website_only" after
+         a failed social collection must not promise social content). #}
       {% set cover_overall = payload.get('overall_readiness') %}
-      {% set cover_combined = cover_overall and cover_overall.get('status') == 'complete' and cover_overall.get('score') is not none %}
+      {% set cover_combined = payload.get('combined_complete') %}
       <div class="cover-main">
-        <p class="cover-eyebrow">Gooch &middot; {% if cover_combined %}Comprehensive Website &amp; Social Media Audit{% else %}Comprehensive Website Audit{% endif %}</p>
+        <p class="cover-eyebrow">{{ brand.product_name }} &middot; {% if cover_combined %}Comprehensive Website &amp; Social Media Audit{% else %}Comprehensive Website Audit{% endif %}</p>
         <h1>{% if cover_combined %}Website &amp; Social Media Audit Report{% else %}Website Audit Report{% endif %}</h1>
         <p class="cover-url">{{ payload.metadata.final_url }}</p>
         <div class="cover-scores">
@@ -298,7 +299,29 @@
           </div>
           {# Each finding card above carries its own fix; the roadmap groups the same
              fixes by timeline, so a separate per-section Recommendations list would
-             repeat every sentence a third time. #}
+             repeat every sentence a third time. Exception: LEGACY stored audits (pre
+             finding-card commentary) — compose_report_payload computes the one shared
+             show_recommendations flag so PDF/DOCX/UI can never disagree about it. #}
+          {% if section.show_recommendations %}
+            <h3>Recommendations</h3>
+            <div class="recommendation-list">
+              {% for recommendation in section.recommendations %}
+                <article class="recommendation tier-{{ recommendation.tier }}">
+                  <span class="tier-pill tier-pill-{{ recommendation.tier }}">{{ recommendation.tier.replace("_", " ") }}</span>
+                  <h4>{{ recommendation.title }}</h4>
+                  <p>{{ recommendation.rationale }}</p>
+                  {% if recommendation.action_items %}
+                    <p class="rec-action-label">Do this</p>
+                    <ul class="action-items">
+                      {% for item in recommendation.action_items %}
+                        <li>{{ item }}</li>
+                      {% endfor %}
+                    </ul>
+                  {% endif %}
+                </article>
+              {% endfor %}
+            </div>
+          {% endif %}
         </section>
       {% endif %}
     {% endfor %}
@@ -493,8 +516,12 @@
         <h3>Branded vs non-branded demand</h3>
         <p class="helper-copy">
           Branded searches (people already looking for you by name) signal demand and trust;
-          non-branded searches are new prospects discovering you for the first time. About
-          {{ branded.branded_impression_share_pct }}% of your impressions are branded.
+          non-branded searches are new prospects discovering you for the first time.
+          {%- if branded.branded_impression_share_pct == 0 and branded.get("branded_impressions") %}
+          Under 1% of your impressions are branded.
+          {%- else %}
+          About {{ branded.branded_impression_share_pct }}% of your impressions are branded.
+          {%- endif %}
         </p>
         <dl class="metric-list inline">
           <div><dt>Branded impressions</dt><dd>{{ branded.branded_impressions }}</dd></div>
@@ -1264,7 +1291,9 @@
         <h3 style="margin-top:8px;">What to improve</h3>
         <ul>
           {% for f in social.findings %}
-          <li style="margin-bottom:6px;"><strong>{{ f.label }}</strong>{% if f.metric %} <span class="muted">({{ f.metric }})</span>{% endif %}{% if f.remediation %} &mdash; {{ f.remediation }}{% endif %} <span class="muted">({{ f.impact }} impact)</span></li>
+          {# Metric rendered with an em-dash, not wrapped in parens — the metric string already
+             contains a parenthesised target ("0.0% (target ≥ 2%)"), so wrapping would nest. #}
+          <li style="margin-bottom:6px;"><strong>{{ f.label }}</strong>{% if f.metric %} <span class="muted">&mdash; {{ f.metric }}</span>{% endif %}{% if f.remediation %} &mdash; {{ f.remediation }}{% endif %} <span class="muted">({{ f.impact }} impact)</span></li>
           {% endfor %}
         </ul>
         {% else %}
@@ -1283,7 +1312,7 @@
           {% if cm.image is not none %}{% set _ = mix_parts.append("Image " ~ cm.image ~ "%") %}{% endif %}
           {% if cm.carousel is not none %}{% set _ = mix_parts.append("Carousel " ~ cm.carousel ~ "%") %}{% endif %}
           {% if mix_parts %}{{ mix_parts | join(" · ") }}.{% endif %}
-          {% if sci.total_views is not none %} {{ sci.total_views }} total views.{% endif %}
+          {% if sci.total_views is not none %} {{ sci.total_views }} lifetime YouTube views.{% endif %}
           {% if sci.avg_views_per_post is not none %} {{ sci.avg_views_per_post }} avg views per video.{% endif %}
           {% if sci.avg_engagement_rate_pct is not none %} Average engagement rate {{ sci.avg_engagement_rate_pct }}%.{% endif %}
           {% if sci.avg_like_to_comment_ratio is not none %} ~{{ sci.avg_like_to_comment_ratio }} likes per comment.{% endif %}
@@ -1292,6 +1321,30 @@
           {% if sci.max_posting_gap_days is not none %} Longest posting gap {{ sci.max_posting_gap_days }} days.{% endif %}
           {% if sci.avg_follower_following_ratio is not none %} Follower/following ratio {{ sci.avg_follower_following_ratio }}&times;.{% endif %}
         </p>
+        {% endif %}
+
+        {% set gb = social.get('google_business') %}
+        {% if gb %}
+        <h3 style="margin-top:10px;">Google Business Profile</h3>
+        {# The listing the Google-reviews and phone (NAP) checks were scored against — shown so
+           the reader can verify the right business was matched. #}
+        <p style="font-size:11px; margin:4px 0;">
+          {% if gb.name %}<strong>{{ gb.name }}</strong>{% if gb.category %} <span class="muted">({{ gb.category }})</span>{% endif %}.{% endif %}
+          {% if gb.rating_line %} {{ gb.rating_line }}.{% endif %}
+          {% if gb.address %} {{ gb.address }}.{% endif %}
+          {% if gb.phone %} {{ gb.phone }}.{% endif %}
+          {% if gb.website %} {{ gb.website }}{% endif %}
+        </p>
+        {% endif %}
+
+        {% set cyt = social.get('connected_youtube') %}
+        {% if cyt %}
+        <h3 style="margin-top:10px;">Connected YouTube analytics</h3>
+        {# Lines are precomposed by the shared builder so PDF/DOCX/UI prose can't drift. #}
+        <p class="muted" style="font-size:10px; margin:2px 0;">{{ cyt.meta }}</p>
+        <ul style="font-size:11px; margin:4px 0 10px;">
+          {% for line in cyt.lines %}<li>{{ line }}</li>{% endfor %}
+        </ul>
         {% endif %}
 
         {% if social.get('top_posts') %}
