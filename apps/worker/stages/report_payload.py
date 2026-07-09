@@ -1094,8 +1094,13 @@ def _fallback_findings(
     score: int,
     opportunities: list[RuleSummary],
 ) -> list[ReportFinding]:
-    if opportunities:
-        primary = opportunities[0]
+    # A SKIPPED rule is NOT an opportunity: it was never measured, and its positively-phrased
+    # rubric description ("Homepage form length is practical for lead capture") would read as
+    # an asserted result — with debug-speak underneath — in a client-facing findings list (and
+    # in the exec-summary Top Findings box). Only rules the audit actually evaluated surface.
+    measured = [rule for rule in opportunities if rule.result in {"fail", "partial"}]
+    if measured:
+        primary = measured[0]
         return [
             ReportFinding(
                 section=section_id,
@@ -1111,6 +1116,21 @@ def _fallback_findings(
         ]
 
     label = SECTION_LABELS[section_id]
+    if score >= 75:
+        # Nothing failed or partially failed: say so plainly instead of surfacing noise.
+        return [
+            ReportFinding(
+                section=section_id,
+                severity="info",
+                title=f"No high-priority {label} issues were found",
+                explanation=(
+                    f"Every {label} check the audit could measure passed or scored within "
+                    "range. Checks skipped for lack of data never lower the score."
+                ),
+                evidence_refs=["score_breakdown"],
+                source="rubric",
+            )
+        ]
     return [
         ReportFinding(
             section=section_id,
