@@ -161,7 +161,7 @@
       {% for p in payload.per_platform %}
       <tr>
         <td>{{ (p.platform or '')|capitalize }}</td>
-        <td>@{{ p.handle }}</td>
+        <td>{% if p.handle %}@{{ p.handle }}{% else %}—{% endif %}</td>
         <td>{% if p.followers is not none %}{{ p.followers }}{% else %}—{% endif %}</td>
         <td>{% if p.posts_per_month is not none %}{{ p.posts_per_month }}{% else %}—{% endif %}</td>
         <td>{% if p.avg_engagement_rate_pct is not none %}{{ p.avg_engagement_rate_pct }}%{% else %}—{% endif %}</td>

@@ -25,13 +25,16 @@ MULTI_TENANT_PLATFORMS = frozenset(
     {
         "blogspot",
         "business",
+        "carrd",
         "github",
         "godaddysites",
         "myshopify",
         "netlify",
+        "notion",
         "pages",
         "square",
         "squarespace",
+        "strikingly",
         "vercel",
         "webflow",
         "weebly",
@@ -41,18 +44,48 @@ MULTI_TENANT_PLATFORMS = frozenset(
 )
 
 
+# Shared hosts where the TENANT is a path segment, not a subdomain: the brand never lives in
+# the host there, so host-label walking would yield the PLATFORM's brand ("google"). Structural
+# path segments precede the tenant slug: sites.google.com/view/<tenant>, the legacy
+# /site/<tenant>, the signed-in /u/<n>/view/<tenant>, and the Workspace /a/<domain>/<marker>/…
+PATH_TENANT_HOSTS = frozenset({"sites.google.com"})
+_PATH_TENANT_MARKERS = frozenset({"view", "site"})
+# Structural PREFIXES that carry their own argument segment (/u/0/…, /a/acme.com/…) — both the
+# marker and its argument are dropped before the tenant slug is read, or the "brand" would come
+# back as "u"/"a" (a junk token that still funds a billed Places lookup).
+_PATH_TENANT_PREFIXES = frozenset({"u", "a"})
+
+
 def registrable_brand_label(url_or_host: str) -> str:
     """The label most likely to be the BRAND in a site URL/host: strip ``www.``, take the
     registrable label, walking LEFT past EVERY generic second-level and multi-tenant platform
     label — ``smith.co.uk`` -> ``smith``, ``smithbuilders.wixsite.com`` -> ``smithbuilders``,
     and the stacked form ``smith.blogspot.co.uk`` -> ``smith`` (a single step would stop at
-    the platform name). The ONE brand deriver — consumed by the GSC branded split
-    (``_brand_token``), the Places business query (``tasks._business_query``), and the Places
-    identity gate, so they can never disagree about a site's brand."""
+    the platform name). On a PATH-tenant host the brand is the tenant path slug —
+    ``sites.google.com/view/smithbuilders`` -> ``smithbuilders`` — and a bare path-tenant host
+    yields "" (no brand derivable; "google" would misclassify every 'google' query as branded
+    and send a billed Places lookup for the platform itself). The ONE brand deriver — consumed
+    by the GSC branded split (``_brand_token``), the Places business query
+    (``tasks._business_query``), and the Places identity gate, so they can never disagree
+    about a site's brand."""
     host = url_or_host
+    path = ""
     if "/" in host or ":" in host:
-        host = urlparse(url_or_host).hostname or ""
+        parsed = urlparse(url_or_host)
+        host = parsed.hostname or ""
+        path = parsed.path or ""
     host = host.lower().rstrip(".").removeprefix("www.")
+    if host in PATH_TENANT_HOSTS:
+        segments = [seg for seg in path.split("/") if seg]
+        while segments:
+            head = segments[0].lower()
+            if head in _PATH_TENANT_PREFIXES and len(segments) >= 2:
+                segments = segments[2:]  # drop the prefix AND its argument (/u/0/, /a/acme.com/)
+            elif head in _PATH_TENANT_MARKERS:
+                segments = segments[1:]
+            else:
+                break
+        return segments[0].lower() if segments else ""
     labels = [label for label in host.split(".") if label]
     if not labels:
         return ""

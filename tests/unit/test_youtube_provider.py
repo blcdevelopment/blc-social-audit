@@ -55,3 +55,20 @@ def test_collector_no_handles_skips() -> None:
     out = collect_social_facts(_settings(), {})
     assert out["status"] == "skipped"
     assert out["reason"] == "no_social_handles"
+
+
+def test_channel_lookups_handle_protocol_relative_links() -> None:
+    # Auto-discovery/pasted links can be protocol-relative. A bare f"https://{value}" would
+    # build "https:////www.youtube.com/..." and urlparse would leave the HOST in the path, so
+    # every lookup resolved against "www.youtube.com" instead of the channel.
+    from apps.worker.stages.social.youtube_provider import _channel_lookups
+
+    assert _channel_lookups("//www.youtube.com/c/AcmeTV") == [
+        {"forUsername": "AcmeTV"},
+        {"forHandle": "@AcmeTV"},
+    ]
+    assert _channel_lookups("//www.youtube.com/@AcmeTV") == [
+        {"forHandle": "@AcmeTV"},
+        {"forUsername": "AcmeTV"},
+    ]
+    assert _channel_lookups("www.youtube.com/channel/UC" + "x" * 22) == [{"id": "UC" + "x" * 22}]

@@ -452,3 +452,37 @@ def test_modern_facebook_page_forms_discovered_in_full_form() -> None:
         "https://www.facebook.com/p/watch",
     ):
         assert discover_social_links([_footer(href)]) == {}
+
+
+def test_profile_handle_extracts_name_from_modern_facebook_forms() -> None:
+    # The /people/<Name>/<id> and /p/<Name-ID> forms this repo canonicalizes must be
+    # brand-matchable: the handle is the NAME segment (id stripped), not the trailing numeric
+    # id — otherwise the site's own modern-form page link in body copy can never earn the
+    # brand bonus and a credited one can never be rescued by the exact-brand check.
+    from apps.worker.stages.social.discovery import _matches_brand, _profile_handle
+
+    assert (
+        _profile_handle("https://www.facebook.com/people/Martinez-Construction/61550001112223")
+        == "Martinez-Construction"
+    )
+    assert _profile_handle("https://www.facebook.com/p/Acme-Studio-61550001112223") == (
+        "Acme-Studio"
+    )
+    assert _matches_brand(
+        "https://www.facebook.com/people/Martinez-Construction/61550001112223",
+        {"martinezconstruction"},
+    )
+
+
+def test_brand_tokens_never_adopt_the_platform_as_the_brand() -> None:
+    # On a path-tenant host every HOST label belongs to the platform: without the shared brand
+    # deriver the tokens would be {"google", "sites"}, so the PLATFORM's own profile would earn
+    # the brand bonus and the credit-line rescue while the client's real handle matched nothing.
+    from apps.worker.stages.social.discovery import _brand_tokens, _matches_brand
+
+    tokens = _brand_tokens("https://sites.google.com/view/smithbuilders")
+    assert tokens == {"smithbuilders"}
+    assert _matches_brand("https://www.instagram.com/smithbuilders", tokens)
+    assert not _matches_brand("https://www.instagram.com/google", tokens)
+    # Subdomain-tenant hosts keep behaving as before (the platform label is filtered out).
+    assert _brand_tokens("https://smithbuilders.wixsite.com/home") == {"smithbuilders"}

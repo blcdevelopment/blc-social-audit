@@ -22,6 +22,7 @@ import httpx
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from apps.shared.config import get_settings  # noqa: E402
+from apps.worker.stages.social.apify_provider import _actor_url  # noqa: E402
 
 ACTOR = "apify~instagram-scraper"
 ENDPOINT = f"https://api.apify.com/v2/acts/{ACTOR}/run-sync-get-dataset-items"
@@ -43,8 +44,10 @@ POST_ENGAGEMENT_FIELDS = ("type", "likesCount", "commentsCount", "videoViewCount
 
 def main(argv: list[str] | None = None) -> int:
     args = argv if argv is not None else sys.argv[1:]
-    raw = (args[0] if args else "instagram").strip().lstrip("@")
-    url = raw if raw.startswith("http") else f"https://www.instagram.com/{raw}/"
+    raw = (args[0] if args else "instagram").strip()
+    # The one shared URL-shaped-handle detector (a startswith("http") check here missed the
+    # scheme-less form and probed a doubled-domain URL).
+    url = _actor_url(raw, "https://www.instagram.com")
 
     settings = get_settings()
     token = settings.apify_api_token.get_secret_value() if settings.apify_api_token else ""

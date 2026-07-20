@@ -88,6 +88,11 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # One-time Semrush connect (make semrush-connect COMPOSE="docker compose -f docker-compose.prod.yml")
+    # streams a browser over VNC on this port, bound to the SERVER's localhost only and reached via an
+    # SSH tunnel (ssh -L 5900:localhost:5900 ...) — never exposed publicly.
+    ports:
+      - "127.0.0.1:5900:5900"
     command: celery -A apps.worker.celery_app.celery_app worker --loglevel=info --concurrency=1
     restart: unless-stopped
 

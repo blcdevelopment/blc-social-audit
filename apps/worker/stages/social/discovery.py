@@ -29,7 +29,12 @@ from urllib.parse import parse_qs, urlparse
 from bs4 import BeautifulSoup, Tag
 
 from apps.worker.stages.crawler import _site_host, normalize_url
-from apps.worker.stages.technical_crawl_common import MULTI_TENANT_PLATFORMS
+from apps.worker.stages.social.extractor import profile_url_name
+from apps.worker.stages.technical_crawl_common import (
+    MULTI_TENANT_PLATFORMS,
+    PATH_TENANT_HOSTS,
+    registrable_brand_label,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -323,16 +328,26 @@ def _is_attribution_context(anchor: Tag) -> bool:
 
 def _brand_tokens(site_url: str | None) -> set[str]:
     """Lowercased alphanumeric labels of the audited domain (minus the TLD/'www'), used to tell the
-    site's OWN profile from a partner's by handle resemblance."""
+    site's OWN profile from a partner's by handle resemblance.
+
+    The registrable brand label always counts (the ONE shared deriver, which also resolves the
+    PATH-tenant hosts where the brand lives in the path: on sites.google.com/view/smithbuilders
+    the host labels are the PLATFORM's — "google", "sites" — and without this the platform's own
+    profile would earn the brand bonus AND the credit-line rescue while the client's real handle
+    matched nothing)."""
     if not site_url:
         return set()
+    tokens: set[str] = set()
+    brand = registrable_brand_label(site_url)
+    if len(brand) >= 3:
+        tokens.add(re.sub(r"[^a-z0-9]", "", brand))
     host = _site_host(site_url)  # reuses the crawler's registrable-host logic (strips www.)
-    if not host:
-        return set()
+    if not host or host in PATH_TENANT_HOSTS:
+        # On a path-tenant host every host label is the platform's, never the client's.
+        return {token for token in tokens if token}
     labels = host.split(".")
     if len(labels) >= 2:
         labels = labels[:-1]  # drop the TLD
-    tokens: set[str] = set()
     for label in labels:
         norm = re.sub(r"[^a-z0-9]", "", label.lower())
         # A multi-tenant hosting label is the PLATFORM's brand, not the audited site's: on
@@ -340,20 +355,24 @@ def _brand_tokens(site_url: str | None) -> set[str]:
         # the brand score bonus) would attribute the platform's own profile to the client.
         if len(norm) >= 3 and norm not in _NON_BRAND_LABELS and norm not in MULTI_TENANT_PLATFORMS:
             tokens.add(norm)
-    return tokens
+    return {token for token in tokens if token}
 
 
 def _profile_handle(profile_url: str) -> str:
     """The handle/slug of a canonical profile URL (the numeric id for a profile.php link).
 
-    The Facebook ``/pages/<Name>/<id>`` form carries the brand in the SLUG — its trailing segment
-    is a numeric page id that could never match a brand token — so the slug is returned there."""
+    The name-after-marker forms (``/pages/<Name>/<id>``, ``/people/<Name>/<id>``,
+    ``/p/<Name-ID>``, ``/c/<name>``, ``/user/<name>``) carry the brand in the NAME segment —
+    their trailing/appended numeric page id could never match a brand token — so the shared
+    profile_url_name parser extracts it (one parser with the scored consistency key and the
+    report display, so a URL form taught there is brand-matchable here too)."""
     parsed = urlparse(profile_url)
     if parsed.path.endswith("profile.php"):
         return (parse_qs(parsed.query).get("id") or [""])[0]
     segments = [seg for seg in parsed.path.split("/") if seg]
-    if len(segments) >= 2 and segments[0].lower() == "pages":
-        return segments[1]
+    name = profile_url_name(parsed.hostname, segments)
+    if name is not None:
+        return name
     return segments[-1].lstrip("@") if segments else ""
 
 

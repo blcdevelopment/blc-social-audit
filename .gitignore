@@ -236,6 +236,9 @@ storage/reports/*
 !storage/reports/.gitkeep
 storage/screenshots/*
 !storage/screenshots/.gitkeep
+# Semrush AI Visibility saved login session — contains cookies/auth tokens; NEVER commit.
+storage/semrush_session.json
+storage/backups/
 apps/frontend/.next/
 apps/frontend/node_modules/
 apps/frontend/tsconfig.tsbuildinfo

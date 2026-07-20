@@ -6,7 +6,11 @@
 .PHONY: help install browsers migrate revision \
         run-api run-worker run-frontend \
         test lint format qa qa-repro \
-        docker-up docker-down docker-logs docker-migrate clean
+        docker-up docker-down docker-logs docker-migrate semrush-connect clean
+
+# Compose command used by the docker targets. On the prod box, override to point at the prod file:
+#   make semrush-connect COMPOSE="docker compose -f docker-compose.prod.yml"
+COMPOSE ?= docker compose
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -65,6 +69,11 @@ docker-logs: ## Tail logs from the local stack
 docker-migrate: ## Run migrations inside the running api container
 	docker compose exec api alembic upgrade head
 
+# --- Semrush AI Visibility ---------------------------------------------------
+semrush-connect: ## One-time Semrush login on a headless server via VNC (saves the reusable session)
+	$(COMPOSE) exec -it worker bash /app/scripts/semrush_connect_server.sh
+
+# --- Housekeeping ------------------------------------------------------------
 clean: ## Remove Python caches
 	find . -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
 	find . -type f -name '*.pyc' -delete 2>/dev/null || true

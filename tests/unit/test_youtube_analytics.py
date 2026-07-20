@@ -67,8 +67,9 @@ def test_oauth_scopes_gate_youtube_analytics() -> None:
 
 def test_connected_youtube_injector_gates_then_injects(monkeypatch) -> None:
     # SMWA-140 pipeline wiring: every gate must hold — flag, a YouTube handle on the audit,
-    # a Google connection whose GRANT includes the YT scopes — then the normalized facts land
-    # under social_facts["youtube_analytics"]. Any miss leaves the facts untouched.
+    # a Google connection whose GRANT includes the YT scopes, AND the connected channel being
+    # the audited handle's channel — then the normalized facts land under
+    # social_facts["youtube_analytics"]. Any miss leaves the facts untouched.
     from types import SimpleNamespace
 
     from apps.worker import tasks
@@ -97,7 +98,6 @@ def test_connected_youtube_injector_gates_then_injects(monkeypatch) -> None:
     tasks._augment_with_connected_youtube(facts, flag_on, db=None, handles=handles)
     assert "youtube_analytics" not in facts
 
-    # Happy path: granted scopes + token + reports -> normalized facts injected with a window.
     granted = SimpleNamespace(scopes={"values": list(YOUTUBE_ANALYTICS_SCOPES)})
     monkeypatch.setattr(tasks, "latest_google_connection", lambda db: granted)
     monkeypatch.setattr(tasks, "ensure_google_access_token", lambda connection, settings, db: "tok")
@@ -106,11 +106,35 @@ def test_connected_youtube_injector_gates_then_injects(monkeypatch) -> None:
         "fetch_channel_analytics",
         lambda token, *, start_date, end_date, settings: raw,
     )
+
+    # Gate 4 (identity): the Analytics API only reports on the CONNECTED account's channel
+    # (ids=channel==MINE) — a connected channel that is NOT the audited handle's (e.g. the
+    # operator's own account, connected once for GSC) must never inject its private metrics
+    # into the client's audit.
+    stranger = {"id": "UCstranger000000000000000", "custom_url": "@operatorchannel", "title": "Op"}
+    monkeypatch.setattr(tasks, "fetch_own_channel", lambda token, settings: stranger)
+    tasks._augment_with_connected_youtube(facts, flag_on, db=None, handles=handles)
+    assert "youtube_analytics" not in facts
+
+    # Unverifiable identity (channels.list failed) -> conservative: untouched.
+    monkeypatch.setattr(tasks, "fetch_own_channel", lambda token, settings: None)
+    tasks._augment_with_connected_youtube(facts, flag_on, db=None, handles=handles)
+    assert "youtube_analytics" not in facts
+
+    # Happy path: all gates pass (connected channel IS the audited handle's) -> normalized
+    # facts injected with a window + the verified channel identity for the report meta.
+    own = {"id": "UCacme0000000000000000000", "custom_url": "@acmestudio", "title": "Acme Studio"}
+    monkeypatch.setattr(tasks, "fetch_own_channel", lambda token, settings: own)
     tasks._augment_with_connected_youtube(facts, flag_on, db=None, handles=handles)
     injected = facts["youtube_analytics"]
     assert injected["status"] == "complete"
     assert injected["views"] == 15234
     assert injected["window"]["start_date"] < injected["window"]["end_date"]
+    assert injected["channel"] == {
+        "id": "UCacme0000000000000000000",
+        "handle": "@acmestudio",
+        "title": "Acme Studio",
+    }
 
 
 def test_report_builder_precomposes_connected_youtube_lines() -> None:

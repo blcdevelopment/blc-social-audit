@@ -127,6 +127,9 @@
         {% if payload.get('benchmark') %}
         <li><a href="#competitor-benchmark">Competitor Benchmarking</a></li>
         {% endif %}
+        {% if payload.get('ai_visibility') %}
+        <li><a href="#ai-visibility">AI Visibility</a></li>
+        {% endif %}
       </ol>
     </section>
 
@@ -1274,7 +1277,7 @@
             {% for p in social.per_platform %}
             <tr style="border-bottom:1px solid #f0f1f3;">
               <td style="padding:6px 8px; text-transform:capitalize;">{{ p.platform or "—" }}</td>
-              <td style="padding:6px 8px;">{{ p.handle or "—" }}</td>
+              <td style="padding:6px 8px;">{% if p.handle %}@{{ p.handle }}{% else %}—{% endif %}</td>
               <td style="padding:6px 8px; text-align:right;">{% if p.followers is not none %}{{ p.followers }}{% else %}—{% endif %}</td>
               <td style="padding:6px 8px; text-align:right;">{% if p.posts_per_month is not none %}{{ p.posts_per_month }}{% else %}—{% endif %}</td>
               <td style="padding:6px 8px; text-align:right;">{% if p.avg_engagement_rate_pct is not none %}{{ p.avg_engagement_rate_pct }}%{% else %}—{% endif %}</td>
@@ -1400,8 +1403,8 @@
       </p>
       <p class="muted">
         How the scores fit together: Overall Lead-Gen Readiness =
-        {{ (overall.weights.website * 100) | round | int }}% &times; the Website Lead-Gen Score
-        + {{ (overall.weights.social * 100) | round | int }}% &times; the Social Score. The
+        {{ (overall.weights.website * 100 + 0.5) | int }}% &times; the Website Lead-Gen Score
+        + {{ (overall.weights.social * 100 + 0.5) | int }}% &times; the Social Score. The
         Website Lead-Gen Score itself blends SEO (45%) and UX/UI (55%) &mdash; the same number
         shown on the cover and the score cards at the front of this report.
       </p>
@@ -1418,12 +1421,12 @@
           <tr style="border-bottom:1px solid #f0f1f3;">
             <td style="padding:6px 8px;">Website Lead-Gen (SEO + UX/UI)</td>
             <td style="padding:6px 8px; text-align:right;">{{ overall.inputs.website_lead_gen if overall.inputs.website_lead_gen is not none else "—" }}</td>
-            <td style="padding:6px 8px; text-align:right; color:#667085;">weight {{ (overall.weights.website * 100) | round | int }}%</td>
+            <td style="padding:6px 8px; text-align:right; color:#667085;">weight {{ (overall.weights.website * 100 + 0.5) | int }}%</td>
           </tr>
           <tr style="border-bottom:1px solid #f0f1f3;">
             <td style="padding:6px 8px;">Social Media</td>
             <td style="padding:6px 8px; text-align:right;">{{ overall.inputs.social if overall.inputs.social is not none else "—" }}</td>
-            <td style="padding:6px 8px; text-align:right; color:#667085;">weight {{ (overall.weights.social * 100) | round | int }}%</td>
+            <td style="padding:6px 8px; text-align:right; color:#667085;">weight {{ (overall.weights.social * 100 + 0.5) | int }}%</td>
           </tr>
           <tr style="border-top:2px solid #e4e7ec; font-weight:700;">
             <td style="padding:6px 8px;">Overall Lead-Gen Readiness</td>
@@ -1483,6 +1486,140 @@
 
       {% if benchmark.provider %}
       <p class="muted" style="margin-top:8px;">Benchmark source: {{ benchmark.provider }}.</p>
+      {% endif %}
+    </section>
+    {% endif %}
+
+    {# Rendered only when the on-demand AI Visibility enrichment ran (payload.ai_visibility set). #}
+    {% if payload.get('ai_visibility') %}
+    {% set aiv = payload.get('ai_visibility') %}
+    <section class="page-section" id="ai-visibility">
+      <p class="eyebrow">Enrichment</p>
+      <h2>AI Visibility</h2>
+      {% if aiv.get('unavailable') %}
+      <p class="helper-copy">{{ aiv.message }}</p>
+      {% else %}
+      <p class="helper-copy">
+        How this brand appears in AI-generated answers (ChatGPT, Google AI Overviews / AI Mode,
+        Gemini, Perplexity). Sourced from the Semrush AI Visibility Toolkit — presentation only,
+        it does not change any audit score.
+      </p>
+
+      {% if aiv.visibility_score is not none %}
+      <p style="margin:12px 0;">
+        <span style="font-size:34px; font-weight:700; color:#1f74b7;">{{ aiv.visibility_score }}</span>
+        <span class="muted">/100 AI Visibility Score{% if aiv.visibility_band %} — {{ aiv.visibility_band }}{% endif %}</span>
+      </p>
+      {% endif %}
+
+      {% if aiv.metrics %}
+      <table style="width:100%; border-collapse:collapse; font-size:11px; margin-top:8px;">
+        <thead>
+          <tr style="border-bottom:2px solid #e4e7ec; text-align:left; color:#667085;">
+            {% for m in aiv.metrics %}<th style="padding:6px 8px;">{{ m.label }}</th>{% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            {% for m in aiv.metrics %}<td style="padding:6px 8px; font-weight:600;">{{ m.value }}</td>{% endfor %}
+          </tr>
+        </tbody>
+      </table>
+      {% endif %}
+
+      {% if aiv.per_platform %}
+      <h3 style="margin:16px 0 6px;">Distribution by AI platform</h3>
+      <table style="width:100%; border-collapse:collapse; font-size:11px;">
+        <thead>
+          <tr style="border-bottom:2px solid #e4e7ec; text-align:left; color:#667085;">
+            <th style="padding:6px 8px;">Platform</th>
+            <th style="padding:6px 8px; text-align:right;">Mentions</th>
+            <th style="padding:6px 8px; text-align:right;">Share</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for p in aiv.per_platform %}
+          <tr style="border-bottom:1px solid #f0f1f3;">
+            <td style="padding:6px 8px;">{{ p.platform }}</td>
+            <td style="padding:6px 8px; text-align:right;">{{ p.mentions if p.mentions is not none else '—' }}</td>
+            <td style="padding:6px 8px; text-align:right;">{{ p.share_display if p.share_display else '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+
+      {% if aiv.topics %}
+      <h3 style="margin:16px 0 6px;">Top performing topics</h3>
+      <table style="width:100%; border-collapse:collapse; font-size:11px;">
+        <thead>
+          <tr style="border-bottom:2px solid #e4e7ec; text-align:left; color:#667085;">
+            <th style="padding:6px 8px;">Topic</th>
+            <th style="padding:6px 8px; text-align:right;">Visibility</th>
+            <th style="padding:6px 8px; text-align:right;">Your mentions</th>
+            <th style="padding:6px 8px; text-align:right;">AI volume</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for t in aiv.topics %}
+          <tr style="border-bottom:1px solid #f0f1f3;">
+            <td style="padding:6px 8px;">{{ t.topic }}</td>
+            <td style="padding:6px 8px; text-align:right;">{{ t.visibility if t.visibility is not none else '—' }}</td>
+            <td style="padding:6px 8px; text-align:right;">{{ t.your_mentions if t.your_mentions is not none else '—' }}</td>
+            <td style="padding:6px 8px; text-align:right;">{{ t.ai_volume if t.ai_volume else '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+
+      {% if aiv.competitors %}
+      <h3 style="margin:16px 0 6px;">Competitors in AI answers</h3>
+      <table style="width:100%; border-collapse:collapse; font-size:11px;">
+        <thead>
+          <tr style="border-bottom:2px solid #e4e7ec; text-align:left; color:#667085;">
+            <th style="padding:6px 8px;">Brand</th>
+            <th style="padding:6px 8px; text-align:right;">Visibility</th>
+            <th style="padding:6px 8px; text-align:right;">Mentions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for c in aiv.competitors %}
+          <tr style="border-bottom:1px solid #f0f1f3;">
+            <td style="padding:6px 8px;">{{ c.label }}</td>
+            <td style="padding:6px 8px; text-align:right;">{{ c.visibility_score if c.visibility_score is not none else '—' }}</td>
+            <td style="padding:6px 8px; text-align:right;">{{ c.mentions if c.mentions is not none else '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+
+      {% if aiv.by_country %}
+      <h3 style="margin:16px 0 6px;">Mentions by country</h3>
+      <table style="width:100%; border-collapse:collapse; font-size:11px;">
+        <thead>
+          <tr style="border-bottom:2px solid #e4e7ec; text-align:left; color:#667085;">
+            <th style="padding:6px 8px;">Country</th>
+            <th style="padding:6px 8px; text-align:right;">Mentions</th>
+            <th style="padding:6px 8px; text-align:right;">Share</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for c in aiv.by_country %}
+          <tr style="border-bottom:1px solid #f0f1f3;">
+            <td style="padding:6px 8px;">{{ c.country }}</td>
+            <td style="padding:6px 8px; text-align:right;">{{ c.mentions if c.mentions is not none else '—' }}</td>
+            <td style="padding:6px 8px; text-align:right;">{{ c.share_display if c.share_display else '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+
+      <p class="muted" style="margin-top:8px;">
+        Source: Semrush AI Visibility Toolkit{% if aiv.retrieved_at %}, retrieved {{ aiv.retrieved_at }}{% endif %}.
+      </p>
       {% endif %}
     </section>
     {% endif %}

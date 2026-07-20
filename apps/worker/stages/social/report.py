@@ -8,10 +8,11 @@ LLM), so the report is reproducible.
 
 from __future__ import annotations
 
-import re
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
+
+from apps.worker.stages.social.extractor import profile_link_from_handle, profile_url_name
 
 JsonDict = dict[str, Any]
 SOCIAL_REPORT_VERSION = "phase2-social-report-v1"
@@ -80,8 +81,14 @@ def _display_handle(value: Any) -> str:
     """Human-readable handle from a stored handle-or-profile-URL.
 
     Auto-discovered handles are full canonical profile URLs, so without this the report would
-    show '@https://www.instagram.com/acme/' instead of '@acme'."""
+    show '@https://www.instagram.com/acme/' instead of '@acme'. Scheme-less links are links
+    too (profile_link_from_handle — the one shared detector), and the marker-form name walk
+    is the shared, host-aware profile_url_name (one parser for the scored consistency key,
+    discovery's brand matching, and this display — no per-copy drift)."""
     text = str(value or "").strip()
+    link = profile_link_from_handle(text)
+    if link is not None:
+        text = link
     if "://" not in text:
         return text.lstrip("@")
     parsed = urlsplit(text)
@@ -92,21 +99,16 @@ def _display_handle(value: Any) -> str:
     if segments[-1].lower() == "profile.php":
         profile_id = parse_qs(parsed.query).get("id", [""])[0]
         return f"id {profile_id}" if profile_id else segments[-1]
+    # facebook.com/pages|people|pg|p/… and youtube.com/c|user/… name-after-marker forms; "" when
+    # the URL names no handle at all (an IG post permalink) — the surfaces then render the
+    # empty-handle placeholder rather than the marker word ("@p").
+    name = profile_url_name(parsed.hostname, segments)
+    if name is not None:
+        return name
     lowered = [segment.lower() for segment in segments]
-    # facebook.com/pages/<slug>/<id>, /people/<Name>/<id>, legacy /pg/<name>, modern
-    # /p/<Name-ID> — the name segment follows the marker (mirroring extractor._handle_key);
-    # the directory form /pages/category/<Category>/<Name-ID>/ nests it last, and FB appends
-    # a long numeric id — strip it for display.
-    for marker in ("pages", "people", "pg", "p"):
-        if marker in lowered and lowered.index(marker) + 1 < len(segments):
-            index = lowered.index(marker) + 1
-            if lowered[index] == "category" and index + 1 < len(segments):
-                index = len(segments) - 1
-            return re.sub(r"-\d{5,}$", "", segments[index])
-    # youtube.com/channel/UC…, /c/<name>, /user/<name>.
-    for marker in ("channel", "c", "user"):
-        if marker in lowered and lowered.index(marker) + 1 < len(segments):
-            return segments[lowered.index(marker) + 1]
+    # youtube.com/channel/UC… has no vanity name — show the channel id.
+    if "channel" in lowered and lowered.index("channel") + 1 < len(segments):
+        return segments[lowered.index("channel") + 1]
     # youtube.com/@handle (any position), else the IG/FB vanity first segment.
     for segment in segments:
         if segment.startswith("@"):
@@ -157,6 +159,12 @@ def _connected_youtube_block(facts: JsonDict) -> JsonDict | None:
         return None
     window = _dict(data.get("window"))
     meta = "Owner-consent YouTube Analytics"
+    # Name the verified channel so the reader can SEE which channel these private metrics
+    # belong to (the worker only attaches metrics after the identity check passes).
+    channel = _dict(data.get("channel"))
+    channel_label = channel.get("handle") or channel.get("title")
+    if channel_label:
+        meta += f" for {channel_label}"
     if window.get("start_date") and window.get("end_date"):
         meta += f" · {window['start_date']} to {window['end_date']}"
     return {"meta": meta, "lines": lines}

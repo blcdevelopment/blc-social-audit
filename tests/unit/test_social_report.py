@@ -167,3 +167,26 @@ def test_display_handle_renders_modern_facebook_forms() -> None:
         )
         == "Acme-Studio"
     )
+
+
+def test_display_handle_cleans_scheme_less_links() -> None:
+    # Scheme-less profile links are links too (profile_link_from_handle): the report must show
+    # '@acmestudio', not '@www.instagram.com/acmestudio/'.
+    from apps.worker.stages.social.report import _display_handle
+
+    assert _display_handle("www.instagram.com/acmestudio/") == "acmestudio"
+    assert _display_handle("//www.youtube.com/@AcmeStudio") == "AcmeStudio"
+
+
+def test_display_handle_never_renders_a_marker_word() -> None:
+    # An IG post permalink pasted as the handle names no account: the surfaces must render the
+    # empty-handle placeholder, never "@p" (the same URL keys to "" for scoring, so all three
+    # surfaces agree there is no handle).
+    from apps.worker.stages.social.report import _display_handle
+
+    assert _display_handle("https://www.instagram.com/p/Cxyz12345/") == ""
+    assert _display_handle("https://www.instagram.com/reel/Cxyz12345/") == ""
+    # Facebook's marker forms still resolve to the brand on every FB host.
+    assert _display_handle("https://web.facebook.com/pages/Acme-Studio/104502341234567") == (
+        "Acme-Studio"
+    )

@@ -189,6 +189,44 @@ class Settings(BaseSettings):
     benchmark_provider: str = ""  # "" | "semrush" | "ahrefs" | "similarweb"
     benchmark_api_key: SecretStr | None = None
 
+    # AI Visibility enrichment (Semrush AI Visibility Toolkit). An optional, ON-DEMAND report
+    # section (never the always-on pipeline) showing how the brand appears in AI answers. Semrush
+    # has no API for this toolkit, so a Playwright bot signs into the operator's OWN Semrush
+    # account, screenshots the AI Visibility dashboard, and an OpenAI vision model reads it. It is
+    # presentation only — it NEVER feeds scoring, so scores stay reproducible whether it ran or not.
+    # OFF by default and it skips gracefully unless enabled AND (a saved session OR an
+    # email+password) AND OPENAI_API_KEY are configured. See
+    # docs/20_SEMRUSH_AI_VISIBILITY_INTEGRATION_PLAN.md (the ToS/compliance decision is the
+    # operator's — low-volume, on-demand, single server-side account).
+    ai_visibility_enabled: bool = False
+    ai_visibility_provider: str = "semrush"  # "" | "semrush"
+    # Vision model for reading the dashboard screenshot; empty => falls back to openai_model.
+    ai_visibility_vision_model: str = ""
+    ai_visibility_headless: bool = True
+    ai_visibility_timeout_seconds: int = Field(default=90, ge=10)
+    # Upper bound (seconds) for waiting on the dashboard's score gauge to render after navigation;
+    # the bot returns as soon as it appears (then a brief fixed settle for the async lower tables)
+    # and only waits the full amount if the marker never shows. Too low => a slow page can be
+    # screenshotted half-painted and extract as empty.
+    ai_visibility_render_wait_seconds: int = Field(default=10, ge=0, le=120)
+    # Semrush login. Prefer establishing the saved session once (probe --login, headed) so a human
+    # clears any CAPTCHA/2FA; the bot reuses those cookies. Email+password is the headless fallback.
+    semrush_email: str = ""
+    semrush_password: SecretStr | None = None
+    semrush_login_url: str = "https://www.semrush.com/login/"
+    semrush_ai_visibility_url: str = "https://www.semrush.com/ai-seo/overview/"
+    # Where the saved browser session (cookies) is stored; empty => never persist a session (always
+    # log in fresh, which is more fragile). Gitignored under ./storage.
+    semrush_session_state_path: str = "./storage/semrush_session.json"
+    # SAFETY DEFAULT: the audit bot uses only the SAVED session and NEVER types the email/password
+    # itself. A fresh headless credential login is exactly what trips Semrush's CAPTCHA and (worse)
+    # can flag the account for "unusual activity" / force-logout on repeated attempts — so when
+    # there's no valid session the bot shows a "connect Semrush" note instead of hammering the
+    # login. Establish the session once (human-driven): `--login` locally, or `make semrush-connect`
+    # on the headless server (view the browser over VNC). Set this True ONLY if you accept the
+    # account risk and want the bot to attempt an automatic headless credential login.
+    semrush_allow_headless_login: bool = False
+
     crawler_user_agent: str = "BLC-Audit-Bot/1.0 (+https://builderleadconverter.com/audit-bot)"
     crawler_max_pages: int = Field(default=10, ge=1, le=50)
     crawler_concurrency: int = Field(default=3, ge=1, le=10)

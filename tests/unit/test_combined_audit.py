@@ -806,3 +806,77 @@ def test_explicit_combined_failed_collection_skips_places_lookup(tmp_path, monke
         social_facts = result.social_facts or {}
         assert social_facts.get("status") == "failed"
         assert "google_business" not in social_facts
+
+
+# ------------------------------------------------------------------- AI Visibility auto-run
+def _fake_ai_visibility(settings, *, domain, retrieved_at):
+    return {
+        "status": "complete",
+        "provider": "semrush",
+        "domain": domain,
+        "retrieved_at": retrieved_at,
+        "visibility_score": 19,
+        "visibility_band": "Low",
+        "mentions": 28,
+        "citations": 380,
+        "cited_pages": 42,
+        "share_of_voice_pct": 12.5,
+        "per_platform": [{"platform": "AI Overview", "mentions": 22, "share_pct": 78.6}],
+        "topics": [],
+        "competitors": [],
+        "by_country": [],
+    }
+
+
+def test_ai_visibility_auto_runs_and_appends_section_when_enabled(tmp_path, monkeypatch) -> None:
+    # With the feature enabled, every website audit fetches AI visibility (bot/vision mocked here)
+    # and the section lands in the report — no on-demand button needed.
+    TestingSession = _session(tmp_path)
+    _patch_settings(monkeypatch, TestingSession, tmp_path, ai_visibility_enabled=True)
+    monkeypatch.setattr(tasks, "collect_ai_visibility_facts", _fake_ai_visibility)
+
+    with TestingSession() as db:
+        job = AuditJob(
+            url="https://example.com/", status="queued", current_stage="Queued", progress_pct=0
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        job_id = str(job.id)
+
+    tasks.run_collection_audit(job_id, crawler=_fake_crawler, psi_collector=_fake_psi)
+
+    with TestingSession() as db:
+        job = db.get(AuditJob, UUID(job_id))
+        assert job.status == "complete"
+        result = job.result
+        aiv = result.score_breakdown["ai_visibility"]
+        assert aiv["visibility_score"] == 19
+        assert aiv["domain"] == "example.com"  # derived from the audited URL, not hardcoded
+        # Website scores are untouched — AI visibility is presentation only.
+        assert result.seo_score is not None and result.lead_gen_score is not None
+        payload = compose_report_payload(job, result)
+        assert payload.ai_visibility is not None
+        assert payload.ai_visibility["visibility_score"] == 19
+
+
+def test_ai_visibility_absent_when_disabled_by_default(tmp_path, monkeypatch) -> None:
+    # Default (disabled) => no fetch, no section, byte-identical to before the feature existed.
+    TestingSession = _session(tmp_path)
+    _patch_settings(monkeypatch, TestingSession, tmp_path)  # ai_visibility_enabled defaults False
+
+    with TestingSession() as db:
+        job = AuditJob(
+            url="https://example.com/", status="queued", current_stage="Queued", progress_pct=0
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        job_id = str(job.id)
+
+    tasks.run_collection_audit(job_id, crawler=_fake_crawler, psi_collector=_fake_psi)
+
+    with TestingSession() as db:
+        job = db.get(AuditJob, UUID(job_id))
+        assert job.status == "complete"
+        assert "ai_visibility" not in (job.result.score_breakdown or {})

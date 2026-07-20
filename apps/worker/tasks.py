@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Sequence
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -14,6 +14,7 @@ from apps.shared.config import Settings, get_settings
 from apps.shared.database import SessionLocal
 from apps.shared.models import AuditJob, AuditResult
 from apps.worker.celery_app import celery_app
+from apps.worker.stages.ai_visibility.collector import collect_ai_visibility_facts
 from apps.worker.stages.benchmarking.collector import collect_benchmark_facts
 from apps.worker.stages.commentary import generate_commentary, generate_social_commentary
 from apps.worker.stages.crawler import CrawlResult, crawl_site_sync
@@ -38,6 +39,7 @@ from apps.worker.stages.social.collector import collect_social_facts
 from apps.worker.stages.social.discovery import discover_social_links
 from apps.worker.stages.social.extractor import (
     _phone_tail,
+    connected_channel_matches,
     inject_category_relevance,
     inject_google_business,
     inject_nap_consistency,
@@ -47,6 +49,7 @@ from apps.worker.stages.social.providers import get_provider
 from apps.worker.stages.social.report import compose_social_report_payload
 from apps.worker.stages.social.youtube_analytics_provider import (
     fetch_channel_analytics,
+    fetch_own_channel,
     normalize_youtube_analytics,
 )
 from apps.worker.stages.technical_crawl_common import registrable_brand_label
@@ -55,6 +58,9 @@ JsonDict = dict[str, Any]
 CrawlerFunc = Callable[[str, Settings, str | None], CrawlResult]
 PsiCollectorFunc = Callable[[Sequence[str], Settings], JsonDict]
 SocialCollectorFunc = Callable[[Settings, "dict[str, str] | None"], JsonDict]
+# AI-visibility collector: (settings, *, domain, retrieved_at) -> facts. Injectable so tests never
+# touch the Semrush login-bot / OpenAI (pass a fake returning a facts dict), like social_collector.
+AiVisibilityCollectorFunc = Callable[..., JsonDict]
 
 
 # Seconds held back after external enrichment for scoring, commentary, grounding,
@@ -327,7 +333,8 @@ def _augment_with_connected_youtube(
     the facts untouched. Only SoftTimeLimitExceeded propagates."""
     if not getattr(settings, "youtube_analytics_connect_enabled", False):
         return
-    if not (handles or {}).get("youtube"):
+    youtube_handle = (handles or {}).get("youtube")
+    if not youtube_handle:
         return
     try:
         connection = latest_google_connection(db)
@@ -337,8 +344,17 @@ def _augment_with_connected_youtube(
         if not all(scope in granted for scope in YOUTUBE_ANALYTICS_SCOPES):
             return
         access_token = ensure_google_access_token(connection, settings, db)
+        # Identity gate (mirrors the Places website_mismatch gate): the Analytics API only
+        # reports on the CONNECTED account's channel (ids=channel==MINE), so its private
+        # metrics attach only when that channel IS the audited handle's — otherwise the
+        # operator's own channel (connected once for GSC) would render as the client's.
+        channel = fetch_own_channel(access_token, settings)
+        if channel is None or not connected_channel_matches(youtube_handle, channel):
+            return
         # Analytics data lags ~48-72h (same allowance as the GSC window); 90 days of it.
-        end_date = date.today() - timedelta(days=3)
+        # UTC like every other timestamp in the pipeline — a local-timezone "today" would
+        # shrink the lag allowance on a worker east of UTC.
+        end_date = datetime.now(UTC).date() - timedelta(days=3)
         start_date = end_date - timedelta(days=89)
         reports = fetch_channel_analytics(
             access_token,
@@ -349,11 +365,22 @@ def _augment_with_connected_youtube(
     except SoftTimeLimitExceeded:
         raise
     except Exception:
+        # ensure_google_access_token commits the refreshed token on THIS session: a failed
+        # commit must not leave a PendingRollback session that would sink the caller's next
+        # commit (same guard as _augment_with_benchmark_safely).
+        db.rollback()
         return
     if reports is None:
         return
     social_facts["youtube_analytics"] = {
         "status": "complete",
+        # The verified channel identity — rendered in the block's meta line so the reader can
+        # see whose analytics these are.
+        "channel": {
+            "id": channel.get("id") or None,
+            "handle": channel.get("custom_url") or None,
+            "title": channel.get("title") or None,
+        },
         "window": {"start_date": start_date.isoformat(), "end_date": end_date.isoformat()},
         **normalize_youtube_analytics(reports),
     }
@@ -491,14 +518,22 @@ def _inject_nap_consistency(social_facts: JsonDict, result: AuditResult) -> None
     inject_nap_consistency(social_facts, website_phone_keys=_website_phone_keys(result))
 
 
+#  A brand token this short names no business — the same floor the GSC branded split applies
+#  (``_branded_split``: ``len(token) < 3 -> {}``). Below it, no Places lookup is billed at all.
+_MIN_BUSINESS_QUERY_CHARS = 3
+
+
 def _business_query(job: AuditJob) -> str:
     """A Google Places text query for the audited business — the shared registrable brand
     label (``www.builderleadconverter.com`` -> ``builderleadconverter``, ``shop.acme.com`` ->
     ``acme``, ``smith.co.uk`` -> ``smith``, ``smithbuilders.wixsite.com`` ->
-    ``smithbuilders``), the same deriver the GSC branded split uses. The Places match is then
-    verified against the listing's website (``website_mismatch``), so a weak query yields no
-    Google data rather than a stranger's listing."""
-    return registrable_brand_label(str(job.url or ""))
+    ``smithbuilders``, ``sites.google.com/view/smith`` -> ``smith``), the same deriver the GSC
+    branded split uses. A too-short/underivable label yields "" (the collector then skips —
+    no billed Text Search for a junk query), and a match that IS made is still verified against
+    the listing's website (``website_mismatch``), so a weak query yields no Google data rather
+    than a stranger's listing."""
+    label = registrable_brand_label(str(job.url or ""))
+    return label if len(label) >= _MIN_BUSINESS_QUERY_CHARS else ""
 
 
 def _augment_with_google_business(
@@ -643,6 +678,57 @@ def _augment_with_benchmark_safely(
         return
 
 
+def _augment_with_ai_visibility_safely(
+    db: Session,
+    job: AuditJob,
+    result: AuditResult,
+    settings: Settings,
+) -> None:
+    """Enrichment: after the website/combined result is committed, fetch the Semrush AI Visibility
+    data for the audited domain and stash it in ``score_breakdown["ai_visibility"]`` (no new DB
+    column — same trick as ``benchmark`` / ``overall_readiness``); ``compose_report_payload`` then
+    appends the AI Visibility section. Presentation only — it NEVER changes a score.
+
+    Auto-runs on every website/combined audit when ``ai_visibility_enabled`` is set (OFF by
+    default). Best-effort and graceful like every other optional stage: the collector skips at every
+    not-ready state (no credentials / login blocked / fetch failed / disabled), and a skip — or ANY
+    failure — leaves the committed result intact, so the report simply renders without an
+    AI-visibility section. Only ``SoftTimeLimitExceeded`` propagates. Runs a real Semrush login-bot
+    + vision extraction, so it adds latency; the dedicated ``rerun_ai_visibility`` task can refresh
+    it later without re-running the whole audit."""
+    if not settings.ai_visibility_enabled:
+        return
+    try:
+        # Progress bump lives INSIDE the guard: _mark_job commits, and a commit error here must
+        # degrade like any other AI-visibility failure — never escape to sink the committed audit.
+        _mark_job(db, job, AuditStatus.RENDERING, "Collecting AI visibility insights", 97)
+        domain = _domain_for_ai_visibility(job.url)
+        facts = collect_ai_visibility_facts(
+            settings, domain=domain, retrieved_at=datetime.now(UTC).isoformat()
+        )
+        # Store data (complete/partial) AND an honest block note (failed) so a CAPTCHA/login wall is
+        # shown in the report, not silently omitted. Config skips (disabled/no creds) stay unstored.
+        if facts.get("status") not in {"complete", "partial", "failed"}:
+            return
+        breakdown = dict(result.score_breakdown or {})
+        breakdown["ai_visibility"] = facts
+        result.score_breakdown = breakdown
+        result.report_metadata = {
+            **(result.report_metadata or {}),
+            "ai_visibility_retrieved_at": facts.get("retrieved_at"),
+            "ai_visibility_provider": facts.get("provider"),
+        }
+        db.commit()
+        db.refresh(result)
+    except SoftTimeLimitExceeded:
+        raise
+    except Exception:
+        # Same poisoned-session guard as the benchmark stage: roll back so a failed AI-visibility
+        # commit can't sink the already-committed audit. Leaves the result intact.
+        db.rollback()
+        return
+
+
 def run_collection_audit(
     job_id: str,
     *,
@@ -782,6 +868,11 @@ def run_collection_audit(
             # Enrichment (deferred v3): optionally present the scores vs competitor/industry
             # baselines. No-op unless benchmark_enabled; never sinks the committed result.
             _augment_with_benchmark_safely(db, job, result, settings)
+
+            # Enrichment: Semrush AI Visibility. Auto-runs on every website/combined audit when
+            # enabled — a Semrush login-bot + vision extraction fills the AI Visibility section.
+            # No-op unless ai_visibility_enabled; a skip/failure never sinks the committed result.
+            _augment_with_ai_visibility_safely(db, job, result, settings)
 
             _mark_job(db, job, AuditStatus.RENDERING, "Rendering report exports", 98)
             pdf_result = render_audit_pdf(job, result, settings)
@@ -992,3 +1083,109 @@ def rerun_external_enrichment_for_audit(job_id: str) -> None:
 @celery_app.task(name="apps.worker.tasks.rerun_external_enrichment")
 def rerun_external_enrichment(job_id: str) -> None:
     rerun_external_enrichment_for_audit(job_id)
+
+
+def _domain_for_ai_visibility(url: str) -> str:
+    """The bare registrable-ish host Semrush's AI Visibility search expects (drops scheme/www)."""
+    from urllib.parse import urlparse
+
+    host = (urlparse(url).hostname or url or "").strip().lower()
+    return host[4:] if host.startswith("www.") else host
+
+
+def rerun_ai_visibility_for_audit(
+    job_id: str,
+    *,
+    fetcher: AiVisibilityCollectorFunc = collect_ai_visibility_facts,
+) -> None:
+    """On-demand AI Visibility enrichment for an already-complete audit.
+
+    Mirrors ``rerun_external_enrichment_for_audit``: snapshot the fields it overwrites, collect the
+    Semrush AI-visibility facts (via the injectable ``fetcher``), stash them in
+    ``score_breakdown["ai_visibility"]`` (no new column — same trick as ``benchmark``/
+    ``overall_readiness``; the external-enrichment rerun carries the key forward generically), and
+    re-render. A skip (disabled / no credentials / failed scrape) or ANY failure keeps the existing
+    COMPLETE report — AI visibility is presentation only and never sinks the audit. On failure the
+    snapshot is restored and the job is re-marked COMPLETE, THEN the exception is re-raised so
+    Celery records the failure (same contract as ``rerun_external_enrichment_for_audit``); only the
+    render of NEW facts is lost, never the prior report."""
+    settings = get_settings()
+    parsed_job_id = UUID(job_id)
+
+    with SessionLocal() as db:
+        job = db.get(AuditJob, parsed_job_id)
+        if job is None or job.result is None:
+            return
+
+        # Snapshot the fields the rerun overwrites; restored on failure so the stored values keep
+        # matching the report the operator can still download.
+        previous = {
+            "score_breakdown": job.result.score_breakdown,
+            "report_metadata": job.result.report_metadata,
+            "pdf_path": job.result.pdf_path,
+        }
+
+        try:
+            result = job.result
+            _mark_job(db, job, AuditStatus.EXTRACTING, "Collecting AI visibility insights", 80)
+            domain = _domain_for_ai_visibility(job.url)
+            facts = fetcher(
+                settings,
+                domain=domain,
+                retrieved_at=datetime.now(UTC).isoformat(),
+            )
+
+            if facts.get("status") not in {"complete", "partial", "failed"}:
+                # Only a config skip (disabled / no creds) reaches here — nothing to show, leave the
+                # existing report untouched. A blocked run (status "failed") IS stored below so its
+                # "could not retrieve" note renders.
+                _mark_job(
+                    db,
+                    job,
+                    AuditStatus.COMPLETE,
+                    "AI visibility data unavailable; previous report kept",
+                    100,
+                )
+                return
+
+            breakdown = dict(result.score_breakdown or {})
+            breakdown["ai_visibility"] = facts
+            result.score_breakdown = breakdown
+            result.report_metadata = {
+                **(result.report_metadata or {}),
+                "ai_visibility_retrieved_at": facts.get("retrieved_at"),
+                "ai_visibility_provider": facts.get("provider"),
+            }
+            db.commit()
+            db.refresh(result)
+
+            _mark_job(db, job, AuditStatus.RENDERING, "Rendering report with AI visibility", 98)
+            pdf_result = render_audit_pdf(job, result, settings)
+            docx_result, docx_error = _render_docx_safely(job, result, settings)
+            _store_export_results(db, result, pdf_result, docx_result, docx_error)
+
+            _mark_job(db, job, AuditStatus.COMPLETE, "Audit report complete", 100)
+        except SoftTimeLimitExceeded:
+            raise
+        except Exception as exc:
+            db.rollback()
+            failed_job = db.get(AuditJob, parsed_job_id)
+            if failed_job is not None and failed_job.result is not None:
+                # A failed AI-visibility rerun must not flip a COMPLETE audit to FAILED: restore the
+                # snapshot so the stored values match the report still on disk.
+                for field, value in previous.items():
+                    setattr(failed_job.result, field, value)
+                _mark_job(
+                    db,
+                    failed_job,
+                    AuditStatus.COMPLETE,
+                    "AI visibility enrichment failed; previous report kept",
+                    100,
+                    str(exc),
+                )
+            raise
+
+
+@celery_app.task(name="apps.worker.tasks.rerun_ai_visibility")
+def rerun_ai_visibility(job_id: str) -> None:
+    rerun_ai_visibility_for_audit(job_id)

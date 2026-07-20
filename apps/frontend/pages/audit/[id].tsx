@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 
 import Layout from "../../components/Layout";
 import {
+  AiVisibility,
   ApiError,
   AuditDetail,
   AuditShareResponse,
@@ -17,6 +18,7 @@ import {
   SocialReport,
   downloadReport,
   getAuditDetail,
+  rerunAiVisibility,
   rerunAuditEnrichment,
   revokeShare,
   shareAudit,
@@ -486,6 +488,111 @@ function OverallReadinessBlock({ overall }: { overall: OverallReadiness }) {
   );
 }
 
+function AiVisibilityBlock({ aiv }: { aiv: AiVisibility }) {
+  return (
+    <section className="card section-block">
+      <div className="section-head">
+        <h3>AI Visibility</h3>
+      </div>
+      {aiv.unavailable ? (
+        <p className="muted">
+          {aiv.message ?? "AI Visibility data could not be retrieved for this report."}
+        </p>
+      ) : (
+        <AiVisibilityData aiv={aiv} />
+      )}
+    </section>
+  );
+}
+
+function AiVisibilityData({ aiv }: { aiv: AiVisibility }) {
+  return (
+    <>
+      <p className="muted">
+        How this brand appears in AI-generated answers (ChatGPT, Google AI Overviews / AI Mode,
+        Gemini, Perplexity), from the Semrush AI Visibility Toolkit. Presentation only — it does not
+        change any audit score.
+      </p>
+      {aiv.visibility_score !== null && aiv.visibility_score !== undefined && (
+        <div className="score-grid">
+          <div className={`score-card tone-${scoreTone(aiv.visibility_score)}`}>
+            <p className="score-label">AI Visibility Score</p>
+            <p className="score-value">
+              {aiv.visibility_score}
+              <span className="score-max">/ 100</span>
+            </p>
+            {aiv.visibility_band && <p className="score-desc">{aiv.visibility_band}</p>}
+          </div>
+        </div>
+      )}
+      {aiv.metrics.length > 0 && (
+        <ul className="fact-list">
+          {aiv.metrics.map((m) => (
+            <li key={m.key}>
+              <strong>{m.label}:</strong> {m.value}
+            </li>
+          ))}
+        </ul>
+      )}
+      {aiv.per_platform.length > 0 && (
+        <>
+          <h4>Distribution by AI platform</h4>
+          <ul className="fact-list">
+            {aiv.per_platform.map((p) => (
+              <li key={p.platform}>
+                <strong>{p.platform}:</strong> mentions {p.mentions ?? "—"} · share{" "}
+                {p.share_display ?? "—"}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {aiv.topics.length > 0 && (
+        <>
+          <h4>Top performing topics</h4>
+          <ul className="fact-list">
+            {aiv.topics.map((t) => (
+              <li key={t.topic}>
+                <strong>{t.topic}:</strong> visibility {t.visibility ?? "—"} · your mentions{" "}
+                {t.your_mentions ?? "—"} · AI volume {t.ai_volume || "—"}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {aiv.competitors.length > 0 && (
+        <>
+          <h4>Competitors in AI answers</h4>
+          <ul className="fact-list">
+            {aiv.competitors.map((c) => (
+              <li key={c.label}>
+                <strong>{c.label}:</strong> visibility {c.visibility_score ?? "—"} · mentions{" "}
+                {c.mentions ?? "—"}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {aiv.by_country.length > 0 && (
+        <>
+          <h4>Mentions by country</h4>
+          <ul className="fact-list">
+            {aiv.by_country.map((c) => (
+              <li key={c.country}>
+                <strong>{c.country}:</strong> mentions {c.mentions ?? "—"} · share{" "}
+                {c.share_display ?? "—"}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      <p className="muted">
+        Source: Semrush AI Visibility Toolkit{aiv.retrieved_at ? `, retrieved ${aiv.retrieved_at}` : ""}.
+      </p>
+    </>
+  );
+}
+
 function SocialReportView({ report }: { report: SocialReport }) {
   // The server nulls content_insights when every field is missing, so plain truthiness is the
   // whole "anything to show" check. Same for google_business (combined audits only) — the
@@ -750,6 +857,9 @@ function SocialReportView({ report }: { report: SocialReport }) {
         <section className="card">
           <h3>Per-platform scorecard</h3>
           <table className="audit-table">
+            {/* Column set, units, and empty placeholder all match the PDF and DOCX scorecards —
+                the three surfaces render this table from the one per_platform projection and
+                must not disagree about what a cell means. */}
             <thead>
               <tr>
                 <th>Platform</th>
@@ -759,18 +869,28 @@ function SocialReportView({ report }: { report: SocialReport }) {
                 <th>Engagement</th>
                 <th>Video %</th>
                 <th>Last post</th>
+                <th>Business</th>
               </tr>
             </thead>
             <tbody>
               {(report.per_platform ?? []).map((platform, index) => (
                 <tr key={index}>
-                  <td>{platform.platform || "N/A"}</td>
-                  <td>@{platform.handle ?? ""}</td>
-                  <td>{platform.followers != null ? String(platform.followers) : "N/A"}</td>
+                  <td>{platform.platform || "—"}</td>
+                  <td>{platform.handle ? `@${platform.handle}` : "—"}</td>
+                  <td>{platform.followers != null ? String(platform.followers) : "—"}</td>
                   <td>{platform.posts_per_month ?? "—"}</td>
-                  <td>{platform.avg_engagement_rate_pct ?? "—"}</td>
+                  <td>
+                    {platform.avg_engagement_rate_pct != null
+                      ? `${platform.avg_engagement_rate_pct}%`
+                      : "—"}
+                  </td>
                   <td>{platform.video_share_pct != null ? `${platform.video_share_pct}%` : "—"}</td>
-                  <td>{platform.days_since_last_post ?? "—"}</td>
+                  <td>
+                    {platform.days_since_last_post != null
+                      ? `${platform.days_since_last_post}d ago`
+                      : "—"}
+                  </td>
+                  <td>{platform.is_business == null ? "—" : platform.is_business ? "✓" : "—"}</td>
                 </tr>
               ))}
             </tbody>
@@ -791,6 +911,8 @@ export default function AuditDetailPage() {
   const [enrichmentError, setEnrichmentError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState<ReportFormat | null>(null);
   const [enriching, setEnriching] = useState(false);
+  const [aiVisibilityError, setAiVisibilityError] = useState<string | null>(null);
+  const [refreshingAiv, setRefreshingAiv] = useState(false);
   const [pollNonce, setPollNonce] = useState(0);
   const [share, setShare] = useState<AuditShareResponse | null>(null);
   const [shareError, setShareError] = useState<string | null>(null);
@@ -841,6 +963,29 @@ export default function AuditDetailPage() {
       );
     } finally {
       setEnriching(false);
+    }
+  }
+
+  async function handleRefreshAiVisibility() {
+    if (!detail) return;
+    setAiVisibilityError(null);
+    setRefreshingAiv(true);
+    try {
+      const token = await getToken();
+      const response = await rerunAiVisibility(detail.job_id, token);
+      setDetail({
+        ...detail,
+        status: response.status,
+        current_stage: response.current_stage,
+        progress_pct: 80,
+      });
+      setPollNonce((value) => value + 1);
+    } catch (error) {
+      setAiVisibilityError(
+        error instanceof ApiError ? error.message : "Could not refresh AI visibility.",
+      );
+    } finally {
+      setRefreshingAiv(false);
     }
   }
 
@@ -1011,6 +1156,14 @@ export default function AuditDetailPage() {
                       </button>
                       <button
                         type="button"
+                        className="btn btn-secondary"
+                        onClick={handleRefreshAiVisibility}
+                        disabled={refreshingAiv || detail.status !== "complete"}
+                      >
+                        {refreshingAiv ? "Refreshing AI visibility..." : "Refresh AI Visibility"}
+                      </button>
+                      <button
+                        type="button"
                         className="btn btn-primary"
                         onClick={() => handleDownload("pdf")}
                         disabled={downloading !== null}
@@ -1086,6 +1239,12 @@ export default function AuditDetailPage() {
                   </div>
                 )}
 
+                {aiVisibilityError && (
+                  <div className="alert alert-danger" role="alert">
+                    {aiVisibilityError}
+                  </div>
+                )}
+
                 <ScoreCards scores={detail.report.scores} />
 
                 {detail.report.executive_summary && (
@@ -1154,6 +1313,10 @@ export default function AuditDetailPage() {
                   detail.report.overall_readiness.score !== null && (
                     <OverallReadinessBlock overall={detail.report.overall_readiness} />
                   )}
+
+                {detail.report.ai_visibility && (
+                  <AiVisibilityBlock aiv={detail.report.ai_visibility} />
+                )}
               </>
             )}
 

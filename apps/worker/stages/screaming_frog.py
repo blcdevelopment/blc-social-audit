@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from celery.exceptions import SoftTimeLimitExceeded
+
 from apps.shared.config import Settings
 from apps.worker.stages.technical_crawl_common import (
     empty_summary,
@@ -85,6 +87,10 @@ def collect_screaming_frog_facts(
     fatal_error = _fatal_error_from_output(command_output)
     try:
         parsed = parse_screaming_frog_exports(output_dir, site_url=url)
+    except SoftTimeLimitExceeded:
+        # Out of time: propagate so the task fails the job honestly instead of the hard limit
+        # SIGKILLing the worker (crawler/site_health/provider convention).
+        raise
     except Exception as exc:
         return _failed(_trim_error(str(exc)), started_at, output_dir=output_dir)
     parsed["started_at"] = started_at
