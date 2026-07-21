@@ -66,33 +66,110 @@ def _int(value: Any, default: int = 0) -> int:
 _SUBSTANTIVE_BIO_MIN_CHARS = 20
 
 
+# --- Profile-URL name parsing (shared) -------------------------------------------------------
+# THE one marker-form parser: _handle_key (the scored consistency key), report._display_handle
+# (every render surface), and discovery._profile_handle (brand matching) all route through
+# profile_url_name, so a new platform URL shape is taught in ONE place instead of three
+# hand-synced copies (the /people/ + /p/ forms had to be patched per-copy and one was missed).
+_FACEBOOK_HOSTS = frozenset({"facebook.com", "fb.com"})
+_YOUTUBE_HOSTS = frozenset({"youtube.com"})
+_INSTAGRAM_HOSTS = frozenset({"instagram.com", "instagr.am"})
+# Facebook name-after-marker path forms: /pages/<slug>/<id>, /people/<Name>/<id>, legacy
+# /pg/<name>, modern /p/<Name-ID>; YouTube: /c/<name>, /user/<name>. Host-scoped — 'p' on an
+# Instagram URL is a post permalink, never a marker.
+_FB_NAME_MARKERS = ("pages", "people", "pg", "p")
+_YT_NAME_MARKERS = ("c", "user")
+# Instagram first segments that are post/share permalinks or app routes — never a brand handle.
+_IG_NON_PROFILE_SEGMENTS = frozenset(
+    {"p", "reel", "reels", "explore", "stories", "tv", "accounts", "directory", "about"}
+)
+# Facebook appends a LONG numeric page id to no-vanity name slugs
+# ("Smith-Builders-104502341234567", 15+ digits today). 9+ digits so a genuine short
+# digit-suffixed vanity handle ("Acme-12345") is never mistaken for an id and corrupted.
+_PROFILE_ID_SUFFIX_RE = re.compile(r"-\d{9,}$")
+# A marker-form path that names NO brand handle (an IG post permalink). Distinct from None
+# ("no marker here, use your own vanity fallback") — falling back on one of these would key
+# and display the marker word itself ("@p").
+NO_PROFILE_NAME = ""
+
+
+def _profile_host(hostname: Any) -> str:
+    """Comparable platform host: lowercased, trailing dot stripped."""
+    return str(hostname or "").lower().rstrip(".")
+
+
+def _host_is(hostname: Any, bases: frozenset[str]) -> bool:
+    """Registrable-host match: the host IS one of the platform's domains, or any subdomain of
+    one. Facebook serves the same profile paths from www./m./web./mbasic./business. and every
+    locale host (es-la., en-gb., …) — a www./m.-only prefix strip would miss those, and the
+    marker walk would then fall back to the MARKER WORD ("pages") as the handle."""
+    host = _profile_host(hostname)
+    return any(host == base or host.endswith("." + base) for base in bases)
+
+
+def profile_url_name(hostname: Any, segments: list[str]) -> str | None:
+    """The brand-chosen name segment of a profile URL path. Three-valued:
+
+    * a name — the brand segment of a marker form (``/pages/<slug>/<id>``, ``/people/<Name>/<id>``,
+      legacy ``/pg/<name>``, modern ``/p/<Name-ID>``; YouTube ``/c/<name>``, ``/user/<name>``).
+      The directory form ``/pages/category/<Category>/<Name-ID>/`` nests the name last, and FB's
+      appended numeric page id is stripped so the name matches the brand's plain handle elsewhere.
+    * ``NO_PROFILE_NAME`` ("") — the path is a recognized NON-profile path (an Instagram post/reel
+      permalink or app route): there is no brand handle in it at all, and a caller must NOT fall
+      back to the first segment (that would key and display the marker word, "@p").
+    * ``None`` — no marker: the caller applies its own vanity-handle fallback.
+
+    Host-aware: Facebook markers apply only on Facebook hosts, YouTube's only on YouTube —
+    matching ``p``/``c``/``user`` on any platform would key an IG permalink by its shortcode.
+    ONE parser for the scored consistency key, the report display, and discovery's brand
+    matching, so those three can never disagree about what a stored URL's handle is."""
+    lowered = [seg.lower() for seg in segments]
+    if _host_is(hostname, _INSTAGRAM_HOSTS):
+        return NO_PROFILE_NAME if lowered and lowered[0] in _IG_NON_PROFILE_SEGMENTS else None
+    if _host_is(hostname, _FACEBOOK_HOSTS):
+        markers: tuple[str, ...] = _FB_NAME_MARKERS
+    elif _host_is(hostname, _YOUTUBE_HOSTS):
+        markers = _YT_NAME_MARKERS
+    else:
+        return None
+    for marker in markers:
+        if marker in lowered and lowered.index(marker) + 1 < len(segments):
+            index = lowered.index(marker) + 1
+            if lowered[index] == "category" and index + 1 < len(segments):
+                index = len(segments) - 1
+            return _PROFILE_ID_SUFFIX_RE.sub("", segments[index])
+    return None
+
+
 def _handle_key(value: Any) -> str:
     """Normalize a handle (or full profile URL) to a comparable brand key: the vanity handle
     segment, lowercased, non-alphanumerics stripped. So ``@Acme_Studio`` / ``acmestudio`` /
     ``https://facebook.com/AcmeStudio/`` / ``https://youtube.com/@AcmeStudio`` all collapse to
     ``acmestudio`` for the consistency check. Opaque non-vanity forms (``profile.php?id=<n>``,
-    ``/channel/UC…`` ids) return "" — they aren't brand-chosen handles, so they drop out of the
-    comparison instead of false-failing it. Returns "" when nothing usable remains."""
+    ``/channel/UC…`` ids, Instagram post permalinks) return "" — they aren't brand-chosen
+    handles, so they drop out of the comparison instead of false-failing it. Returns "" when
+    nothing usable remains."""
     text = str(value or "").strip()
+    # Scheme-less/protocol-relative links are still links (the one shared detector) — without
+    # this, "www.instagram.com/acme" would be keyed as raw text ("wwwinstagramcomacme").
+    link = profile_link_from_handle(text)
+    if link is not None:
+        text = link
     if "://" in text:
-        segments = [seg for seg in urlsplit(text).path.split("/") if seg]
+        parts = urlsplit(text)
+        segments = [seg for seg in parts.path.split("/") if seg]
         if not segments:
             return ""
         lowered = [seg.lower() for seg in segments]
         if lowered[-1] == "profile.php" or "channel" in lowered:
             return ""
-        # Name-after-marker forms: facebook.com/pages/<slug>/<id>, /people/<Name>/<id>,
-        # legacy /pg/<name>, modern /p/<Name-ID>, youtube.com/c/<name>, /user/<name>. The
-        # directory form facebook.com/pages/category/<Category>/<Name-ID>/ nests the name
-        # last, and FB appends a long numeric id ("Smith-Builders-104502341234567") — strip
-        # it so the key matches the brand's plain handle on other platforms.
-        for marker in ("pages", "people", "pg", "p", "c", "user"):
-            if marker in lowered and lowered.index(marker) + 1 < len(segments):
-                index = lowered.index(marker) + 1
-                if lowered[index] == "category" and index + 1 < len(segments):
-                    index = len(segments) - 1
-                text = re.sub(r"-\d{5,}$", "", segments[index])
-                break
+        name = profile_url_name(parts.hostname, segments)
+        if name == NO_PROFILE_NAME and name is not None:
+            # A post/share permalink names a post, not the account — drop out of the
+            # comparison (the rule rescales) instead of keying on a shortcode.
+            return ""
+        if name is not None:
+            text = name
         else:
             text = next((seg for seg in segments if seg.startswith("@")), segments[0])
     text = text.lstrip("@")
@@ -123,6 +200,30 @@ def profile_link_from_handle(handle: Any) -> str | None:
     if "/" in bare and "." in head:
         return f"https://{bare}"
     return None
+
+
+def connected_channel_matches(handle: Any, channel: JsonDict) -> bool:
+    """True when the audited YouTube handle names the CONNECTED account's own channel.
+
+    The Analytics API only ever reports on the connected account's channel (``channel==MINE``),
+    so before any of its private metrics are attached to an audit the audited handle must be
+    verified to BE that channel — otherwise the operator's own channel (connected once for GSC)
+    would render as the client's. Conservative like the Places ``website_mismatch`` gate: an
+    unresolvable comparison is a mismatch (better no connected block than a stranger's data).
+    Matches either the channel id (bare ``UC…`` or a ``/channel/UC…`` link) or the vanity
+    ``@handle`` (``customUrl``), compared via the same key the consistency check uses."""
+    if not isinstance(channel, dict):
+        return False
+    text = str(handle or "").strip()
+    if not text:
+        return False
+    channel_id = str(channel.get("id") or "").strip()
+    probe = profile_link_from_handle(text) or text
+    if channel_id and channel_id in probe:
+        return True
+    handle_key = _handle_key(text)
+    custom_key = _handle_key(str(channel.get("custom_url") or ""))
+    return bool(handle_key) and handle_key == custom_key
 
 
 def _fallback_profile_url(handle: str, platform_base: str) -> str:

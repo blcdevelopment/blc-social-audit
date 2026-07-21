@@ -437,14 +437,16 @@ def _append_search_rows(parts: list[str], title: str, rows: list[JsonDict], labe
 
 
 def _combined_xml(payload: ReportPayload) -> list[str]:
-    """Combined-audit social + overall + benchmark sections, appended at the end of the website
-    DOCX. Returns [] for a website-only audit (social_audit/overall_readiness/benchmark are None),
-    leaving the DOCX unchanged. Carries the same social depth as the PDF — quantified findings,
-    strengths, content insights, and top posts — as headings + bullets (no table machinery)."""
+    """Combined-audit social + overall + benchmark + AI-visibility sections, appended at the end of
+    the website DOCX. Returns [] for a website-only audit (social_audit/overall_readiness/benchmark/
+    ai_visibility all None), leaving the DOCX unchanged. Carries the same social depth as the PDF —
+    quantified findings, strengths, content insights, and top posts — as headings + bullets (no
+    table machinery)."""
     parts: list[str] = []
     social = payload.social_audit
     overall = payload.overall_readiness
     benchmark = payload.benchmark
+    ai_visibility = payload.ai_visibility
 
     if social:
         parts.append(_heading("Social Media Audit", 1))
@@ -627,6 +629,96 @@ def _combined_xml(payload: ReportPayload) -> list[str]:
         if provider:
             parts.append(_paragraph(f"Benchmark source: {provider}.", "Meta"))
 
+    if ai_visibility and ai_visibility.get("unavailable"):
+        # A blocked run (CAPTCHA / login wall) — show the honest note, not the data tables.
+        parts.append(_heading("AI Visibility", 1))
+        parts.append(
+            _paragraph(
+                ai_visibility.get("message")
+                or "AI Visibility data could not be retrieved for this report."
+            )
+        )
+    elif ai_visibility:
+        parts.append(_heading("AI Visibility", 1))
+        parts.append(
+            _paragraph(
+                "How this brand appears in AI-generated answers (ChatGPT, Google AI Overviews / AI "
+                "Mode, Gemini, Perplexity), from the Semrush AI Visibility Toolkit. Presentation "
+                "only - it does not change any audit score."
+            )
+        )
+        score = ai_visibility.get("visibility_score")
+        if score is not None:
+            band = ai_visibility.get("visibility_band")
+            suffix = f" - {band}" if band else ""
+            parts.append(_paragraph(f"AI Visibility Score: {score}/100{suffix}", "Strong"))
+        for m in ai_visibility.get("metrics") or []:
+            if isinstance(m, dict):
+                parts.append(_bullet(f"{m.get('label', '-')}: {m.get('value', '-')}"))
+
+        per_platform = [p for p in (ai_visibility.get("per_platform") or []) if isinstance(p, dict)]
+        if per_platform:
+            parts.append(_heading("Distribution by AI platform", 2))
+            for p in per_platform:
+                mentions = p.get("mentions")
+                share = p.get("share_display")
+                parts.append(
+                    _bullet(
+                        f"{p.get('platform', '-')}: "
+                        f"mentions={mentions if mentions is not None else '-'}, "
+                        f"share={share if share else '-'}"
+                    )
+                )
+
+        topics = [t for t in (ai_visibility.get("topics") or []) if isinstance(t, dict)]
+        if topics:
+            parts.append(_heading("Top performing topics", 2))
+            for t in topics:
+                vis = t.get("visibility")
+                mine = t.get("your_mentions")
+                parts.append(
+                    _bullet(
+                        f"{t.get('topic', '-')}: "
+                        f"visibility={vis if vis is not None else '-'}, "
+                        f"your mentions={mine if mine is not None else '-'}, "
+                        f"AI volume={t.get('ai_volume') or '-'}"
+                    )
+                )
+
+        competitors = [c for c in (ai_visibility.get("competitors") or []) if isinstance(c, dict)]
+        if competitors:
+            parts.append(_heading("Competitors in AI answers", 2))
+            for c in competitors:
+                vis = c.get("visibility_score")
+                mentions = c.get("mentions")
+                parts.append(
+                    _bullet(
+                        f"{c.get('label', '-')}: "
+                        f"visibility={vis if vis is not None else '-'}, "
+                        f"mentions={mentions if mentions is not None else '-'}"
+                    )
+                )
+
+        by_country = [c for c in (ai_visibility.get("by_country") or []) if isinstance(c, dict)]
+        if by_country:
+            parts.append(_heading("Mentions by country", 2))
+            for c in by_country:
+                mentions = c.get("mentions")
+                share = c.get("share_display")
+                parts.append(
+                    _bullet(
+                        f"{c.get('country', '-')}: "
+                        f"mentions={mentions if mentions is not None else '-'}, "
+                        f"share={share if share else '-'}"
+                    )
+                )
+
+        retrieved = ai_visibility.get("retrieved_at")
+        source = "Source: Semrush AI Visibility Toolkit"
+        if retrieved:
+            source = f"{source}, retrieved {retrieved}"
+        parts.append(_paragraph(f"{source}.", "Meta"))
+
     return parts
 
 
@@ -637,8 +729,11 @@ def _social_platform_line(p: JsonDict) -> str:
     ppm = p.get("posts_per_month")
     eng = p.get("avg_engagement_rate_pct")
     last = p.get("days_since_last_post")
+    # `or '-'`, not .get(default): per_platform always SETS these keys (possibly to None), so a
+    # dict default never fires and a handle-less profile would render "(@None)".
+    handle = p.get("handle") or "-"
     line = (
-        f"{p.get('platform', '-')} (@{p.get('handle', '-')}): "
+        f"{p.get('platform') or '-'} (@{handle}): "
         f"followers={followers if followers is not None else '-'}, "
         f"posts/mo={ppm if ppm is not None else '-'}, "
         f"engagement={f'{eng}%' if eng is not None else '-'}, "

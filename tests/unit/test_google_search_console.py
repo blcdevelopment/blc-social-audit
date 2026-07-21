@@ -394,3 +394,30 @@ def test_registrable_brand_label_walks_past_stacked_generic_labels() -> None:
     assert registrable_brand_label("www.acme.com") == "acme"
     # The platform's own apex IS the platform brand — no over-walking.
     assert registrable_brand_label("blogspot.com") == "blogspot"
+
+
+def test_registrable_brand_label_path_tenant_hosts() -> None:
+    # On a path-tenant host the brand is the tenant path slug, never the platform's own label
+    # ("google" would misclassify every 'google' query as branded and send a billed Places
+    # lookup for the platform itself); a bare path-tenant host has no derivable brand.
+    from apps.worker.stages.technical_crawl_common import registrable_brand_label
+
+    assert registrable_brand_label("https://sites.google.com/view/smithbuilders") == (
+        "smithbuilders"
+    )
+    assert registrable_brand_label("https://sites.google.com/site/smithbuilders/home") == (
+        "smithbuilders"
+    )
+    assert registrable_brand_label("https://sites.google.com/") == ""
+
+
+def test_registrable_brand_label_strips_path_tenant_prefixes() -> None:
+    # The signed-in (/u/<n>/) and Workspace (/a/<domain>/) prefixes carry their own argument
+    # segment: without dropping both, the "brand" comes back as "u"/"a" — a junk token that
+    # still funds a billed Places lookup.
+    from apps.worker.stages.technical_crawl_common import registrable_brand_label
+
+    assert registrable_brand_label("https://sites.google.com/u/0/view/smithbuilders") == (
+        "smithbuilders"
+    )
+    assert registrable_brand_label("https://sites.google.com/a/acme.com/site/smith") == "smith"

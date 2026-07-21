@@ -10,9 +10,12 @@ skip the rule" — whenever the niche can't be confidently classified, so a vagu
 produces a false "wrong category" finding. Only a niche we recognize AND a category we can compare
 yields True/False.
 
->>> STARTER TAXONOMY — pending sign-off from Elda. The home-services family below is a reasonable
-default for BLC's builder/remodeler audience; confirm/extend ``NICHE_CATEGORY_FAMILIES`` with the
-real category strings Elda's team uses before treating category-relevance findings as authoritative.
+Confirmed by Elda (2026-07-20): BLC's typical clients fall under the Instagram "Real Estate & Home
+Services" group as **Architectural Designer / Contractor / Home Improvement / Landscape** (all
+matched by ``acceptable_categories`` below), while — per her explicit "with the exception of the
+real estate categories and cleaning" note — the **Real Estate (Agent / Company / Property
+Management)** and **Cleaning Service** categories are NOT appropriate for a builder/remodeler and
+are flagged as a mismatch via ``misfit_categories``.
 """
 
 from __future__ import annotations
@@ -69,6 +72,21 @@ NICHE_CATEGORY_FAMILIES: dict[str, dict[str, tuple[str, ...]]] = {
             "deck",
             "fence",
         ),
+        # Elda's "exception": categories that are WRONG for a builder/remodeler client (they belong
+        # to adjacent-but-different trades). A home-services niche listed under one of these is a
+        # confident mismatch, not an ambiguous skip. Kept specific (e.g. "real estate agent", not
+        # bare "real estate") so a legitimate "Real Estate Developer" builder isn't false-flagged.
+        "misfit_categories": (
+            "real estate agent",
+            "real estate company",
+            "real estate broker",
+            "realtor",
+            "realty",
+            "property management",
+            "cleaning service",
+            "janitorial",
+            "maid service",
+        ),
     },
 }
 
@@ -104,8 +122,12 @@ def category_matches_niche(niche: str | None, category: str | None) -> bool | No
     if family is None or not category or not category.strip():
         return None
     cat = category.lower()
-    if any(token in cat for token in NICHE_CATEGORY_FAMILIES[family]["acceptable_categories"]):
+    spec = NICHE_CATEGORY_FAMILIES[family]
+    if any(token in cat for token in spec["acceptable_categories"]):
         return True
+    # Expert-flagged wrong-for-this-niche categories (Elda) -> a confident mismatch, not a skip.
+    if any(token in cat for token in spec.get("misfit_categories", ())):
+        return False
     if any(generic in cat for generic in _GENERIC_CATEGORIES):
         return False
     # Specific but different category -> ambiguous -> skip rather than false-flag.

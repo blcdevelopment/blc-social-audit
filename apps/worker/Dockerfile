@@ -17,6 +17,12 @@ RUN apt-get update \
         libpango-1.0-0 \
         libpangoft2-1.0-0 \
         shared-mime-info \
+        # Virtual display + VNC for the one-time Semrush "connect" step on a headless server:
+        # a human logs in through a REAL (headful) browser rendered on Xvfb and viewed over VNC,
+        # so the session is minted from the server's own IP (see scripts/semrush_connect_server.sh).
+        xvfb \
+        x11vnc \
+        fluxbox \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir uv

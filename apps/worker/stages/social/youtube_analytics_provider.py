@@ -19,6 +19,7 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
+from celery.exceptions import SoftTimeLimitExceeded
 
 from apps.shared.config import Settings
 from apps.worker.stages.social.extractor import _round_half_up
@@ -26,6 +27,7 @@ from apps.worker.stages.social.extractor import _round_half_up
 JsonDict = dict[str, Any]
 
 _REPORTS_ENDPOINT = "https://youtubeanalytics.googleapis.com/v2/reports"
+_CHANNELS_ENDPOINT = "https://www.googleapis.com/youtube/v3/channels"
 
 # The three reports we pull for a connected channel (owner consent, ids=channel==MINE).
 _ENGAGEMENT_METRICS = (
@@ -34,20 +36,55 @@ _ENGAGEMENT_METRICS = (
 )
 
 
-def _query(access_token: str, params: dict[str, str], settings: Settings) -> JsonDict | None:
+def _get_json(url: str, access_token: str, params: dict[str, str], settings: Settings) -> Any:
     try:
         response = httpx.get(
-            _REPORTS_ENDPOINT,
+            url,
             headers={"Authorization": f"Bearer {access_token}"},
             params=params,
             timeout=settings.youtube_timeout_seconds,
         )
         if response.status_code >= 400:
             return None
-        payload = response.json()
+        return response.json()
+    except SoftTimeLimitExceeded:
+        # The worker is out of time: propagate so the task can mark the job failed honestly
+        # instead of the hard limit killing it mid-pipeline (crawler/site_health convention);
+        # a swallow here would defeat the caller's "only SoftTimeLimitExceeded propagates".
+        raise
     except Exception:
         return None
+
+
+def _query(access_token: str, params: dict[str, str], settings: Settings) -> JsonDict | None:
+    payload = _get_json(_REPORTS_ENDPOINT, access_token, params, settings)
     return payload if isinstance(payload, dict) else None
+
+
+def fetch_own_channel(access_token: str, settings: Settings) -> JsonDict | None:
+    """Identity of the CONNECTED account's own channel (Data API ``channels.list mine=true``,
+    covered by the consent's ``youtube.readonly`` scope).
+
+    Every Analytics query below reports on this channel and no other (``ids=channel==MINE``),
+    so the caller MUST verify it is the audited handle's channel before attaching any of its
+    private metrics — without the check, the operator's own channel (connected once for GSC)
+    would render as the client's. ``None`` on any failure (the caller then skips the connected
+    block: better no data than unverified data)."""
+    if not access_token:
+        return None
+    payload = _get_json(
+        _CHANNELS_ENDPOINT, access_token, {"part": "snippet", "mine": "true"}, settings
+    )
+    items = payload.get("items") if isinstance(payload, dict) else None
+    first = items[0] if isinstance(items, list) and items else None
+    if not isinstance(first, dict):
+        return None
+    snippet = first.get("snippet") if isinstance(first.get("snippet"), dict) else {}
+    return {
+        "id": str(first.get("id") or ""),
+        "custom_url": str(snippet.get("customUrl") or ""),
+        "title": str(snippet.get("title") or ""),
+    }
 
 
 def fetch_channel_analytics(

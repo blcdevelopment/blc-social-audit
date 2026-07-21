@@ -87,6 +87,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # One-time Semrush connect (make semrush-connect) streams a browser over VNC on this port,
+    # bound to the host's localhost only and reached via an SSH tunnel — nothing listens otherwise.
+    ports:
+      - "127.0.0.1:5900:5900"
     command: celery -A apps.worker.celery_app.celery_app worker --loglevel=info
 
 volumes:

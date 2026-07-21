@@ -390,6 +390,58 @@ export interface ReportPayload {
   // The one shared combined-cover predicate (overall complete AND scored), computed
   // server-side so the PDF cover, DOCX title, and score-card intro can never disagree.
   combined_complete?: boolean;
+  // On-demand AI Visibility (Semrush) enrichment; null unless the refresh action ran.
+  ai_visibility?: AiVisibility | null;
+}
+
+export interface AiVisibilityMetric {
+  key: string;
+  label: string;
+  value: string | number;
+}
+
+export interface AiVisibilityPlatform {
+  platform: string;
+  mentions?: number | null;
+  share_pct?: number | null;
+  share_display?: string | null;
+}
+
+export interface AiVisibilityTopic {
+  topic: string;
+  visibility?: number | null;
+  your_mentions?: number | null;
+  ai_volume?: string | null;
+}
+
+export interface AiVisibilityCompetitor {
+  label: string;
+  visibility_score?: number | null;
+  mentions?: number | null;
+}
+
+export interface AiVisibilityCountry {
+  country: string;
+  mentions?: number | null;
+  share_pct?: number | null;
+  share_display?: string | null;
+}
+
+export interface AiVisibility {
+  status: string;
+  // Set when the bot reached Semrush but was blocked (CAPTCHA / login wall); `message` is the note.
+  unavailable?: boolean;
+  message?: string | null;
+  provider?: string | null;
+  domain?: string | null;
+  retrieved_at?: string | null;
+  visibility_score?: number | null;
+  visibility_band?: string | null;
+  metrics: AiVisibilityMetric[];
+  per_platform: AiVisibilityPlatform[];
+  topics: AiVisibilityTopic[];
+  competitors: AiVisibilityCompetitor[];
+  by_country: AiVisibilityCountry[];
 }
 
 export interface AuditDetail {
@@ -526,6 +578,16 @@ export function rerunAuditEnrichment(
   authToken?: string | null,
 ): Promise<{ job_id: string; status: string; current_stage: string | null; message: string }> {
   return request(`/audits/${jobId}/rerun-enrichment`, {
+    method: "POST",
+    authToken,
+  });
+}
+
+export function rerunAiVisibility(
+  jobId: string,
+  authToken?: string | null,
+): Promise<{ job_id: string; status: string; current_stage: string | null; message: string }> {
+  return request(`/audits/${jobId}/rerun-ai-visibility`, {
     method: "POST",
     authToken,
   });

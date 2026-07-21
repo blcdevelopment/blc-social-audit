@@ -95,6 +95,15 @@ class _BlockedHost(RuntimeError):
     """Raised when a request URL or redirect target fails the SSRF host guard."""
 
 
+class _DeadlineExceeded(RuntimeError):
+    """Raised when the sweep's time budget expires while a check waits for a global slot.
+
+    The per-host/global semaphore split made the pre-request budget test admission-only
+    (distinct-host checks all pass it at t~0 under uncontended host lanes, then queue on the
+    global slot) — this exception restores enforcement at the moment a request would actually
+    go out, and the caller tallies it as ``skipped_budget``."""
+
+
 def _error_class(exc: Exception) -> str:
     """Coarse transport-failure class, retained so 'did not respond' is explainable."""
     if isinstance(exc, httpx.TimeoutException):
@@ -235,9 +244,16 @@ async def _collect(
         },
         timeout=settings.site_health_request_timeout_seconds,
     ) as client:
-        sitemap_urls, sitemap_status = await _sitemap_urls(
-            client, site_url, settings, host_allowed_cache
-        )
+        # The sitemap phase runs BEFORE the sweep's own clock starts, so it must respect the
+        # whole-audit deadline itself: a hanging sitemap host (index + children, each with its
+        # own timeout and redirect chain) could otherwise overrun the audit before a single
+        # link was checked.
+        if deadline is not None and time.monotonic() > deadline:
+            sitemap_urls, sitemap_status = [], "skipped"
+        else:
+            sitemap_urls, sitemap_status = await _sitemap_urls(
+                client, site_url, settings, host_allowed_cache, deadline=deadline
+            )
 
         internal_urls = sorted(
             (set(internal_urls) | set(sitemap_urls)) - rendered_urls,
@@ -301,21 +317,45 @@ async def _collect(
     # A tripped breaker means the host stopped answering this checker: the link results
     # are incomplete and must not be scored or rendered as broken-link findings. The
     # non-complete status makes the scoring trust gate strip the summary and the report
-    # fall back to the honest "not available" framing with the explanatory note. The same
-    # honesty applies when the host rate-limits the checker broadly (429s never trip the
-    # transport-failure breaker, so they get their own widespread-throttling gate).
+    # fall back to the honest "not available" framing with the explanatory note.
+    #
+    # The SAME honesty applies to every other way the sweep can end up without real coverage,
+    # because "complete" is what lets the trust gate score these link facts as a full, clean
+    # pass. Three more gates, each measured against `internal_conclusive` — the internal URLs
+    # that actually ANSWERED (not throttled, not a transport failure):
+    #   * widespread throttling — 429s never trip the transport-failure breaker, so they get
+    #     their own gate (and a throttled URL is not evidence of a broken page);
+    #   * NO usable coverage at all — a small site where every URL was throttled or refused
+    #     stays under the absolute breaker threshold, yet scoring its zero-coverage summary as
+    #     clean is exactly the false all-clear the breaker exists to prevent;
+    #   * a budget-truncated sweep — it only saw part of the site, so its counts are a floor,
+    #     not a verdict.
     bot_blocked = bool(checks.get("bot_blocked"))
-    rate_limited_widely = (
-        int(checks.get("rate_limited_internal") or 0) >= settings.site_health_breaker_threshold
+    rate_limited = int(checks.get("rate_limited_internal") or 0)
+    conclusive = int(checks.get("internal_conclusive") or 0)
+    unreachable = int(summary.get("unreachable_internal_urls") or 0)
+    skipped_budget = int(checks.get("skipped_budget") or 0)
+    # Throttling DOMINATES what answered (strictly — a 50/50 split on a two-URL site is not
+    # "widespread", and downgrading there would strip a real finding from the one URL that did
+    # answer). The all-throttled case needs no majority: `no_coverage` below catches it.
+    rate_limited_widely = rate_limited >= settings.site_health_breaker_threshold or (
+        rate_limited > 0 and rate_limited > conclusive
     )
+    no_coverage = conclusive == 0 and (rate_limited + unreachable) > 0
+    truncated = skipped_budget > 0
     result: JsonDict = {
-        "status": "partial" if (bot_blocked or rate_limited_widely) else "complete",
+        "status": (
+            "partial"
+            if (bot_blocked or rate_limited_widely or no_coverage or truncated)
+            else "complete"
+        ),
         "source": SITE_HEALTH_SOURCE,
         "summary": summary,
         "issues": issues_from_summary(summary, examples, source=SITE_HEALTH_SOURCE),
         "checks": {
             "sitemap_status": sitemap_status,
             "internal_urls_checked": checks["internal_checked"],
+            "internal_urls_answered": conclusive,
             "external_urls_checked": checks["external_checked"],
             "inconclusive_external_urls": checks["inconclusive_external"],
             "rate_limited_internal_urls": checks.get("rate_limited_internal", 0),
@@ -323,6 +363,7 @@ async def _collect(
             "rendered_pages_excluded": len(rendered_urls),
             "waf_signals": checks.get("waf_signals", 0),
             "skipped_breaker": checks.get("skipped_breaker", 0),
+            "skipped_budget": skipped_budget,
             "browser_recheck_ok": checks.get("browser_recheck_ok"),
         },
         "notes": notes,
@@ -330,10 +371,17 @@ async def _collect(
         "started_at": started_at,
         "completed_at": _utc_now(),
     }
+    # Name the DOMINANT cause of the missing coverage — each reason maps to its own
+    # client-facing explanation (report_payload.SKIP_REASON_LABELS), so a host that simply
+    # throttled every request must not be reported with the vaguer "nothing answered" copy.
     if bot_blocked:
         result["reason"] = "bot_blocked"
+    elif no_coverage:
+        result["reason"] = "rate_limited" if rate_limited >= unreachable else "no_link_coverage"
     elif rate_limited_widely:
         result["reason"] = "rate_limited"
+    elif truncated:
+        result["reason"] = "time_budget"
     return result
 
 
@@ -480,6 +528,7 @@ async def _sitemap_urls(
     site_url: str,
     settings: Settings,
     host_allowed_cache: dict[str, bool],
+    deadline: float | None = None,
 ) -> tuple[list[str], str]:
     if settings.site_health_sitemap_max_urls <= 0:
         return [], "disabled"
@@ -493,6 +542,7 @@ async def _sitemap_urls(
         settings=settings,
         host_allowed_cache=host_allowed_cache,
         depth=0,
+        deadline=deadline,
     )
     return sorted(urls)[: settings.site_health_sitemap_max_urls], status
 
@@ -505,20 +555,24 @@ async def _fetch_sitemap(
     settings: Settings,
     host_allowed_cache: dict[str, bool],
     depth: int,
+    deadline: float | None = None,
 ) -> tuple[set[str], str]:
     # Sitemap-index child URLs come straight from attacker-controllable XML, so
     # every fetch gets the same SSRF host guard as swept URLs, and recursion is
-    # depth-capped so a self-referencing index cannot loop forever.
+    # depth-capped so a self-referencing index cannot loop forever. The whole-audit
+    # deadline is honored here too (this phase runs before the sweep's own clock starts).
     if depth > _SITEMAP_MAX_DEPTH:
         return set(), "max_depth"
     if not await asyncio.to_thread(_host_allowed, sitemap_url, settings, host_allowed_cache):
         return set(), "blocked_host"
     try:
         response, _ = await _guarded_request(
-            client, "GET", sitemap_url, settings, host_allowed_cache
+            client, "GET", sitemap_url, settings, host_allowed_cache, deadline
         )
     except _BlockedHost:
         return set(), "blocked_host"
+    except _DeadlineExceeded:
+        return set(), "skipped"
     except httpx.HTTPError:
         return set(), "unavailable"
     if response.status_code == 404:
@@ -548,6 +602,7 @@ async def _fetch_sitemap(
                 settings=settings,
                 host_allowed_cache=host_allowed_cache,
                 depth=depth + 1,
+                deadline=deadline,
             )
             urls.update(child_urls)
         return urls, "loaded_index"
@@ -596,6 +651,9 @@ async def _sweep(
         "skipped_budget": 0,
         "inconclusive_external": 0,
         "rate_limited_internal": 0,
+        # Internal URLs that ANSWERED (not throttled, not a transport failure) — the real
+        # coverage denominator for the honesty gates in _collect.
+        "internal_conclusive": 0,
         "skipped_breaker": 0,
         "waf_signals": 0,
     }
@@ -647,11 +705,22 @@ async def _sweep(
                 return
             try:
                 status_code, x_robots, error, redirect_hops, err_class, waf = await _check_url(
-                    client, url, settings, host_allowed_cache, global_slot=semaphore
+                    client,
+                    url,
+                    settings,
+                    host_allowed_cache,
+                    global_slot=semaphore,
+                    deadline=deadline,
                 )
             except _BlockedHost:
                 async with lock:
                     counters["blocked"] += 1
+                return
+            except _DeadlineExceeded:
+                # The budget expired while this check queued for a global slot (the pre-check
+                # above is admission-only once every distinct host holds its own lane).
+                async with lock:
+                    counters["skipped_budget"] += 1
                 return
 
         async with lock:
@@ -672,13 +741,31 @@ async def _sweep(
                     if breaker["consecutive"] >= settings.site_health_breaker_threshold:
                         breaker["tripped"] = True
                 return
-            if internal:
-                breaker["consecutive"] = 0
             if status_code is None:
                 return
             if internal:
                 # The client's own site: every error is a reliable, actionable
                 # signal because we control the request.
+                if status_code == _RATE_LIMIT_STATUS:
+                    # Still 429 after the polite retries + the one-shot GET: the host is
+                    # THROTTLING the checker, not serving a broken page. Counting it as a
+                    # client error would score healthy URLs as broken; tally it as
+                    # inconclusive instead (widespread throttling downgrades the whole
+                    # source to `partial` after the sweep) — and take it back OUT of the
+                    # checked total, because the client-facing note says these URLs are
+                    # "reported as unchecked" and the rendered count must agree. This runs
+                    # BEFORE the redirect tallies: an unchecked URL must not feed the scored
+                    # redirect facts either, or issue counts could exceed urls_checked.
+                    counters["internal_checked"] -= 1
+                    counters["rate_limited_internal"] += 1
+                    return
+                # The URL ANSWERED — real coverage. Tracked separately from internal_checked
+                # (which also counts transport failures) because the honesty gates measure
+                # throttling/refusals against what actually answered, and it is what resets
+                # the transport-failure breaker: a 429 is the host refusing, not a healthy
+                # response, so it must never reset the consecutive-failure count.
+                counters["internal_conclusive"] += 1
+                breaker["consecutive"] = 0
                 # Internal links should point at the final URL; a redirect wastes crawl
                 # budget and a 2+-hop chain is a real crawlability problem (scored).
                 if redirect_hops >= 1:
@@ -687,17 +774,6 @@ async def _sweep(
                     )
                 if redirect_hops >= 2:
                     _count(summary, examples, "redirect_chain_internal_urls", url)
-                if status_code == _RATE_LIMIT_STATUS:
-                    # Still 429 after the polite retries + the one-shot GET: the host is
-                    # THROTTLING the checker, not serving a broken page. Counting it as a
-                    # client error would score healthy URLs as broken; tally it as
-                    # inconclusive instead (widespread throttling downgrades the whole
-                    # source to `partial` after the sweep) — and take it back OUT of the
-                    # checked total, because the client-facing note says these URLs are
-                    # "reported as unchecked" and the rendered count must agree.
-                    counters["internal_checked"] -= 1
-                    counters["rate_limited_internal"] += 1
-                    return
                 if 400 <= status_code <= 499:
                     _count(summary, examples, "client_error_internal_urls", url)
                 elif status_code >= 500:
@@ -771,14 +847,18 @@ async def _slotted_request(
     settings: Settings,
     host_allowed_cache: dict[str, bool],
     global_slot: asyncio.Semaphore | None,
+    deadline: float | None = None,
 ) -> tuple[httpx.Response, int]:
     """One guarded request, holding the sweep's GLOBAL slot only for the request itself —
     Retry-After / politeness sleeps in the callers run outside it, so a throttled host
-    can't starve the other hosts' checks (the per-host lane still serializes the host)."""
+    can't starve the other hosts' checks (the per-host lane still serializes the host).
+    The budget is re-checked HERE, at the moment the request would go out: the caller's
+    pre-check is admission-only once every distinct host holds its own lane, and a check
+    that queued past the deadline must be skipped, not sent."""
     if global_slot is None:
-        return await _guarded_request(client, method, url, settings, host_allowed_cache)
+        return await _guarded_request(client, method, url, settings, host_allowed_cache, deadline)
     async with global_slot:
-        return await _guarded_request(client, method, url, settings, host_allowed_cache)
+        return await _guarded_request(client, method, url, settings, host_allowed_cache, deadline)
 
 
 async def _request_polite(
@@ -788,18 +868,24 @@ async def _request_polite(
     settings: Settings,
     host_allowed_cache: dict[str, bool],
     global_slot: asyncio.Semaphore | None = None,
+    deadline: float | None = None,
 ) -> tuple[httpx.Response, int]:
     """One request with rate-limit awareness: a 429 is honored (Retry-After, capped)
     and retried a bounded number of times instead of hammered."""
     response, hops = await _slotted_request(
-        client, method, url, settings, host_allowed_cache, global_slot
+        client, method, url, settings, host_allowed_cache, global_slot, deadline
     )
     for attempt in range(_MAX_RATE_LIMIT_RETRIES):
         if response.status_code != _RATE_LIMIT_STATUS:
             break
-        await asyncio.sleep(_retry_after_seconds(response, attempt))
+        wait_seconds = _retry_after_seconds(response, attempt)
+        if deadline is not None and time.monotonic() + wait_seconds > deadline:
+            # Out of budget: keep the honest 429 outcome (tallied as rate-limited/unchecked)
+            # rather than sleeping past the sweep's deadline for another attempt.
+            break
+        await asyncio.sleep(wait_seconds)
         response, hops = await _slotted_request(
-            client, method, url, settings, host_allowed_cache, global_slot
+            client, method, url, settings, host_allowed_cache, global_slot, deadline
         )
     return response, hops
 
@@ -829,6 +915,7 @@ async def _check_url(
     settings: Settings,
     host_allowed_cache: dict[str, bool],
     global_slot: asyncio.Semaphore | None = None,
+    deadline: float | None = None,
 ) -> tuple[int | None, str | None, str | None, int, str | None, bool]:
     """Return (status_code, x_robots_tag_header, error, redirect_hops, error_class,
     waf_suspected).
@@ -840,11 +927,11 @@ async def _check_url(
     """
     try:
         response, hops = await _request_polite(
-            client, "HEAD", url, settings, host_allowed_cache, global_slot
+            client, "HEAD", url, settings, host_allowed_cache, global_slot, deadline
         )
         if response.status_code in _RETRY_GET_STATUSES:
             response, hops = await _request_polite(
-                client, "GET", url, settings, host_allowed_cache, global_slot
+                client, "GET", url, settings, host_allowed_cache, global_slot, deadline
             )
         elif response.status_code == _RATE_LIMIT_STATUS:
             # The polite ladder already honored Retry-After for the HEAD attempts; the GET
@@ -852,12 +939,16 @@ async def _check_url(
             # second full retry ladder (that would double the traffic to a host that just
             # asked the checker to back off).
             response, hops = await _slotted_request(
-                client, "GET", url, settings, host_allowed_cache, global_slot
+                client, "GET", url, settings, host_allowed_cache, global_slot, deadline
             )
         return _check_outcome(response, hops)
     except httpx.RemoteProtocolError:
         try:
-            response, hops = await _request_polite(client, "GET", url, settings, host_allowed_cache)
+            # Same global slot + deadline as every other request — this fallback once ran
+            # unslotted, letting HEAD-hostile hosts push the sweep past its concurrency cap.
+            response, hops = await _request_polite(
+                client, "GET", url, settings, host_allowed_cache, global_slot, deadline
+            )
             return _check_outcome(response, hops)
         except httpx.HTTPError as exc:
             return _check_failure(exc)
@@ -871,14 +962,22 @@ async def _guarded_request(
     url: str,
     settings: Settings,
     host_allowed_cache: dict[str, bool],
+    deadline: float | None = None,
 ) -> tuple[httpx.Response, int]:
     """Follow redirects only after each target passes the SSRF host guard. Returns the final
-    response and the number of redirect hops followed to reach it (0 = no redirect)."""
+    response and the number of redirect hops followed to reach it (0 = no redirect).
+
+    The deadline is re-checked before EVERY hop: a chain of up to _MAX_REDIRECTS targets, each
+    with its own request timeout, is otherwise unbounded work admitted by a single pre-request
+    budget check — enough to run a slow host far past the sweep's budget and eat the pipeline
+    tail reserve the audit holds back for scoring and rendering."""
     current_url = normalize_url(url)
     if current_url is None:
         raise _BlockedHost
 
     for redirect_count in range(_MAX_REDIRECTS + 1):
+        if deadline is not None and time.monotonic() > deadline:
+            raise _DeadlineExceeded(current_url)
         allowed = await asyncio.to_thread(
             _host_allowed,
             current_url,

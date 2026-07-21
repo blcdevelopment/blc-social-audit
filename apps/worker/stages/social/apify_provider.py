@@ -12,8 +12,10 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
+from celery.exceptions import SoftTimeLimitExceeded
 
 from apps.shared.config import Settings
+from apps.worker.stages.social.extractor import profile_link_from_handle
 
 _IG_ACTOR = "apify~instagram-scraper"
 _IG_ENDPOINT = f"https://api.apify.com/v2/acts/{_IG_ACTOR}/run-sync-get-dataset-items"
@@ -45,6 +47,10 @@ def _run_actor_items(
         if response.status_code >= 400:
             return None
         items = response.json()
+    except SoftTimeLimitExceeded:
+        # The worker is out of time: propagate so the task can mark the job failed honestly
+        # instead of the hard limit killing it mid-pipeline (crawler/site_health convention).
+        raise
     except Exception:
         return None
     return [it for it in items if isinstance(it, dict)] if isinstance(items, list) else None
@@ -55,11 +61,21 @@ def _run_actor(endpoint: str, body: dict[str, Any], settings: Settings) -> dict[
     return items[0] if items else None
 
 
+def _actor_url(handle: str, platform_base: str) -> str:
+    """The actor's target URL for a handle: a URL-shaped handle (scheme'd, protocol-relative,
+    or scheme-less — the one shared detector) passes through verbatim; a bare handle nests
+    under the platform host. A startswith("http") check here once missed the scheme-less form
+    and minted doubled-domain URLs like ``…facebook.com/www.facebook.com/acme/``."""
+    link = profile_link_from_handle(handle)
+    if link is not None:
+        return link
+    return f"{platform_base}/{handle.strip().lstrip('@').strip('/')}/"
+
+
 def fetch_instagram_profile(handle: str, settings: Settings) -> dict[str, Any] | None:
     if not handle:
         return None
-    cleaned = handle.strip().lstrip("@")
-    url = cleaned if cleaned.startswith("http") else f"https://www.instagram.com/{cleaned}/"
+    url = _actor_url(handle, "https://www.instagram.com")
     body = {"directUrls": [url], "resultsType": "details", "resultsLimit": _IG_RESULTS_LIMIT}
     return _run_actor(_IG_ENDPOINT, body, settings)
 
@@ -67,16 +83,18 @@ def fetch_instagram_profile(handle: str, settings: Settings) -> dict[str, Any] |
 def fetch_facebook_page(handle: str, settings: Settings) -> dict[str, Any] | None:
     if not handle:
         return None
-    cleaned = handle.strip().lstrip("@")
-    url = cleaned if cleaned.startswith("http") else f"https://www.facebook.com/{cleaned}/"
-    body = {"startUrls": [{"url": url}], "resultsLimit": 1}
+    body = {
+        "startUrls": [{"url": _actor_url(handle, "https://www.facebook.com")}],
+        "resultsLimit": 1,
+    }
     return _run_actor(_FB_ENDPOINT, body, settings)
 
 
 def fetch_facebook_posts(handle: str, settings: Settings) -> list[dict[str, Any]] | None:
     if not handle:
         return None
-    cleaned = handle.strip().lstrip("@")
-    url = cleaned if cleaned.startswith("http") else f"https://www.facebook.com/{cleaned}/"
-    body = {"startUrls": [{"url": url}], "resultsLimit": _FB_POSTS_LIMIT}
+    body = {
+        "startUrls": [{"url": _actor_url(handle, "https://www.facebook.com")}],
+        "resultsLimit": _FB_POSTS_LIMIT,
+    }
     return _run_actor_items(_FB_POSTS_ENDPOINT, body, settings)

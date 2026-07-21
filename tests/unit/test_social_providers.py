@@ -99,3 +99,19 @@ def test_facebook_provider_merges_posts_actor(monkeypatch) -> None:
 def test_facebook_provider_returns_none_when_page_missing(monkeypatch) -> None:
     monkeypatch.setattr(providers_mod, "fetch_facebook_page", lambda handle, settings: None)
     assert FacebookProvider().fetch("acme", _settings(apify_api_token="t")) is None
+
+
+def test_actor_url_passes_links_through_and_nests_bare_handles() -> None:
+    # The actor target URL shares the ONE URL-shaped-handle detector: a scheme-less link the
+    # rest of the pipeline accepts must not be nested into a doubled-domain fetch URL.
+    from apps.worker.stages.social.apify_provider import _actor_url
+
+    assert (
+        _actor_url("www.instagram.com/acme", "https://www.instagram.com")
+        == "https://www.instagram.com/acme"
+    )
+    assert (
+        _actor_url("https://www.facebook.com/acme/", "https://www.facebook.com")
+        == "https://www.facebook.com/acme/"
+    )
+    assert _actor_url("@acme", "https://www.instagram.com") == "https://www.instagram.com/acme/"

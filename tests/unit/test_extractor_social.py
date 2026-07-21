@@ -664,3 +664,68 @@ def test_youtube_channel_url_keeps_scheme_less_link_handles() -> None:
 
     yt = normalize_youtube_channel({}, "www.youtube.com/c/AcmeStudio", now=NOW)
     assert yt["url"] == "https://www.youtube.com/c/AcmeStudio"
+
+
+def test_handle_key_scheme_less_links_and_post_permalinks() -> None:
+    # Scheme-less links are still links (the shared detector) — keyed by the vanity segment,
+    # not as raw text; an Instagram post permalink names a post, not the account, so it drops
+    # out of the comparison instead of keying on its shortcode ('p' is a marker only on
+    # Facebook hosts).
+    assert _handle_key("www.instagram.com/acmestudio") == "acmestudio"
+    assert _handle_key("//www.facebook.com/AcmeStudio/") == "acmestudio"
+    assert _handle_key("https://www.instagram.com/p/Cxyz12345/") == ""
+    assert _handle_key("https://www.instagram.com/reel/Cxyz12345/") == ""
+    # A genuine short digit-suffixed vanity handle is NOT an FB page id (those are 9+ digits)
+    # and must key identically to its bare form, never be corrupted by the id strip.
+    assert _handle_key("https://www.facebook.com/pg/Acme-12345") == "acme12345"
+    assert _handle_key("@Acme-12345") == "acme12345"
+
+
+def test_connected_channel_matches_gates_identity() -> None:
+    # The Analytics API only reports on the CONNECTED account's channel (ids=channel==MINE):
+    # its private metrics may attach only when the audited handle IS that channel — matched by
+    # channel id or vanity @handle; anything unresolvable is a mismatch (conservative, like
+    # the Places website_mismatch gate).
+    from apps.worker.stages.social.extractor import connected_channel_matches
+
+    own = {"id": "UCacme0000000000000000000", "custom_url": "@AcmeStudio", "title": "Acme"}
+    assert connected_channel_matches("@acmestudio", own)
+    assert connected_channel_matches("https://www.youtube.com/@AcmeStudio", own)
+    assert connected_channel_matches("https://www.youtube.com/c/AcmeStudio", own)
+    assert connected_channel_matches(
+        "https://www.youtube.com/channel/UCacme0000000000000000000", own
+    )
+    assert connected_channel_matches("UCacme0000000000000000000", own)
+    assert not connected_channel_matches("@otherbrand", own)
+    assert not connected_channel_matches("@acmestudio", {"id": "", "custom_url": "", "title": "X"})
+    assert not connected_channel_matches("", own)
+    assert not connected_channel_matches("@acmestudio", None)
+
+
+def test_handle_key_matches_every_facebook_host() -> None:
+    # Facebook serves the same profile paths from www./m./web./mbasic./business. and every
+    # locale host. A www-only host gate would miss those and the marker walk would fall back
+    # to the MARKER WORD ("pages"), false-failing the scored handle-consistency rule for a
+    # business whose handles are in fact identical.
+    for host in (
+        "www.facebook.com",
+        "web.facebook.com",
+        "m.facebook.com",
+        "es-la.facebook.com",
+        "business.facebook.com",
+    ):
+        assert _handle_key(f"https://{host}/pages/Acme-Builders/104502341234567") == "acmebuilders"
+    assert _handle_key("https://web.facebook.com/pg/AcmeBuilders") == "acmebuilders"
+
+
+def test_profile_url_name_is_three_valued() -> None:
+    # "" (NO_PROFILE_NAME) means "this URL names no handle at all" — distinct from None ("no
+    # marker; use your own vanity fallback"). Falling back on the "" case would key and render
+    # the marker word itself ("@p") for an IG post permalink.
+    from apps.worker.stages.social.extractor import NO_PROFILE_NAME, profile_url_name
+
+    assert profile_url_name("www.instagram.com", ["p", "Cxyz12345"]) == NO_PROFILE_NAME
+    assert profile_url_name("www.instagram.com", ["acmestudio"]) is None
+    assert profile_url_name("www.facebook.com", ["pg", "AcmeStudio"]) == "AcmeStudio"
+    assert profile_url_name("www.facebook.com", ["acmestudio"]) is None
+    assert profile_url_name("example.com", ["p", "thing"]) is None

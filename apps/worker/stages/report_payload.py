@@ -7,6 +7,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from apps.worker.stages.ai_visibility.report import build_ai_visibility_report_data
 from apps.worker.stages.benchmarking.report import build_benchmark_report_data
 from apps.worker.stages.social.report import build_social_report_data
 
@@ -289,6 +290,16 @@ SKIP_REASON_LABELS: dict[str, str] = {
         "The site's server rate-limited our automated link checker on many pages, so link "
         "checks are incomplete and were not scored. The affected URLs are reported as "
         "unchecked, not broken — spot-check important pages manually."
+    ),
+    "no_link_coverage": (
+        "Not one of the site's URLs answered our automated link checker (every request was "
+        "throttled or refused), so link checks were not scored. This is a server/firewall "
+        "behaviour, not evidence that the pages are broken — spot-check them manually."
+    ),
+    "time_budget": (
+        "The link check reached its time budget before covering the whole site, so the "
+        "results are incomplete and were not scored. The unchecked URLs are not reported as "
+        "broken — re-run the audit or spot-check important pages manually."
     ),
 }
 TECHNICAL_CRAWL_TOOL_LABELS: dict[str, str] = {
@@ -655,6 +666,9 @@ class ReportPayload(BaseModel):
     # rendered; a report without benchmark data is byte-identical). Presentation only — appended at
     # the END and never alters the sections above.
     benchmark: JsonDict | None = None
+    # Enrichment: AI Visibility (Semrush AI Visibility Toolkit — on-demand, default None => not
+    # rendered; a report without AI-visibility data is byte-identical). Presentation only.
+    ai_visibility: JsonDict | None = None
 
 
 def compose_report_payload(job: Any, result: Any) -> ReportPayload:
@@ -729,6 +743,11 @@ def compose_report_payload(job: Any, result: Any) -> ReportPayload:
         benchmark_facts=score_breakdown.get("benchmark"),
     )
 
+    # Enrichment: AI Visibility (Semrush). Populated only when the on-demand AI-visibility rerun
+    # stored facts in score_breakdown["ai_visibility"]; otherwise None => no section is rendered
+    # and the report is byte-identical.
+    ai_visibility = build_ai_visibility_report_data(score_breakdown.get("ai_visibility"))
+
     return ReportPayload(
         metadata=metadata,
         scores=_score_cards(result, score_breakdown, combined_complete=combined_complete),
@@ -751,6 +770,7 @@ def compose_report_payload(job: Any, result: Any) -> ReportPayload:
         overall_readiness=overall_readiness,
         combined_complete=combined_complete,
         benchmark=benchmark,
+        ai_visibility=ai_visibility,
     )
 
 
@@ -877,8 +897,11 @@ def _score_band_label(score: int) -> str:
 
 
 def _percent_weight(value: Any, fallback: str) -> str:
+    # Half-up (project convention int(x + 0.5)), NOT round(): the printed weights appear in the
+    # score card's "Formula:" line beside a half-up composite, so banker's rounding would make a
+    # retuned rubric (e.g. seo 0.425) print weights that don't reproduce the stated score.
     if isinstance(value, int | float):
-        return f"{int(round(float(value) * 100))}%"
+        return f"{int(float(value) * 100 + 0.5)}%"
     return fallback
 
 

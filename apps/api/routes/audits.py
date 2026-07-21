@@ -327,6 +327,64 @@ def rerun_audit_enrichment(job_id: UUID, db: DbSession) -> AuditEnrichmentRespon
     )
 
 
+@router.post("/{job_id}/rerun-ai-visibility", response_model=AuditEnrichmentResponse)
+def rerun_audit_ai_visibility(job_id: UUID, db: DbSession) -> AuditEnrichmentResponse:
+    """On-demand AI Visibility (Semrush) enrichment for a completed audit.
+
+    Mirrors ``rerun-enrichment``: 404 if no job, 409 if there is no baseline result yet, 503 if the
+    optional work can't be enqueued (the existing report is kept COMPLETE in that case). The bot
+    logs into Semrush, screenshots the AI Visibility dashboard, and re-renders — a failure/skip
+    leaves the previous report byte-identical (AI visibility is presentation only)."""
+    job = db.get(AuditJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audit job not found.")
+    if job.result is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="AI visibility enrichment can only run after baseline audit facts exist.",
+        )
+
+    settings = get_settings()
+    if settings.audit_enqueue_enabled:
+        try:
+            from apps.worker.tasks import rerun_ai_visibility
+
+            job.status = AuditStatus.EXTRACTING.value
+            job.current_stage = "Queued AI visibility enrichment"
+            job.progress_pct = 80
+            job.error_message = None
+            db.commit()
+            rerun_ai_visibility.delay(str(job.id))
+        except Exception as exc:
+            # The audit already has a complete result and report — a broker hiccup while queueing
+            # the OPTIONAL enrichment must not flip it to FAILED.
+            job.status = AuditStatus.COMPLETE.value
+            job.current_stage = "AI visibility could not be queued; previous report kept"
+            job.progress_pct = 100
+            job.error_message = str(exc)
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "message": "AI visibility enrichment could not be enqueued.",
+                    "job_id": str(job.id),
+                    "error": str(exc),
+                },
+            ) from exc
+    else:
+        from apps.worker.tasks import rerun_ai_visibility_for_audit
+
+        rerun_ai_visibility_for_audit(str(job.id))
+        db.refresh(job)
+
+    return AuditEnrichmentResponse(
+        job_id=job.id,
+        status=job.status,
+        current_stage=job.current_stage,
+        message="AI visibility enrichment has been queued or started.",
+    )
+
+
 @router.get("/{job_id}/report")
 def get_audit_report(job_id: UUID, db: DbSession) -> FileResponse:
     job = db.get(AuditJob, job_id)

@@ -14,8 +14,10 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
+from celery.exceptions import SoftTimeLimitExceeded
 
 from apps.shared.config import Settings
+from apps.worker.stages.social.extractor import profile_link_from_handle
 
 _YT_API = "https://www.googleapis.com/youtube/v3"
 _CHANNEL_PARTS = "snippet,statistics,contentDetails,brandingSettings"
@@ -33,6 +35,11 @@ def _channel_lookups(handle: str) -> list[dict[str, str]]:
     recorded as ``failed`` (graceful skip, never aborts). Prefer an @handle or channel ID.
     """
     value = handle.strip()
+    # Normalize a URL-shaped handle through the ONE shared detector first: it also recognizes
+    # the protocol-relative form ("//www.youtube.com/c/AcmeTV"), which a bare `f"https://{value}"`
+    # would turn into "https:////www.youtube.com/..." — urlparse then leaves the HOST in the path
+    # and every lookup below resolves against "www.youtube.com" instead of the channel.
+    value = profile_link_from_handle(value) or value
     if "youtube.com" in value.lower() or value.lower().startswith("http"):
         path = urlparse(value if "://" in value else f"https://{value}").path.strip("/")
         parts = [p for p in path.split("/") if p]
@@ -113,5 +120,11 @@ def fetch_youtube_channel(handle: str, settings: Settings) -> JsonDict | None:
                         )
                     )
             return {"channel": channel, "videos": videos}
+    except SoftTimeLimitExceeded:
+        # The worker is out of time: propagate so the task can mark the job failed honestly
+        # instead of the hard limit killing it mid-pipeline (the sibling providers and the
+        # crawler follow the same convention; swallowing it here would defeat the caller's
+        # "only SoftTimeLimitExceeded propagates" contract — Celery raises it exactly once).
+        raise
     except Exception:
         return None

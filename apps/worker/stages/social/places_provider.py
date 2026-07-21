@@ -15,12 +15,14 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
+from celery.exceptions import SoftTimeLimitExceeded
 
 from apps.shared.config import Settings
 from apps.worker.stages.social.extractor import _clean
 from apps.worker.stages.technical_crawl_common import (
     GENERIC_SECOND_LEVELS,
     MULTI_TENANT_PLATFORMS,
+    PATH_TENANT_HOSTS,
     registrable_brand_label,
 )
 
@@ -57,9 +59,10 @@ def _text(value: Any) -> str:
     return _clean(value)
 
 
-# Shared hosts where the TENANT is a path, not a subdomain: same host is NOT the same
-# business there, so the listing's website must point into the audited site's path.
-_PATH_TENANT_HOSTS = frozenset({"sites.google.com"})
+# Shared hosts where the TENANT is a path, not a subdomain (technical_crawl_common — the one
+# home, shared with registrable_brand_label): same host is NOT the same business there, so the
+# listing's website must point into the audited site's path.
+_PATH_TENANT_HOSTS = PATH_TENANT_HOSTS
 
 
 def _clean_host(url_parts: Any) -> str:
@@ -120,6 +123,10 @@ def fetch_place_id(query: str, settings: Settings) -> str | None:
         if response.status_code >= 400:
             return None
         places = response.json().get("places")
+    except SoftTimeLimitExceeded:
+        # The worker is out of time: propagate so the task can mark the job failed honestly
+        # instead of the hard limit killing it mid-pipeline (crawler/site_health convention).
+        raise
     except Exception:
         return None
     if not isinstance(places, list) or not places:
@@ -143,6 +150,10 @@ def fetch_place_details(place_id: str, settings: Settings) -> JsonDict | None:
         if response.status_code >= 400:
             return None
         payload = response.json()
+    except SoftTimeLimitExceeded:
+        # The worker is out of time: propagate so the task can mark the job failed honestly
+        # instead of the hard limit killing it mid-pipeline (crawler/site_health convention).
+        raise
     except Exception:
         return None
     return payload if isinstance(payload, dict) else None

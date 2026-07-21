@@ -64,6 +64,10 @@ def configure_local_env(tmp_dir: Path) -> None:
             "SITE_HEALTH_ENABLED": "false",
             "GOOGLE_OAUTH_CLIENT_ID": "",
             "GOOGLE_OAUTH_CLIENT_SECRET": "",
+            # AI Visibility auto-runs on every audit when enabled; force it off so the hermetic
+            # harness never launches a Semrush login-bot / OpenAI vision call (keeps QA offline
+            # and byte-identical regardless of the operator's .env).
+            "AI_VISIBILITY_ENABLED": "false",
         }
     )
 

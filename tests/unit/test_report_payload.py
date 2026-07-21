@@ -223,6 +223,31 @@ def test_social_section_absent_when_social_facts_empty_even_with_overall() -> No
     assert payload.overall_readiness["score"] == 72
 
 
+def test_ai_visibility_section_present_when_facts_in_breakdown() -> None:
+    # The on-demand AI-visibility rerun stores facts in score_breakdown["ai_visibility"];
+    # compose must surface them as the optional ReportPayload.ai_visibility section.
+    breakdown = _score_breakdown()
+    breakdown["ai_visibility"] = {
+        "status": "complete",
+        "provider": "semrush",
+        "domain": "example.com",
+        "visibility_score": 19,
+        "visibility_band": "Low",
+        "mentions": 28,
+        "per_platform": [{"platform": "AI Overview", "mentions": 22, "share_pct": 78.6}],
+    }
+    payload = compose_report_payload(_job(), _result(score_breakdown=breakdown))
+    assert payload.ai_visibility is not None
+    assert payload.ai_visibility["visibility_score"] == 19
+    assert payload.ai_visibility["per_platform"][0]["share_display"] == "78.6%"
+
+
+def test_ai_visibility_section_absent_by_default() -> None:
+    # A normal audit has no ai_visibility key => the section is None => report byte-identical.
+    payload = compose_report_payload(_job(), _result())
+    assert payload.ai_visibility is None
+
+
 def _job() -> SimpleNamespace:
     return SimpleNamespace(
         id=uuid4(),

@@ -21,6 +21,8 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
+from celery.exceptions import SoftTimeLimitExceeded
+
 from apps.shared.config import Settings
 
 JsonDict = dict[str, Any]
@@ -94,19 +96,27 @@ def read_axe_version(script_path: Path) -> str:
 async def run_axe_on_page(page: Any, settings: Settings) -> JsonDict | None:
     """Inject the vendored axe-core and run it against the live DOM. Returns the raw axe result
     dict, or ``None`` on ANY failure (missing asset / evaluate error / timeout) so the
-    accessibility pass can never raise into — or slow past a bound — the crawl."""
+    accessibility pass can never raise into — or slow past a bound — the crawl. Celery's soft
+    time limit is the one exception: it must propagate (crawler convention) or the honest
+    timed-out failure path never runs and the hard limit SIGKILLs the worker mid-render."""
     script_path = Path(settings.accessibility_axe_script_path)
     try:
         if not script_path.is_file():
             return None
-        with suppress(Exception):
+        try:
             # Let web fonts settle so contrast/geometry checks are as stable as possible.
             await page.evaluate("() => document.fonts && document.fonts.ready")
+        except SoftTimeLimitExceeded:
+            raise
+        except Exception:
+            pass
         await page.add_script_tag(path=str(script_path))
         return await asyncio.wait_for(
             page.evaluate("(opts) => axe.run(document, opts)", _axe_options(settings)),
             timeout=settings.accessibility_axe_timeout_seconds,
         )
+    except SoftTimeLimitExceeded:
+        raise
     except Exception:
         return None
 

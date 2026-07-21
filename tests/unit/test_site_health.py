@@ -791,3 +791,123 @@ def test_same_host_requests_keep_politeness_spacing() -> None:
         elapsed = time.monotonic() - started
     assert facts["summary"]["internal_urls_checked"] == 3
     assert elapsed >= 0.4
+
+
+def test_rate_limited_url_contributes_no_scored_redirect_facts() -> None:
+    # A URL that redirects and THEN persistently 429s is "reported as unchecked" — it must not
+    # feed the SCORED redirect facts either, or issue counts could exceed the rendered
+    # "Links checked" total (a self-contradicting report).
+    hops = {
+        "http://site.example/a": "http://site.example/b",
+        "http://site.example/b": "http://site.example/throttled",
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = str(request.url)
+        if path in hops:
+            return httpx.Response(301, headers={"Location": hops[path]}, request=request)
+        return httpx.Response(429, headers={"Retry-After": "0"}, request=request)
+
+    async def run() -> tuple[dict, dict]:
+        summary: dict = {}
+        examples: dict = defaultdict(list)
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+            follow_redirects=False,
+        ) as client:
+            counters = await site_health._sweep(
+                client,
+                internal_urls=["http://site.example/a"],
+                external_urls=[],
+                settings=_settings(),
+                summary=summary,
+                examples=examples,
+                notes=[],
+                host_allowed_cache={},
+            )
+        return summary, counters
+
+    summary, counters = asyncio.run(run())
+    assert counters["rate_limited_internal"] == 1
+    assert counters["internal_checked"] == 0
+    assert summary.get("redirecting_internal_urls", 0) == 0
+    assert summary.get("redirect_chain_internal_urls", 0) == 0
+
+
+def test_small_site_fully_throttled_goes_partial_below_absolute_threshold() -> None:
+    # A site with fewer internal URLs than the absolute breaker threshold that 429s every
+    # check must still downgrade to `partial` (majority rule): zero-coverage link results
+    # must never be scored as clean under a "complete" status.
+    with _serve(_Always429) as base:
+        facts = collect_site_health_facts(
+            url=f"{base}/",
+            seo_facts={"status": "complete", "pages": []},
+            crawled_pages={
+                "final_url": f"{base}/",
+                "pages": [{"url": f"{base}/", "final_url": f"{base}/"}],
+                "discovered_links": [{"url": f"{base}/throttled"}],
+            },
+            rendered_pages=None,
+            settings=_settings(site_health_sitemap_max_urls=0),  # default threshold (5) stays
+        )
+
+    assert facts["checks"]["rate_limited_internal_urls"] == 1
+    assert facts["summary"]["internal_urls_checked"] == 0
+    assert facts["status"] == "partial"
+    assert facts["reason"] == "rate_limited"
+
+
+def test_zero_coverage_from_refusals_is_never_scored_as_clean() -> None:
+    # Every internal URL refused the checker (transport failures below the breaker threshold):
+    # zero usable coverage must NOT be reported as a "complete" clean sweep — the trust gate
+    # would score the empty summary as a full pass.
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused", request=request)
+
+    async def run() -> dict:
+        summary: dict = {}
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), follow_redirects=False
+        ) as client:
+            return await site_health._sweep(
+                client,
+                internal_urls=["http://site.example/a", "http://site.example/b"],
+                external_urls=[],
+                settings=_settings(),
+                summary=summary,
+                examples=defaultdict(list),
+                notes=[],
+                host_allowed_cache={},
+            )
+
+    counters = asyncio.run(run())
+    assert counters["internal_conclusive"] == 0
+
+
+def test_one_throttled_url_beside_a_healthy_one_stays_complete() -> None:
+    # Throttling must DOMINATE what answered before the whole source is downgraded: a 50/50
+    # split on a two-URL site is not "widespread", and downgrading there would strip a real
+    # finding from the URL that did answer.
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url).endswith("/throttled"):
+            return httpx.Response(429, headers={"Retry-After": "0"}, request=request)
+        return httpx.Response(200, request=request)
+
+    async def run() -> dict:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), follow_redirects=False
+        ) as client:
+            return await site_health._sweep(
+                client,
+                internal_urls=["http://site.example/ok", "http://site.example/throttled"],
+                external_urls=[],
+                settings=_settings(),
+                summary={},
+                examples=defaultdict(list),
+                notes=[],
+                host_allowed_cache={},
+            )
+
+    counters = asyncio.run(run())
+    assert counters["rate_limited_internal"] == 1
+    assert counters["internal_conclusive"] == 1
