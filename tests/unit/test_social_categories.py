@@ -1,7 +1,7 @@
 """Niche -> category matcher (SAE-4 / SAE-9-full).
 
-NOTE: the taxonomy in categories.py is a STARTER map pending Elda's confirmed category list;
-these tests pin the *behaviour* (conservative, skip-on-unknown), not a final vocabulary.
+NOTE: the home-services taxonomy in categories.py is Elda-confirmed (2026-07-20); these tests pin
+the *behaviour* (conservative skip-on-unknown, plus her explicit real-estate/cleaning exceptions).
 """
 
 from apps.worker.stages.social.categories import category_matches_niche, category_relevance
@@ -24,6 +24,19 @@ def test_specific_but_different_category_is_skipped_not_false() -> None:
     # -> None (skip), NOT a false "wrong category" finding. This is the BLC-audits-itself case.
     assert category_matches_niche("home builder", "Marketing Agency") is None
     assert category_matches_niche("homes", "Restaurant") is None
+
+
+def test_elda_excepted_categories_are_flagged_for_builder_niche() -> None:
+    # Per Elda's "exception of the real estate categories and cleaning": a builder/remodeler listed
+    # under Real Estate / Property Management / Cleaning Service is a CONFIDENT mismatch (False),
+    # not an ambiguous skip.
+    assert category_matches_niche("home builder", "Real Estate Agent") is False
+    assert category_matches_niche("remodeling", "Real Estate Company") is False
+    assert category_matches_niche("home builder", "Property Management Company") is False
+    assert category_matches_niche("home builder", "Cleaning Service") is False
+    # Kept specific: a builder that is ALSO a developer isn't false-flagged (no "agent/company"
+    # token in "Real Estate Developer"), so it stays an ambiguous skip.
+    assert category_matches_niche("home builder", "Real Estate Developer") is None
 
 
 def test_unclassifiable_niche_returns_none() -> None:
